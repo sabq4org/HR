@@ -100,7 +100,7 @@ export function PayrollPage({ actor }: Props) {
     try {
       const result = await request<{ run: PayrollRun; excludedCount?: number }>('', 'POST', {
         period: targetPeriod,
-        policyId: 'payroll-policy-demo-v1',
+        policyId: 'payroll-policy-demo-v2',
         reason,
         ...(correctionOf ? { correctionOf } : {}),
       });
@@ -241,7 +241,7 @@ export function PayrollPage({ actor }: Props) {
       <section className="payroll-policy" aria-label="مصدر القواعد">
         <CircleDollarSign />
         <div>
-          <strong>قواعد رواتب تجريبية · الإصدار 1</strong>
+          <strong>قواعد رواتب تجريبية · الإصدار 2</strong>
           <span>
             تُقرأ المكونات من ملفات اصطناعية للعرض فقط؛ لا تمثل احتسابًا نظاميًا أو بيانات حقيقية.
           </span>

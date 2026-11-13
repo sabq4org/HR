@@ -1,8 +1,11 @@
 name: HR verification
 on:
   push:
-    branches: [main, 'codex/**']
+    branches: [main]
   pull_request:
+concurrency:
+  group: hr-verification-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:

@@ -13,7 +13,7 @@ Sensitive profile values, medical/request fields, file contents, history values/
 
 ## Schema upgrades
 
-Six numbered migrations exist for each database dialect. Versions are recorded in `schema_migrations`; each migration and its version entry commit together. SQLite uses `BEGIN IMMEDIATE`, PostgreSQL uses transactions and an advisory lock.
+Seven numbered migrations exist for each database dialect. Versions are recorded in `schema_migrations`; each migration and its version entry commit together. SQLite uses `BEGIN IMMEDIATE`, PostgreSQL uses transactions and an advisory lock.
 
 1. Core employees, leave requests, decisions, append-only ledger and audit.
 2. Synthetic policy versions, schedules and employment periods.
@@ -21,6 +21,8 @@ Six numbered migrations exist for each database dialect. Versions are recorded i
 4. Administrative profiles/history, workflows, documents, attendance, policies and audit.
 5. Payroll runs/lines/payments/events, staged permissions and closed-record guards.
 6. Additive completion of the preview schema: issued snapshots, notification request links, document capacity, unique primary payroll period, immutable events and closed-run insert guard. SQLite skips only ALTER ADD COLUMN statements whose column is already present from the unpublished intermediate development schema.
+
+7. Pin new payroll runs to profile-components policy version 2; retain and retire only the intermediate local flat-salary version 1 without rewriting its values. Reject a policy whose calculator does not match the implemented synthetic engine.
 
 Seeds insert missing reference profiles/personas only; reopening never resets existing requests, ledgers, profiles, decisions or audit. All fixture values are fictional. No production data migration or cloud database provisioning has occurred.
 
@@ -33,7 +35,7 @@ WHERE correction_of IS NULL AND state <> 'rejected'
 GROUP BY period HAVING count(*) > 1;
 ```
 
-If any appear, stop and review the conflicting synthetic runs before applying migration 006. Never delete closed runs or rewrite their history to force the index. A failed migration rolls back and preserves the original database, but prevents startup until resolved. The local database used for this delivery passed all six migrations after backup.
+If any appear, stop and review the conflicting synthetic runs before applying migration 006. Never delete closed runs or rewrite their history to force the index. A failed migration rolls back and preserves the original database, but prevents startup until resolved. The local database used for this delivery passed all seven migrations after backup.
 
 ## Backup and restore
 

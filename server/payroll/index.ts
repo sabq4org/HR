@@ -298,7 +298,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
   }));
   route('post', '/payroll', async (req, actor) => {
     if (actor.role !== 'hr') throw fail(403, 'forbidden', 'إنشاء المسير متاح للموارد البشرية فقط.');
-    const { period, policyId = 'payroll-policy-demo-v1', reason, correctionOf } = req.body ?? {};
+    const { period, policyId = 'payroll-policy-demo-v2', reason, correctionOf } = req.body ?? {};
     if (
       !/^\d{4}-(0[1-9]|1[0-2])$/.test(period) ||
       typeof reason !== 'string' ||
@@ -318,6 +318,17 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
           )
         )[0];
         if (!policy) throw fail(400, 'policy_unavailable', 'إصدار القواعد غير متاح.');
+        const calculation = JSON.parse(policy.values_json);
+        if (
+          policy.policy_key !== 'payroll-demo' ||
+          calculation.currency !== 'SAR' ||
+          calculation.calculation !== 'synthetic-profile-components'
+        )
+          throw fail(
+            400,
+            'unsupported_calculator',
+            'إصدار القواعد لا يطابق حاسبة مكونات الملف الاصطناعية.',
+          );
         const periodStart = `${period}-01`;
         const periodEnd = new Date(
           Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0),

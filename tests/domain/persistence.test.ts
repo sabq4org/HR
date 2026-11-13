@@ -33,7 +33,7 @@ test('SQLite adapter awaits transactions, rolls back, and reopens migrations', a
     );
     assert.equal(
       (await first.read<{ n: number }>('SELECT count(*) AS n FROM schema_migrations'))[0].n,
-      6,
+      7,
     );
   } finally {
     await first.close();
@@ -55,7 +55,7 @@ test(
             'SELECT version FROM schema_migrations ORDER BY version',
           )
         ).map((row) => row.version),
-        [1, 2, 3, 4, 5, 6],
+        [1, 2, 3, 4, 5, 6, 7],
       );
       const roles = await db.read<{ id: string; role: string }>(
         "SELECT id,role FROM employee_access WHERE id IN ('emp-reem','emp-abdullah','emp-hind') ORDER BY id",
@@ -128,3 +128,41 @@ test(
     }
   },
 );
+
+test('policy migration preserves the old flat calculator and creates a distinct profile-component version', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const directory = mkdtempSync(join(tmpdir(), 'hr-policy-upgrade-'));
+  const path = join(directory, 'preview.sqlite');
+  const legacy = '{"currency":"SAR","baseSalaryMinor":1000000,"calculation":"synthetic-flat-demo"}';
+  try {
+    const old = await createDatabase(path);
+    await old.transaction(async (tx) => {
+      // Reconstruct the unpublished intermediate local v6 fixture.
+      await tx.execute('DELETE FROM schema_migrations WHERE version=7');
+      await tx.execute("DELETE FROM administrative_policies WHERE id='payroll-policy-demo-v2'");
+      await tx.execute(
+        "UPDATE administrative_policies SET values_json=? WHERE id='payroll-policy-demo-v1'",
+        [legacy],
+      );
+    });
+    await old.close();
+    const upgraded = await createDatabase(path);
+    try {
+      const policies = await upgraded.read<{ id: string; state: string; values_json: string }>(
+        "SELECT id,state,values_json FROM administrative_policies WHERE policy_key='payroll-demo' ORDER BY version",
+      );
+      assert.equal(policies.length, 2);
+      assert.equal(policies[0].values_json, legacy);
+      assert.equal(policies[0].state, 'retired');
+      assert.equal(policies[1].id, 'payroll-policy-demo-v2');
+      assert.equal(policies[1].state, 'synthetic_approved');
+      assert.equal(JSON.parse(policies[1].values_json).calculation, 'synthetic-profile-components');
+    } finally {
+      await upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
