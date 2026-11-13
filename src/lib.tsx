@@ -61,7 +61,11 @@ export async function api<T>(url: string, options?: RequestInit): Promise<T> {
     const payload = await response.json().catch(() => null);
     throw new Error(payload?.error?.message || 'تعذّر إكمال العملية. حاول مرة أخرى.');
   }
-  return response.status === 204 ? (undefined as T) : response.json();
+  if (response.status === 204) return undefined as T;
+  if (!response.headers.get('content-type')?.includes('application/json')) {
+    throw new Error('خدمة البيانات غير متاحة الآن. أعد المحاولة بعد قليل.');
+  }
+  return response.json();
 }
 interface AppContextValue {
   data: Bootstrap;

@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Sabq HR — synthetic local development workspace",
+  "description": "Sabq HR — synthetic development and isolated hosted preview",
   "engines": {
     "node": ">=24.13.0"
   },
   "scripts": {
     "dev": "tsx watch server/index.ts",
+    "start": "NODE_ENV=production tsx server/index.ts",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && vite build",
     "preview": "NODE_ENV=production LOCAL_DEMO=true tsx server/index.ts",
@@ -26,7 +27,8 @@
     "lucide-react": "1.72.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "react-router-dom": "7.18.5"
+    "react-router-dom": "7.18.5",
+    "tsx": "4.23.15"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
@@ -37,7 +39,6 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.3.0",
     "prettier": "3.10.1",
-    "tsx": "4.23.15",
     "typescript": "7.0.2",
     "vite": "8.3.8"
   }

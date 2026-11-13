@@ -98,11 +98,13 @@ function Login({
   onSelect,
   busy,
   error,
+  hosted,
 }: {
   personas: DemoPersona[];
   onSelect: (id: string) => void;
   busy: boolean;
   error: string;
+  hosted: boolean;
 }) {
   return (
     <main className="login-page">
@@ -149,6 +151,12 @@ function Login({
               حسابات وأسماء وهمية للتجربة فقط.
               <br />
               لا تستخدم بيانات موظفين حقيقية.
+              {hosted && (
+                <>
+                  <br />
+                  تجربتك مستقلة عن الزوار الآخرين، وتغييراتك مؤقتة.
+                </>
+              )}
             </p>
           </div>
         </div>
@@ -162,6 +170,7 @@ export default function App() {
   const [data, setData] = useState<Bootstrap | null>(null);
   const [personas, setPersonas] = useState<DemoPersona[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hosted, setHosted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [dialog, setDialog] = useState<
@@ -181,8 +190,14 @@ export default function App() {
     setLoading(true);
     setError('');
     try {
-      const session = await api<{ me: Employee | null; personas: DemoPersona[] }>('/session');
+      const session = await api<{
+        me: Employee | null;
+        personas: DemoPersona[];
+        mode?: 'synthetic-local' | 'synthetic-hosted';
+      }>('/session');
       setPersonas(session.personas);
+      setHosted(session.mode === 'synthetic-hosted');
+      setData(null);
       if (session.me) await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -200,6 +215,8 @@ export default function App() {
     setBusy(true);
     setError('');
     try {
+      // Re-establish an expired preview workspace before selecting a persona.
+      await api('/session');
       await api('/demo/session', { method: 'POST', body: JSON.stringify({ employeeId: id }) });
       await refresh();
       setDialog(null);
@@ -274,7 +291,13 @@ export default function App() {
         </main>
       );
     return (
-      <Login personas={personas} onSelect={(id) => void signIn(id)} busy={busy} error={error} />
+      <Login
+        personas={personas}
+        onSelect={(id) => void signIn(id)}
+        busy={busy}
+        error={error}
+        hosted={hosted}
+      />
     );
   }
   const actionable = data.leaves.filter(
@@ -436,7 +459,9 @@ export default function App() {
           </main>
           <footer className="app-footer">
             <span>سبق · مساحة الفريق</span>
-            <span>بيانات تجريبية فقط</span>
+            <span>
+              {hosted ? 'تجربتك مستقلة · بيانات وهمية وتغييرات مؤقتة' : 'بيانات تجريبية فقط'}
+            </span>
           </footer>
         </div>
       </div>

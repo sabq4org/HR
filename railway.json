@@ -1,0 +1,16 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "npm run build"
+  },
+  "deploy": {
+    "startCommand": "HR_MODE=hosted-demo HR_PUBLIC_ORIGIN=https://hr-production-90b34ef5.up.railway.app npm start",
+    "healthcheckPath": "/api/health",
+    "healthcheckTimeout": 120,
+    "numReplicas": 1,
+    "multiRegionConfig": null,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 3
+  }
+}

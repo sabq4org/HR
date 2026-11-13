@@ -1,5 +1,10 @@
 # Local server operations
 
+For the public synthetic preview, see `docs/decisions/002-hosted-synthetic-preview.md`.
+`HR_MODE=hosted-demo` uses isolated in-memory databases, forbids `HR_DB_PATH`, and
+requires an explicit HTTPS `HR_PUBLIC_ORIGIN`. It never opens the local database
+described below. Preview workspaces are temporary and cannot be backed up.
+
 The server uses `node:sqlite` and stores its synthetic local database at
 `.data/hr-local.sqlite` by default. `server/index.ts` creates `.data` before
 opening the database. `HR_DB_PATH` can point to a separate local file for

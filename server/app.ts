@@ -244,11 +244,26 @@ function demoRules(
   };
 }
 
-export function createApp(database?: Db, options: { sessionTtlMs?: number } = {}) {
+export function createApp(
+  database?: Db,
+  options: { sessionTtlMs?: number; publicOrigin?: string } = {},
+) {
   const db = database ?? createDatabase();
   const app = express();
   const sessions = new Map<string, Session>();
   const sessionTtlMs = options.sessionTtlMs ?? 8 * 60 * 60 * 1000;
+  const pinnedOrigin = options.publicOrigin ? new URL(options.publicOrigin) : undefined;
+  if (
+    pinnedOrigin &&
+    (pinnedOrigin.protocol !== 'https:' ||
+      pinnedOrigin.pathname !== '/' ||
+      pinnedOrigin.search ||
+      pinnedOrigin.hash ||
+      pinnedOrigin.username ||
+      pinnedOrigin.password)
+  )
+    throw new Error('publicOrigin must be an HTTPS origin without a path or credentials');
+  const cookieName = pinnedOrigin ? '__Host-sabq_hr_demo' : COOKIE;
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     if (req.path.startsWith('/api')) {
@@ -260,8 +275,12 @@ export function createApp(database?: Db, options: { sessionTtlMs?: number } = {}
   });
   app.use(express.json({ limit: '32kb' }));
   app.use((req, res, next) => {
-    if (!safeHost(req.headers.host))
-      return jsonError(res, fault(403, 'LOCAL_HOST_REQUIRED', 'يُسمح بالوصول عبر هذا الجهاز فقط.'));
+    const host = req.get('host')?.toLowerCase();
+    if (pinnedOrigin ? host !== pinnedOrigin.host.toLowerCase() : !safeHost(host))
+      return jsonError(
+        res,
+        fault(403, 'LOCAL_HOST_REQUIRED', 'يُسمح بالوصول عبر المضيف المحدد فقط.'),
+      );
     next();
   });
   app.use((req, res, next) => {
@@ -272,9 +291,13 @@ export function createApp(database?: Db, options: { sessionTtlMs?: number } = {}
       try {
         const source = new URL(origin);
         if (
-          source.protocol !== 'http:' ||
-          source.host.toLowerCase() !== req.get('host')?.toLowerCase() ||
-          !safeHost(source.host)
+          pinnedOrigin
+            ? origin !== pinnedOrigin.origin ||
+              source.origin !== pinnedOrigin.origin ||
+              source.host.toLowerCase() !== req.get('host')?.toLowerCase()
+            : source.protocol !== 'http:' ||
+              source.host.toLowerCase() !== req.get('host')?.toLowerCase() ||
+              !safeHost(source.host)
         )
           throw new Error();
       } catch {
@@ -293,8 +316,8 @@ export function createApp(database?: Db, options: { sessionTtlMs?: number } = {}
     const value = (req.headers.cookie ?? '')
       .split(';')
       .map((x) => x.trim())
-      .find((x) => x.startsWith(`${COOKIE}=`));
-    return value?.slice(COOKIE.length + 1);
+      .find((x) => x.startsWith(`${cookieName}=`));
+    return value?.slice(cookieName.length + 1);
   };
   const actorFor = (req: Request): Actor | undefined => {
     const token = tokenFor(req);
@@ -364,6 +387,7 @@ export function createApp(database?: Db, options: { sessionTtlMs?: number } = {}
       personas: personaRows()
         .map(toEmployee)
         .map(({ id, name, role, title }) => ({ id, name, role, title })),
+      mode: pinnedOrigin ? 'synthetic-hosted' : 'synthetic-local',
     });
   });
   app.post('/api/demo/session', (req, res) => {
@@ -379,10 +403,10 @@ export function createApp(database?: Db, options: { sessionTtlMs?: number } = {}
       role: employee.role,
       expiresAt: Date.now() + sessionTtlMs,
     });
-    res.cookie(COOKIE, token, {
+    res.cookie(cookieName, token, {
       httpOnly: true,
       sameSite: 'strict',
-      secure: false,
+      secure: !!pinnedOrigin,
       path: '/',
       maxAge: sessionTtlMs,
     });
@@ -391,7 +415,12 @@ export function createApp(database?: Db, options: { sessionTtlMs?: number } = {}
   app.delete('/api/session', (req, res) => {
     const token = tokenFor(req);
     if (token) sessions.delete(token);
-    res.clearCookie(COOKIE, { httpOnly: true, sameSite: 'strict', path: '/' });
+    res.clearCookie(cookieName, {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: !!pinnedOrigin,
+      path: '/',
+    });
     res.status(204).end();
   });
   app.get('/api/bootstrap', (req, res) => {

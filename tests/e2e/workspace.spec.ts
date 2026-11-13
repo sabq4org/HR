@@ -17,6 +17,10 @@ async function switchPersona(page: Page, name: string) {
     .getByRole('dialog')
     .getByRole('button', { name: new RegExp(name) })
     .click();
+  // The dashboard may already be visible behind the picker. Wait for the
+  // completed persona change before navigation can abort its network requests.
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.header-profile')).toContainText(name.split(' ')[0]);
   await expect(page.getByRole('heading', { name: 'لوحة العمل', exact: true })).toBeVisible();
 }
 function futureSunday(offset: number) {
