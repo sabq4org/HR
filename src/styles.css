@@ -57,9 +57,7 @@
   .brand-light .brand-logo {
     width: 100px;
     height: 89px;
-    background: white;
-    padding: 10px;
-    border-radius: 12px;
+    filter: brightness(0) invert(1);
   }
   .brand-link {
     margin-bottom: 27px;
