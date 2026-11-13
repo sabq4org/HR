@@ -1,0 +1,49 @@
+name: HR verification
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: hr_test
+          POSTGRES_USER: hr_test
+          # Disposable CI container only. This is not an application credential.
+          POSTGRES_PASSWORD: synthetic-ci-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      HR_TEST_DATABASE_URL: postgresql://hr_test:synthetic-ci-only@127.0.0.1:5432/hr_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: HR_ACCEPTANCE_POSTGRES=true node --import tsx --test tests/domain/workflows-acceptance.test.ts
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: synthetic-preview-test-evidence
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 5

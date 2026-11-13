@@ -1,5 +1,5 @@
 import { DatabaseSync, backup } from 'node:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, copyFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, copyFileSync, rmSync, chmodSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
@@ -17,21 +17,27 @@ function inspect(path: string) {
     const integrity = db.prepare('PRAGMA integrity_check').all();
     assert.equal(Object.values(integrity[0])[0], 'ok', 'SQLite integrity check failed');
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [], 'Broken foreign key');
-    const tables = [
-      'employees',
-      'employment_periods',
-      'policy_versions',
-      'work_schedules',
-      'leave_requests',
-      'leave_ledger',
-      'audit_events',
-      'outbox',
-      'idempotency',
-      'schema_migrations',
-    ];
+    const tables = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
     const counts: Record<string, number> = {};
     const hash = createHash('sha256');
+    hash.update(
+      JSON.stringify(
+        db
+          .prepare(
+            "SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name",
+          )
+          .all(),
+      ),
+    );
     for (const table of tables) {
+      if (!/^[a-z_][a-z0-9_]*$/i.test(table))
+        throw new Error('Unsafe table name in backup inspection');
       const rows = db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
       counts[table] = rows.length;
       hash.update(table).update(JSON.stringify(rows));
@@ -51,10 +57,19 @@ if (mode === 'backup') {
   const db = new DatabaseSync(source, { readOnly: true });
   try {
     await backup(db, destination);
+    chmodSync(destination, 0o600);
   } finally {
     db.close();
   }
   const verification = inspect(destination);
+  // Local development only. An environment-managed key must be backed up by
+  // its secret manager; never print it or embed it into a Git-tracked manifest.
+  const localKey = resolve('.data/hr-data.key');
+  const keyBackup = !process.env.HR_DATA_KEY && existsSync(localKey) ? `${destination}.key` : null;
+  if (keyBackup) {
+    copyFileSync(localKey, keyBackup);
+    chmodSync(keyBackup, 0o600);
+  }
   // Exercise restoration into a separate temporary location; never replace the active database.
   const temporary = mkdtempSync(join(tmpdir(), 'sabq-hr-restore-'));
   try {
@@ -65,8 +80,17 @@ if (mode === 'backup') {
     rmSync(temporary, { recursive: true, force: true });
   }
   process.stdout.write(
-    JSON.stringify({ backup: destination, restoredCopyVerified: true, ...verification }, null, 2) +
-      '\n',
+    JSON.stringify(
+      {
+        backup: destination,
+        localKeyBackup: keyBackup,
+        environmentKeyRequiresSecretManagerBackup: !!process.env.HR_DATA_KEY,
+        restoredCopyVerified: true,
+        ...verification,
+      },
+      null,
+      2,
+    ) + '\n',
   );
 } else if (mode === 'verify') {
   process.stdout.write(JSON.stringify({ database: source, ...inspect(source) }, null, 2) + '\n');

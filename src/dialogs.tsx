@@ -531,6 +531,7 @@ export function LeaveDetailDialog({ leave, close }: { leave: LeaveRequest; close
 }
 export function NotificationsDialog({ close }: { close: () => void }) {
   const { data, refresh, showLeave } = useApp();
+  const navigate = useNavigate();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const mark = async () => {
@@ -586,6 +587,18 @@ export function NotificationsDialog({ close }: { close: () => void }) {
                     onClick={() => {
                       close();
                       showLeave(data.leaves.find((l) => l.id === n.leaveId)!);
+                    }}
+                  >
+                    عرض الطلب
+                    <ChevronLeft size={14} />
+                  </button>
+                )}
+                {n.requestId && (
+                  <button
+                    className="text-button small"
+                    onClick={() => {
+                      close();
+                      navigate(`/requests/${n.requestId}`);
                     }}
                   >
                     عرض الطلب

@@ -6,6 +6,9 @@ export const roleLabel: Record<Role, string> = {
   employee: 'موظف',
   manager: 'مدير فريق',
   hr: 'الموارد البشرية',
+  finance: 'المالية',
+  approver: 'المعتمد',
+  auditor: 'المراجع',
 };
 export const statusLabel: Record<LeaveStatus, string> = {
   pending_manager: 'لدى المدير',
@@ -213,6 +216,13 @@ const displayTitles: Record<string, string> = {
   'ملفي الوظيفي': 'ملفّـي الوظيفـي',
   'الملف الوظيفي': 'الملـف الوظيفـي',
   'تقويم الفريق': 'تقويـم الفريـق',
+  'الخدمات الإدارية': 'الخدمـات الإداريـة',
+  'طلباتي ومتابعتي': 'طلبـاتي ومتابعتـي',
+  'الحضور والعمل': 'الحضـور والعمـل',
+  المستندات: 'المستنـدات',
+  التقارير: 'التقـاريـر',
+  'السياسات والقواعد': 'السياسـات والقواعـد',
+  'سجل التدقيق': 'سجـل التدقيـق',
 };
 export function PageHeading({
   title,

@@ -1,4 +1,4 @@
-export type Role = 'employee' | 'manager' | 'hr';
+export type Role = 'employee' | 'manager' | 'hr' | 'finance' | 'approver' | 'auditor';
 export type LeaveStatus = 'pending_manager' | 'pending_hr' | 'approved' | 'rejected' | 'cancelled';
 export interface Employee {
   id: string;
@@ -13,7 +13,7 @@ export interface Employee {
   joinDate: string;
   role: Role;
   color: string;
-  status: 'active';
+  status: 'active' | 'on_leave' | 'suspended' | 'terminated';
 }
 export interface Balance {
   allocated: number;
@@ -48,6 +48,7 @@ export interface Notification {
   createdAt: string;
   read: boolean;
   leaveId: string | null;
+  requestId?: string | null;
 }
 export interface DemoPersona {
   id: string;

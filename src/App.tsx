@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import {
+  Link,
+  NavLink,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams,
+} from 'react-router-dom';
 import {
   ArrowLeft,
   ArrowUpLeft,
@@ -21,8 +30,16 @@ import {
   UserRound,
   Users,
   X,
+  Files,
+  BriefcaseBusiness,
+  Clock3,
+  ChartNoAxesCombined,
+  WalletCards,
+  Settings2,
+  History,
 } from 'lucide-react';
 import type { Bootstrap, DemoPersona, Employee } from '../shared/contracts';
+import type { AdministrativeOverview } from '../shared/administration';
 import { api, AppContext, Avatar, Modal, roleLabel } from './lib';
 import {
   ApprovalsPage,
@@ -40,6 +57,30 @@ import {
   NotificationsDialog,
   SearchDialog,
 } from './dialogs';
+import {
+  EmployeeFilePage,
+  ServicesPage,
+  RequestsPage,
+  RequestDetailPage,
+  AttendancePage,
+  DocumentsPage,
+  PoliciesPage,
+  ReportsPage,
+  AuditPage,
+  AdminOverviewPanel,
+  RequestsInbox,
+} from './administration';
+import { PayrollPage } from './payroll';
+import { EmployeeImportPage } from './imports';
+
+function EmployeeFileRoute() {
+  const { id } = useParams();
+  return <EmployeeFilePage employeeId={id} />;
+}
+function RequestRoute() {
+  const { id } = useParams();
+  return <RequestDetailPage requestId={id!} />;
+}
 
 function Brand({ light = false }: { light?: boolean }) {
   return (
@@ -178,9 +219,24 @@ export default function App() {
   >(null);
   const [leaveId, setLeaveId] = useState<string | null>(null);
   const [toast, setToast] = useState('');
+  const [administrativePending, setAdministrativePending] = useState(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
+  useEffect(() => {
+    let current = true;
+    setAdministrativePending(0);
+    if (data)
+      void api<{ overview: AdministrativeOverview }>('/admin/overview')
+        .then(({ overview }) => {
+          if (current)
+            setAdministrativePending(overview.requests.filter((request) => request.canAct).length);
+        })
+        .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [data?.me.id, location.pathname]);
   const refresh = useCallback(async () => {
     const result = await api<Bootstrap>('/bootstrap');
     setData(result);
@@ -267,6 +323,15 @@ export default function App() {
       '/approvals': 'الموافقات',
       '/employees': 'دليل الفريق',
       '/calendar': 'تقويم الفريق',
+      '/services': 'الخدمات الإدارية',
+      '/requests': 'الطلبات الإدارية',
+      '/attendance': 'الحضور والعمل',
+      '/documents': 'المستندات',
+      '/payroll': 'الرواتب',
+      '/reports': 'التقارير',
+      '/settings/policies': 'القواعد والسياسات',
+      '/audit': 'سجل التدقيق',
+      '/employees/import': 'استيراد ملفات الموظفين',
     };
     document.title = `${titles[location.pathname] || 'الملف الوظيفي'} | مساحة فريق سبق`;
   }, [location.pathname]);
@@ -311,14 +376,32 @@ export default function App() {
   const navItems = [
     { to: '/', label: 'لوحة العمل', Icon: LayoutGrid },
     { to: '/profile', label: 'ملفي الوظيفي', Icon: UserRound },
-    { to: '/leaves', label: 'الإجازات والطلبات', Icon: CalendarDays },
-    ...(data.me.role !== 'employee'
-      ? [
-          { to: '/approvals', label: 'الموافقات', Icon: ClipboardCheck },
-          { to: '/employees', label: 'دليل الفريق', Icon: Users },
-        ]
+    { to: '/leaves', label: 'الإجازات', Icon: CalendarDays },
+    { to: '/services', label: 'الخدمات الإدارية', Icon: BriefcaseBusiness },
+    { to: '/requests', label: 'طلباتي ومتابعاتي', Icon: Files },
+    { to: '/attendance', label: 'الحضور والعمل', Icon: Clock3 },
+    ...(['hr', 'manager', 'finance', 'approver'].includes(data.me.role)
+      ? [{ to: '/approvals', label: 'الموافقات', Icon: ClipboardCheck }]
+      : []),
+    ...(['hr', 'manager'].includes(data.me.role)
+      ? [{ to: '/employees', label: 'دليل الفريق', Icon: Users }]
       : []),
     { to: '/calendar', label: 'تقويم الفريق', Icon: CalendarDays },
+    { to: '/documents', label: 'المستندات', Icon: Files },
+    {
+      to: '/payroll',
+      label: ['employee', 'manager'].includes(data.me.role) ? 'قسائم راتبي' : 'الرواتب',
+      Icon: WalletCards,
+    },
+    ...(['hr', 'finance', 'auditor'].includes(data.me.role)
+      ? [{ to: '/reports', label: 'التقارير', Icon: ChartNoAxesCombined }]
+      : []),
+    ...(['hr', 'approver', 'auditor'].includes(data.me.role)
+      ? [{ to: '/settings/policies', label: 'القواعد والسياسات', Icon: Settings2 }]
+      : []),
+    ...(['hr', 'auditor'].includes(data.me.role)
+      ? [{ to: '/audit', label: 'سجل التدقيق', Icon: History }]
+      : []),
   ];
   const nav = (
     <nav aria-label="التنقل الرئيسي">
@@ -331,7 +414,9 @@ export default function App() {
         >
           <Icon size={20} />
           <span>{label}</span>
-          {to === '/approvals' && actionable > 0 && <b className="nav-count">{actionable}</b>}
+          {to === '/approvals' && actionable + administrativePending > 0 && (
+            <b className="nav-count">{actionable + administrativePending}</b>
+          )}
         </NavLink>
       ))}
     </nav>
@@ -446,14 +531,45 @@ export default function App() {
             </div>
           </header>
           <main id="main-content" className="main-content" tabIndex={-1}>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
+            <Routes key={data.me.id}>
+              <Route
+                path="/"
+                element={
+                  <>
+                    <Dashboard />
+                    <AdminOverviewPanel openRequest={(id) => navigate(`/requests/${id}`)} />
+                  </>
+                }
+              />
               <Route path="/profile" element={<ProfilePage self />} />
+              <Route path="/profile/file" element={<EmployeeFilePage />} />
               <Route path="/employees" element={<PeoplePage />} />
+              <Route path="/employees/import" element={<EmployeeImportPage />} />
               <Route path="/employees/:id" element={<ProfilePage />} />
+              <Route path="/employees/:id/file" element={<EmployeeFileRoute />} />
               <Route path="/leaves" element={<LeavesPage />} />
-              <Route path="/approvals" element={<ApprovalsPage />} />
+              <Route
+                path="/approvals"
+                element={
+                  <>
+                    <ApprovalsPage />
+                    <RequestsInbox openRequest={(id) => navigate(`/requests/${id}`)} />
+                  </>
+                }
+              />
               <Route path="/calendar" element={<CalendarPage />} />
+              <Route path="/services" element={<ServicesPage />} />
+              <Route
+                path="/requests"
+                element={<RequestsPage openRequest={(id) => navigate(`/requests/${id}`)} />}
+              />
+              <Route path="/requests/:id" element={<RequestRoute />} />
+              <Route path="/attendance" element={<AttendancePage />} />
+              <Route path="/documents" element={<DocumentsPage />} />
+              <Route path="/payroll" element={<PayrollPage actor={data.me} />} />
+              <Route path="/reports" element={<ReportsPage />} />
+              <Route path="/settings/policies" element={<PoliciesPage />} />
+              <Route path="/audit" element={<AuditPage />} />
               <Route path="*" element={<Navigate replace to="/" />} />
             </Routes>
           </main>

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import express from 'express';
 import { createApp } from './app.js';
-import { createDatabase } from './database.js';
+import { createDatabase, createPostgresDatabase } from './database.js';
 import { createHostedDemoApp } from './hosted-demo.js';
 
 const envFile = resolve('.env');
@@ -21,14 +21,23 @@ if (production && !hostedDemo && process.env.LOCAL_DEMO !== 'true') {
 if (hostedDemo && process.env.HR_DB_PATH) {
   throw new Error('Hosted previews use isolated temporary databases; HR_DB_PATH is not allowed.');
 }
+if (process.env.HR_DB_DRIVER && !['sqlite', 'postgres'].includes(process.env.HR_DB_DRIVER)) {
+  throw new Error('HR_DB_DRIVER must be sqlite or postgres.');
+}
 const runtime = hostedDemo
-  ? createHostedDemoApp({ publicOrigin: process.env.HR_PUBLIC_ORIGIN ?? '' })
-  : (() => {
+  ? await createHostedDemoApp({
+      publicOrigin: process.env.HR_PUBLIC_ORIGIN ?? '',
+      databaseUrl: process.env.DATABASE_URL,
+    })
+  : await (async () => {
       const defaultDataDir = resolve('.data');
       mkdirSync(defaultDataDir, { recursive: true });
-      const db = createDatabase(
-        process.env.HR_DB_PATH ?? resolve(defaultDataDir, 'hr-local.sqlite'),
-      );
+      const db =
+        process.env.HR_DB_DRIVER === 'postgres'
+          ? await createPostgresDatabase(process.env.DATABASE_URL ?? '', 'hr_development')
+          : await createDatabase(
+              process.env.HR_DB_PATH ?? resolve(defaultDataDir, 'hr-local.sqlite'),
+            );
       return { app: createApp(db), close: () => db.close() };
     })();
 const { app } = runtime;
@@ -65,8 +74,7 @@ function shutdown() {
   if (stopping) return;
   stopping = true;
   server.close(() => {
-    runtime.close();
-    process.exit(0);
+    void runtime.close().finally(() => process.exit(0));
   });
   setTimeout(() => process.exit(1), 10_000).unref();
 }

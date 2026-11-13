@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowUpLeft,
   CalendarDays,
@@ -33,6 +33,7 @@ import {
   useApp,
 } from './lib';
 import type { Employee } from '../shared/contracts';
+import { EmployeeCreateDialog } from './administration';
 
 export function WorkspaceArt() {
   return (
@@ -465,7 +466,9 @@ export function ApprovalsPage() {
   );
 }
 export function PeoplePage() {
-  const { data } = useApp();
+  const { data, refresh } = useApp();
+  const [creating, setCreating] = useState(false);
+  const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [department, setDepartment] = useState('all');
   const departments = [...new Set(data.employees.map((e) => e.department))];
@@ -510,6 +513,17 @@ export function PeoplePage() {
           </select>
         </label>
         <span className="subtle">{people.length} نتائج</span>
+        {data.me.role === 'hr' && (
+          <div className="employee-actions">
+            <Link className="button secondary" to="/employees/import">
+              استيراد Excel
+            </Link>
+            <button className="button primary" onClick={() => setCreating(true)}>
+              <Plus size={17} />
+              إضافة موظف
+            </button>
+          </div>
+        )}
       </section>
       {people.length ? (
         <div className="people-grid">
@@ -517,7 +531,16 @@ export function PeoplePage() {
             <Link to={`/employees/${e.id}`} className="person-card" key={e.id}>
               <div className="person-card-top">
                 <Avatar person={e} size="lg" />
-                <span className="active-dot">على رأس العمل</span>
+                <span className={e.status === 'active' ? 'active-dot' : 'subtle'}>
+                  {
+                    {
+                      active: 'على رأس العمل',
+                      on_leave: 'في إجازة',
+                      suspended: 'موقوف',
+                      terminated: 'منتهية الخدمة',
+                    }[e.status]
+                  }
+                </span>
               </div>
               <h2>{e.name}</h2>
               <p>{e.title}</p>
@@ -534,6 +557,15 @@ export function PeoplePage() {
         </div>
       ) : (
         <Empty title="لم نجد اسمًا مطابقًا" detail="جرّب اسمًا آخر أو اختر جميع الأقسام." />
+      )}
+      {creating && (
+        <EmployeeCreateDialog
+          close={() => setCreating(false)}
+          onCreated={(id) => {
+            void refresh();
+            navigate(`/employees/${id}/file`);
+          }}
+        />
       )}
     </>
   );
@@ -627,6 +659,9 @@ export function ProfilePage({ self = false }: { self?: boolean }) {
           >
             سجل الإجازات
           </button>
+          <Link className="tab" to={mine ? '/profile/file' : `/employees/${employee.id}/file`}>
+            الملف الكامل والوثائق <ChevronLeft size={14} />
+          </Link>
         </div>
       </section>
       {tab === 'overview' ? (

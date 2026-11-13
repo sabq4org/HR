@@ -9,9 +9,9 @@ import { createDatabase, todayInRiyadh } from '../../server/database.js';
 
 let server: Server;
 let base = '';
-let database: ReturnType<typeof createDatabase>;
+let database: Awaited<ReturnType<typeof createDatabase>>;
 beforeEach(async () => {
-  database = createDatabase();
+  database = await createDatabase();
   const app = createApp(database);
   server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -21,6 +21,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+  await database.close();
 });
 
 type Context = { cookie: string; origin: string };
@@ -126,34 +127,73 @@ test('health is public but app is local-host only; unsafe requests require exact
   assert.equal(api404.headers.get('x-content-type-options'), 'nosniff');
 });
 
+test('JSON body limits are scoped to the documented document and import routes', async () => {
+  const hr = await login('emp-noura');
+  const largePayload = { filename: 'fixture.pdf', data: 'a'.repeat(90_000) };
+  const documentResponse = await api(
+    '/api/admin/employees/emp-sara/documents',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(largePayload),
+    },
+    hr,
+  );
+  assert.notEqual(documentResponse.status, 413);
+  const previewResponse = await api(
+    '/api/admin/imports/employees/preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(largePayload),
+    },
+    hr,
+  );
+  assert.notEqual(previewResponse.status, 413);
+  const oversizedGeneral = await api(
+    '/api/leaves',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'oversized-json' },
+      body: JSON.stringify({
+        startDate: futureSunday(),
+        endDate: futureSunday(),
+        note: 'a'.repeat(90_000),
+      }),
+    },
+    await login('emp-sara'),
+  );
+  assert.equal(oversizedGeneral.status, 413);
+});
+
 test('migrations and synthetic reference records persist when the database is reopened', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'sabq-hr-migration-'));
   const path = join(directory, 'test.sqlite');
   try {
-    const first = createDatabase(path);
+    const first = await createDatabase(path);
     assert.deepEqual(
       (
-        first.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as {
-          version: number;
-        }[]
+        await first.read<{ version: number }>(
+          'SELECT version FROM schema_migrations ORDER BY version',
+        )
       ).map((r) => r.version),
-      [1, 2, 3],
+      [1, 2, 3, 4, 5, 6],
     );
     assert.equal(
-      (first.prepare('SELECT count(*) AS n FROM employment_periods').get() as { n: number }).n,
-      8,
+      (await first.read<{ n: number }>('SELECT count(*) AS n FROM employment_periods'))[0].n,
+      11,
     );
-    const sample = first
-      .prepare(
+    const sample = (
+      await first.read<{
+        start_date: string;
+        status: string;
+        version: number;
+        policy_version_id: string;
+        work_schedule_id: string;
+      }>(
         "SELECT start_date,status,version,policy_version_id,work_schedule_id FROM leave_requests WHERE id='leave-demo-lina'",
       )
-      .get() as {
-      start_date: string;
-      status: string;
-      version: number;
-      policy_version_id: string;
-      work_schedule_id: string;
-    };
+    )[0];
     assert.ok(
       sample.start_date >= todayInRiyadh() && sample.start_date <= plus(todayInRiyadh(), 6),
     );
@@ -185,66 +225,70 @@ test('migrations and synthetic reference records persist when the database is re
     assert.equal(canceled.status, 200);
     const beforeState = {
       ledger: (
-        first
-          .prepare("SELECT count(*) AS n FROM leave_ledger WHERE employee_id='emp-sara'")
-          .get() as { n: number }
-      ).n,
+        await first.read<{ n: number }>(
+          "SELECT count(*) AS n FROM leave_ledger WHERE employee_id='emp-sara'",
+        )
+      )[0].n,
       audit: (
-        first
-          .prepare("SELECT count(*) AS n FROM audit_events WHERE resource_id='leave-demo-sara'")
-          .get() as { n: number }
-      ).n,
+        await first.read<{ n: number }>(
+          "SELECT count(*) AS n FROM audit_events WHERE resource_id='leave-demo-sara'",
+        )
+      )[0].n,
       outbox: (
-        first.prepare("SELECT count(*) AS n FROM outbox WHERE recipient_id='emp-omar'").get() as {
-          n: number;
-        }
-      ).n,
+        await first.read<{ n: number }>(
+          "SELECT count(*) AS n FROM outbox WHERE recipient_id='emp-omar'",
+        )
+      )[0].n,
     };
     await new Promise<void>((resolve, reject) =>
       testServer.close((e) => (e ? reject(e) : resolve())),
     );
-    first.close();
-    const reopened = createDatabase(path);
-    const saraleave = reopened
-      .prepare("SELECT status,version,start_date FROM leave_requests WHERE id='leave-demo-sara'")
-      .get() as { status: string; version: number; start_date: string };
+    await first.close();
+    const reopened = await createDatabase(path);
+    const saraleave = (
+      await reopened.read<{ status: string; version: number; start_date: string }>(
+        "SELECT status,version,start_date FROM leave_requests WHERE id='leave-demo-sara'",
+      )
+    )[0];
     assert.equal(saraleave.status, 'cancelled');
     assert.equal(saraleave.version, 2);
-    const lina = reopened
-      .prepare("SELECT status,version,start_date FROM leave_requests WHERE id='leave-demo-lina'")
-      .get() as { status: string; version: number; start_date: string };
+    const lina = (
+      await reopened.read<{ status: string; version: number; start_date: string }>(
+        "SELECT status,version,start_date FROM leave_requests WHERE id='leave-demo-lina'",
+      )
+    )[0];
     assert.equal(lina.status, sample.status);
     assert.equal(lina.version, sample.version);
     assert.equal(lina.start_date, sample.start_date);
     assert.equal(
       (
-        reopened
-          .prepare("SELECT count(*) AS n FROM leave_ledger WHERE employee_id='emp-sara'")
-          .get() as { n: number }
-      ).n,
+        await reopened.read<{ n: number }>(
+          "SELECT count(*) AS n FROM leave_ledger WHERE employee_id='emp-sara'",
+        )
+      )[0].n,
       beforeState.ledger,
     );
     assert.equal(
       (
-        reopened
-          .prepare("SELECT count(*) AS n FROM audit_events WHERE resource_id='leave-demo-sara'")
-          .get() as { n: number }
-      ).n,
+        await reopened.read<{ n: number }>(
+          "SELECT count(*) AS n FROM audit_events WHERE resource_id='leave-demo-sara'",
+        )
+      )[0].n,
       beforeState.audit,
     );
     assert.equal(
       (
-        reopened
-          .prepare("SELECT count(*) AS n FROM outbox WHERE recipient_id='emp-omar'")
-          .get() as { n: number }
-      ).n,
+        await reopened.read<{ n: number }>(
+          "SELECT count(*) AS n FROM outbox WHERE recipient_id='emp-omar'",
+        )
+      )[0].n,
       beforeState.outbox,
     );
     assert.equal(
-      (reopened.prepare('SELECT count(*) AS n FROM schema_migrations').get() as { n: number }).n,
-      3,
+      (await reopened.read<{ n: number }>('SELECT count(*) AS n FROM schema_migrations'))[0].n,
+      6,
     );
-    reopened.close();
+    await reopened.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -266,7 +310,8 @@ test('session is server-expiring, persona switching invalidates the old token, a
   assert.equal(current.status, 200);
   assert.equal(current.headers.get('cache-control'), 'no-store, max-age=0');
 
-  const shortServer = createServer(createApp(createDatabase(), { sessionTtlMs: 20 }));
+  const shortDb = await createDatabase();
+  const shortServer = createServer(createApp(shortDb, { sessionTtlMs: 20 }));
   await new Promise<void>((resolve) => shortServer.listen(0, '127.0.0.1', resolve));
   const address = shortServer.address();
   if (!address || typeof address === 'string') throw new Error('No expiry test listener');
@@ -288,25 +333,25 @@ test('session is server-expiring, persona switching invalidates the old token, a
     await new Promise<void>((resolve, reject) =>
       shortServer.close((e) => (e ? reject(e) : resolve())),
     );
+    await shortDb.close();
   }
 });
 
-test('ledger and audit rows are append-only at the database layer', () => {
-  assert.throws(
-    () => database.prepare("UPDATE leave_ledger SET days=days WHERE kind='allocation'").run(),
+test('ledger and audit rows are append-only at the database layer', async () => {
+  await assert.rejects(
+    database.execute("UPDATE leave_ledger SET days=days WHERE kind='allocation'"),
     /append-only ledger/,
   );
-  assert.throws(
-    () => database.prepare("DELETE FROM leave_ledger WHERE kind='allocation'").run(),
+  await assert.rejects(
+    database.execute("DELETE FROM leave_ledger WHERE kind='allocation'"),
     /append-only ledger/,
   );
-  database
-    .prepare(
-      "INSERT INTO audit_events(actor_id,actor_role,action,resource_id,created_at) VALUES('emp-sara','employee','test','leave-demo-sara',?)",
-    )
-    .run(new Date().toISOString());
-  assert.throws(
-    () => database.prepare("UPDATE audit_events SET action='changed' WHERE action='test'").run(),
+  await database.execute(
+    "INSERT INTO audit_events(actor_id,actor_role,action,resource_id,created_at) VALUES('emp-sara','employee','test','leave-demo-sara',?)",
+    [new Date().toISOString()],
+  );
+  await assert.rejects(
+    database.execute("UPDATE audit_events SET action='changed' WHERE action='test'"),
     /append-only audit/,
   );
 });
@@ -384,11 +429,9 @@ test('request creation is blocked if any independent approval stage is unconfigu
 
 test('bootstrap and submission fail clearly when persisted policy and schedule disagree', async () => {
   const sara = await login('emp-sara');
-  database
-    .prepare(
-      "UPDATE policy_versions SET working_days_json='[0,1,2,3]' WHERE id='policy-demo-annual-v1'",
-    )
-    .run();
+  await database.execute(
+    "UPDATE policy_versions SET working_days_json='[0,1,2,3]' WHERE id='policy-demo-annual-v1'",
+  );
   const bootstrap = await api('/api/bootstrap', {}, sara);
   assert.equal(bootstrap.status, 503);
   const start = futureSunday(77);
