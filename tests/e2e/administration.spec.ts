@@ -66,6 +66,9 @@ test('HR creates an employee through grouped steps and edits the employee file',
   await page.getByRole('button', { name: 'المراجعة', exact: true }).click();
   await page.getByLabel('سبب التعديل').fill(`مراجعة ${suffix}`);
   await page.getByRole('button', { name: 'حفظ التعديلات' }).click();
+  await expect(page.getByRole('button', { name: 'تعديل الملف' })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'تعديل الملف' })).toBeVisible();
   await expect(page.getByText('محرر أول تجريبي', { exact: true })).toBeVisible();
   expect(
     await page
