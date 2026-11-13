@@ -94,5 +94,5 @@ export interface ApiError {
 // POST /api/leaves/:id/decision + Idempotency-Key -> { leave: LeaveRequest }; DecisionInput.
 // POST /api/leaves/:id/cancel + Idempotency-Key -> { leave: LeaveRequest }; {version:number}.
 // POST /api/notifications/read -> 204. Only current user's notifications.
-// GET /api/health -> {status:'ok', mode:'synthetic-local'}.
+// GET /api/health -> {status:'ok', mode:'synthetic-local' | 'synthetic-hosted'}.
 // All unsafe requests: require same-origin Origin header. No CORS. Bind loopback only.
