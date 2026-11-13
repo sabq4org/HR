@@ -1,0 +1,44 @@
+{
+  "name": "sabq-people",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sabq HR — synthetic local development workspace",
+  "engines": {
+    "node": ">=24.13.0"
+  },
+  "scripts": {
+    "dev": "tsx watch server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && vite build",
+    "preview": "NODE_ENV=production LOCAL_DEMO=true tsx server/index.ts",
+    "test": "node --import tsx --test tests/domain/*.test.ts",
+    "test:e2e": "playwright test",
+    "check": "npm run typecheck && npm test && npm run build",
+    "db:backup": "tsx scripts/database-operations.ts backup",
+    "db:verify": "tsx scripts/database-operations.ts verify",
+    "format": "prettier --write src server shared scripts tests *.ts *.json index.html",
+    "format:check": "prettier --check src server shared scripts tests *.ts *.json index.html"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-sans-arabic": "5.3.0",
+    "express": "5.3.0",
+    "lucide-react": "1.72.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router-dom": "7.18.5"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.65.0",
+    "@types/express": "5.0.6",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "prettier": "3.10.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.8"
+  }
+}

@@ -1,0 +1,8 @@
+node_modules
+dist
+.data
+artifacts
+playwright-report
+test-results
+package-lock.json
+Sabq_HR_Project_Pack.html
