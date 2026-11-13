@@ -1,0 +1,591 @@
+import type { DocumentCategory, FormDefinition, FormField, RequestKind } from './administration';
+
+const options = (pairs: [string, string][]) => pairs.map(([value, label]) => ({ value, label }));
+const field = (
+  key: string,
+  label: string,
+  type: FormField['type'] = 'text',
+  extra: Partial<FormField> = {},
+): FormField => ({ key, label, type, ...extra });
+const personal = { sensitive: 'personal' as const };
+const financial = { sensitive: 'financial' as const };
+
+export const employeeFields: FormField[] = [
+  field('name', 'الاسم بالعربية', 'text', { required: true, group: 'البيانات الأساسية' }),
+  field('englishName', 'الاسم بالإنجليزية', 'text', { group: 'البيانات الأساسية' }),
+  field('employeeNumber', 'الرقم الوظيفي', 'text', { required: true, group: 'البيانات الأساسية' }),
+  field('nationality', 'الجنسية', 'text', { group: 'البيانات الأساسية', ...personal }),
+  field('nationalId', 'رقم الهوية أو الإقامة', 'text', {
+    group: 'البيانات الأساسية',
+    ...personal,
+    hint: 'بيانات اصطناعية فقط في هذه المعاينة.',
+  }),
+  field('nationalIdExpiry', 'انتهاء الهوية أو الإقامة', 'date', {
+    group: 'البيانات الأساسية',
+    ...personal,
+  }),
+  field('passportNumber', 'رقم الجواز', 'text', { group: 'البيانات الأساسية', ...personal }),
+  field('passportExpiry', 'انتهاء الجواز', 'date', { group: 'البيانات الأساسية', ...personal }),
+  field('birthDate', 'تاريخ الميلاد', 'date', { group: 'البيانات الأساسية', ...personal }),
+  field('gender', 'الجنس', 'select', {
+    group: 'البيانات الأساسية',
+    ...personal,
+    options: options([
+      ['male', 'ذكر'],
+      ['female', 'أنثى'],
+    ]),
+  }),
+  field('maritalStatus', 'الحالة الاجتماعية', 'select', {
+    group: 'البيانات الأساسية',
+    ...personal,
+    options: options([
+      ['single', 'أعزب / عزباء'],
+      ['married', 'متزوج / متزوجة'],
+      ['divorced', 'مطلق / مطلقة'],
+      ['widowed', 'أرمل / أرملة'],
+    ]),
+  }),
+  field('religion', 'الديانة عند الحاجة النظامية', 'text', {
+    group: 'البيانات الأساسية',
+    ...personal,
+    hint: 'اختياري؛ لا يطلب لمجرد استكمال الملف.',
+  }),
+  field('email', 'البريد الوظيفي', 'email', { required: true, group: 'التواصل' }),
+  field('mobile', 'رقم الجوال', 'text', { group: 'التواصل', ...personal }),
+  field('nationalAddress', 'العنوان الوطني', 'textarea', { group: 'التواصل', ...personal }),
+  field('emergencyName', 'اسم جهة اتصال الطوارئ', 'text', { group: 'التواصل', ...personal }),
+  field('emergencyMobile', 'جوال الطوارئ', 'text', { group: 'التواصل', ...personal }),
+  field('department', 'الإدارة', 'text', { required: true, group: 'العمل' }),
+  field('title', 'المسمى الوظيفي', 'text', { required: true, group: 'العمل' }),
+  field('registeredProfession', 'المهنة المسجلة', 'text', { group: 'العمل' }),
+  field('managerId', 'المدير المباشر', 'employee', { group: 'العمل' }),
+  field('joinDate', 'تاريخ المباشرة الفعلي', 'date', { required: true, group: 'العمل' }),
+  field('location', 'موقع العمل', 'text', { required: true, group: 'العمل' }),
+  field('workType', 'نمط العمل', 'select', {
+    group: 'العمل',
+    options: options([
+      ['office', 'مكتبي'],
+      ['remote', 'عن بعد'],
+      ['field', 'ميداني'],
+      ['hybrid', 'مرن'],
+    ]),
+  }),
+  field('schedule', 'جدول العمل', 'text', {
+    group: 'العمل',
+    hint: 'وصف تنظيمي؛ احتساب الإجازة يتبع سياسة الدوام المفعّلة.',
+  }),
+  field('employmentStatus', 'الحالة الوظيفية', 'select', {
+    group: 'العمل',
+    options: options([
+      ['active', 'على رأس العمل'],
+      ['on_leave', 'في إجازة'],
+      ['suspended', 'موقوف'],
+      ['terminated', 'منتهية الخدمة'],
+    ]),
+  }),
+  field('contractType', 'نوع العقد', 'select', {
+    group: 'العقد',
+    options: options([
+      ['fixed', 'محدد المدة'],
+      ['indefinite', 'غير محدد المدة'],
+      ['part_time', 'دوام جزئي'],
+      ['temporary', 'مؤقت'],
+    ]),
+  }),
+  field('contractStart', 'بداية العقد', 'date', { group: 'العقد' }),
+  field('contractEnd', 'نهاية العقد', 'date', { group: 'العقد' }),
+  field('renewalCount', 'عدد التجديدات', 'number', { group: 'العقد', min: 0, max: 100 }),
+  field('cumulativeContractMonths', 'مدة العقود المتراكمة بالأشهر', 'number', {
+    group: 'العقد',
+    min: 0,
+    max: 1200,
+  }),
+  field('probationEnd', 'نهاية فترة التجربة', 'date', { group: 'العقد' }),
+  field('noticeDays', 'مدة الإشعار المتفق عليها', 'number', {
+    group: 'العقد',
+    min: 0,
+    max: 365,
+    hint: 'حسب العقد المعتمد؛ لا يُفترض حد قانوني تلقائيًا.',
+  }),
+  field('qiwaReference', 'مرجع العقد في قوى', 'text', { group: 'العقد' }),
+  field('qiwaStatus', 'حالة التوثيق في قوى', 'select', {
+    group: 'العقد',
+    hint: 'متابعة يدوية، دون اتصال بمنصة قوى.',
+    options: options([
+      ['not_recorded', 'غير مسجل'],
+      ['pending', 'قيد التوثيق'],
+      ['documented', 'موثق'],
+      ['needs_review', 'يحتاج مراجعة'],
+    ]),
+  }),
+  field('basicSalary', 'الراتب الأساسي', 'money', { group: 'المالية', ...financial, min: 0 }),
+  field('housingAllowance', 'بدل السكن', 'money', { group: 'المالية', ...financial, min: 0 }),
+  field('transportAllowance', 'بدل النقل', 'money', { group: 'المالية', ...financial, min: 0 }),
+  field('otherAllowance', 'بدلات ثابتة أخرى', 'money', { group: 'المالية', ...financial, min: 0 }),
+  field('variablePayDescription', 'العمولات والعناصر المتغيرة', 'textarea', {
+    group: 'المالية',
+    ...financial,
+  }),
+  field(
+    'variablePayExcludedFromSettlement',
+    'يوجد اتفاق موثق باستبعاد عنصر متغير من وعاء التسوية',
+    'checkbox',
+    {
+      group: 'المالية',
+      ...financial,
+      hint: 'تسجيل الاتفاق لا يحسم صحته النظامية أو أثره الحسابي.',
+    },
+  ),
+  field('bankName', 'البنك', 'text', { group: 'المالية', ...financial }),
+  field('iban', 'الآيبان', 'text', {
+    group: 'المالية',
+    ...financial,
+    hint: 'لا تدخل رقم حساب حقيقي في المعاينة.',
+  }),
+  field('insuranceNumber', 'رقم اشتراك التأمينات', 'text', { group: 'التأمينات', ...financial }),
+  field('insuranceCategory', 'فئة التأمينات', 'select', {
+    group: 'التأمينات',
+    ...financial,
+    options: options([
+      ['unreviewed', 'لم تراجع'],
+      ['existing', 'النظام السابق حسب التحقق'],
+      ['new', 'النظام الجديد حسب التحقق'],
+    ]),
+  }),
+  field('insuredWage', 'الأجر المسجل في التأمينات', 'money', {
+    group: 'التأمينات',
+    ...financial,
+    min: 0,
+  }),
+  field('sickWindowStart', 'بداية نافذة الإجازة المرضية', 'date', {
+    group: 'الإجازات',
+    sensitive: 'medical',
+  }),
+  field('sickDaysUsed', 'الأيام المرضية المسجلة', 'number', {
+    group: 'الإجازات',
+    sensitive: 'medical',
+    min: 0,
+    max: 366,
+  }),
+  field('hajjLeaveUsed', 'سبق الاستفادة من إجازة الحج', 'checkbox', {
+    group: 'الإجازات',
+    ...personal,
+  }),
+  field('qualification', 'المؤهل العلمي', 'text', { group: 'المؤهلات' }),
+  field('specialization', 'التخصص', 'text', { group: 'المؤهلات' }),
+  field('mediaAccreditation', 'الاعتماد الإعلامي', 'text', { group: 'المؤهلات' }),
+  field('separationDate', 'تاريخ انتهاء العلاقة', 'date', { group: 'انتهاء العلاقة' }),
+  field('separationReason', 'سبب انتهاء العلاقة', 'textarea', {
+    group: 'انتهاء العلاقة',
+    ...personal,
+  }),
+];
+
+export const documentCategories: DocumentCategory[] = [
+  { key: 'identity', label: 'الهوية / الإقامة', sensitive: 'personal', hasExpiry: true },
+  { key: 'passport', label: 'جواز السفر', sensitive: 'personal', hasExpiry: true },
+  { key: 'work_permit', label: 'رخصة العمل', sensitive: 'personal', hasExpiry: true },
+  { key: 'contract', label: 'العقد الموثق', sensitive: 'financial', hasExpiry: true },
+  { key: 'amendment', label: 'ملحق العقد', sensitive: 'financial' },
+  { key: 'qualification', label: 'الشهادات والمؤهلات' },
+  { key: 'experience', label: 'شهادات الخبرة' },
+  { key: 'cv', label: 'السيرة الذاتية', sensitive: 'personal' },
+  { key: 'photo', label: 'الصورة الشخصية', sensitive: 'personal' },
+  { key: 'bank_letter', label: 'خطاب الآيبان', sensitive: 'financial' },
+  { key: 'address', label: 'العنوان الوطني', sensitive: 'personal' },
+  { key: 'insurance', label: 'سجل التأمينات', sensitive: 'financial' },
+  { key: 'medical_insurance', label: 'التأمين الطبي', sensitive: 'medical', hasExpiry: true },
+  { key: 'press_card', label: 'البطاقة الصحفية', hasExpiry: true },
+  { key: 'driving_license', label: 'رخصة القيادة', sensitive: 'personal', hasExpiry: true },
+  { key: 'work_policy', label: 'الإقرار بلائحة العمل' },
+  { key: 'privacy_notice', label: 'إشعار الخصوصية' },
+  { key: 'probation', label: 'تقييم فترة التجربة' },
+  { key: 'clearance', label: 'إخلاء الطرف' },
+  { key: 'other', label: 'مستند وظيفي آخر', sensitive: 'personal' },
+];
+
+const required = { required: true };
+const reason = field('reason', 'التفاصيل والمبرر', 'textarea', required);
+const effectiveDate = field('effectiveDate', 'تاريخ السريان', 'date', required);
+const amount = field('amount', 'المبلغ بالريال', 'money', {
+  ...required,
+  ...financial,
+  min: 0.01,
+  max: 1000000,
+});
+const recipient = field('recipient', 'الجهة الموجه إليها', 'text', required);
+export const leaveTypeOptions = options([
+  ['sick', 'مرضية'],
+  ['maternity', 'وضع'],
+  ['sick_child', 'رعاية مولود مريض'],
+  ['nursing', 'رضاعة'],
+  ['paternity', 'مولود'],
+  ['marriage', 'زواج'],
+  ['bereavement', 'وفاة قريب'],
+  ['iddah', 'عدة'],
+  ['hajj', 'حج'],
+  ['exam', 'اختبار'],
+  ['unpaid', 'بدون أجر'],
+  ['compensatory', 'تعويضية'],
+  ['job_search', 'بحث عن عمل أثناء الإشعار'],
+  ['other', 'حالة خاصة'],
+]);
+export const formDefinitions: FormDefinition[] = [
+  {
+    kind: 'contract',
+    title: 'عقد عمل',
+    description: 'إنشاء نسخة عقد ومراجعتها قبل اعتمادها داخليًا.',
+    category: 'employment',
+    initiators: ['hr'],
+    steps: ['approver'],
+    printable: true,
+    fields: [
+      field('contractType', 'نوع العقد', 'select', {
+        ...required,
+        options: employeeFields.find((f) => f.key === 'contractType')!.options,
+      }),
+      field('startDate', 'بداية العقد', 'date', required),
+      field('endDate', 'نهاية العقد', 'date'),
+      field('title', 'المسمى الوظيفي', 'text', required),
+      field('basicSalary', 'الأساسي بالريال', 'money', { ...required, ...financial, min: 0 }),
+      field('probationEnd', 'نهاية التجربة', 'date'),
+      field('noticeDays', 'مدة الإشعار', 'number', { min: 0, max: 365 }),
+      field('qiwaReference', 'مرجع قوى إن وجد'),
+      reason,
+    ],
+  },
+  {
+    kind: 'contract_amendment',
+    title: 'ملحق عقد',
+    description: 'توثيق تغيير محدد مع حفظ العقد والنسخ السابقة.',
+    category: 'employment',
+    initiators: ['hr'],
+    steps: ['approver'],
+    printable: true,
+    fields: [
+      field('contractReference', 'مرجع العقد', 'text', required),
+      effectiveDate,
+      field('changes', 'التعديلات المتفق عليها', 'textarea', required),
+      reason,
+    ],
+  },
+  {
+    kind: 'probation',
+    title: 'تقييم فترة التجربة',
+    description: 'تقييم موثق وتوصية للمراجعة دون إنهاء تلقائي.',
+    category: 'employment',
+    initiators: ['manager', 'hr'],
+    steps: ['hr', 'approver'],
+    fields: [
+      field('reviewDate', 'تاريخ التقييم', 'date', required),
+      field('rating', 'التقييم', 'select', {
+        ...required,
+        options: options([
+          ['exceeds', 'يفوق التوقعات'],
+          ['meets', 'يحقق التوقعات'],
+          ['needs_improvement', 'يحتاج تحسينًا'],
+        ]),
+      }),
+      field('recommendation', 'التوصية', 'textarea', required),
+      reason,
+    ],
+  },
+  {
+    kind: 'salary_letter',
+    title: 'تعريف بالراتب',
+    description: 'خطاب تعريف مالي باسم الجهة التي تختارها.',
+    category: 'services',
+    initiators: ['employee', 'manager', 'hr', 'finance', 'approver'],
+    steps: ['hr'],
+    printable: true,
+    confidential: true,
+    fields: [
+      recipient,
+      field('language', 'لغة الخطاب', 'select', {
+        ...required,
+        options: options([
+          ['ar', 'العربية'],
+          ['en', 'English'],
+        ]),
+      }),
+      field('purpose', 'الغرض', 'text', required),
+    ],
+  },
+  {
+    kind: 'employment_letter',
+    title: 'تعريف بالعمل',
+    description: 'إثبات بيانات العمل والمسمى دون معلومات مالية.',
+    category: 'services',
+    initiators: ['employee', 'manager', 'hr', 'finance', 'approver'],
+    steps: ['hr'],
+    printable: true,
+    fields: [recipient, field('purpose', 'الغرض', 'text', required)],
+  },
+  {
+    kind: 'experience_letter',
+    title: 'شهادة خبرة',
+    description: 'مراجعة فترة العمل والمهام وإصدار شهادة داخلية.',
+    category: 'services',
+    initiators: ['employee', 'manager', 'hr'],
+    steps: ['hr'],
+    printable: true,
+    fields: [recipient, field('duties', 'المهام المراد ذكرها', 'textarea', required)],
+  },
+  {
+    kind: 'clearance',
+    title: 'إخلاء طرف',
+    description: 'تسجيل العهد والالتزامات ونتيجة مراجعة الإدارات.',
+    category: 'separation',
+    initiators: ['employee', 'manager', 'hr'],
+    steps: ['hr', 'finance', 'approver'],
+    printable: true,
+    fields: [
+      field('lastDay', 'آخر يوم عمل', 'date', required),
+      field('assets', 'العهد المسلمة والمتبقية', 'textarea', required),
+      field('financialObligations', 'الالتزامات المالية', 'textarea', {
+        ...required,
+        ...financial,
+      }),
+      reason,
+    ],
+  },
+  {
+    kind: 'advance',
+    title: 'طلب سلفة',
+    description: 'طلب مالي يمر بالموارد البشرية والمالية والمعتمد.',
+    category: 'financial',
+    initiators: ['employee', 'manager'],
+    steps: ['hr', 'finance', 'approver'],
+    confidential: true,
+    fields: [
+      amount,
+      field('installments', 'عدد الأقساط المقترح', 'number', { ...required, min: 1, max: 60 }),
+      field('firstDeductionMonth', 'شهر أول حسم YYYY-MM', 'text', required),
+      reason,
+    ],
+  },
+  {
+    kind: 'data_change',
+    title: 'تحديث بياناتي',
+    description: 'طلب تصحيح بيانات التواصل أو المؤهل مع المبرر.',
+    category: 'services',
+    initiators: ['employee', 'manager', 'finance', 'approver'],
+    steps: ['hr'],
+    fields: [
+      field('fieldName', 'البيان المراد تحديثه', 'select', {
+        ...required,
+        options: options([
+          ['mobile', 'الجوال'],
+          ['nationalAddress', 'العنوان الوطني'],
+          ['qualification', 'المؤهل'],
+          ['emergencyMobile', 'جوال الطوارئ'],
+        ]),
+      }),
+      field('newValue', 'القيمة الجديدة', 'text', { ...required, ...personal }),
+      reason,
+    ],
+  },
+  {
+    kind: 'bank_change',
+    title: 'تحديث الحساب البنكي',
+    description: 'مراجعة تغيير البنك والآيبان قبل إضافته للملف.',
+    category: 'financial',
+    initiators: ['employee', 'manager'],
+    steps: ['hr', 'finance'],
+    confidential: true,
+    fields: [
+      field('bankName', 'اسم البنك', 'text', { ...required, ...financial }),
+      field('iban', 'الآيبان التجريبي', 'text', { ...required, ...financial }),
+      reason,
+    ],
+  },
+  {
+    kind: 'transfer',
+    title: 'نقل وظيفي',
+    description: 'اقتراح إدارة ومسمى ومدير جديدين بتاريخ سريان.',
+    category: 'employment',
+    initiators: ['manager', 'hr'],
+    steps: ['hr', 'approver'],
+    fields: [
+      field('department', 'الإدارة الجديدة', 'text', required),
+      field('title', 'المسمى الجديد', 'text', required),
+      field('managerId', 'المدير الجديد', 'employee', required),
+      effectiveDate,
+      reason,
+    ],
+  },
+  {
+    kind: 'special_leave',
+    title: 'إجازة خاصة',
+    description: 'مراجعة نوع الإجازة ومستنداتها وقرارها. دون خصم آلي من الرصيد السنوي.',
+    category: 'time',
+    initiators: ['employee', 'manager'],
+    steps: ['manager', 'hr'],
+    fields: [
+      field('leaveType', 'نوع الإجازة', 'select', { ...required, options: leaveTypeOptions }),
+      field('startDate', 'من تاريخ', 'date', required),
+      field('endDate', 'إلى تاريخ', 'date', required),
+      field('note', 'الملاحظات اللازمة للمختص', 'textarea', { sensitive: 'medical' }),
+      field('policyReference', 'مرجع السياسة أو الحالة', 'text'),
+    ],
+  },
+  {
+    kind: 'leave_adjustment',
+    title: 'تسوية رصيد إجازة',
+    description: 'طلب قيد تصحيح مبرر يحفظ الرصيد السابق وسجل التدقيق.',
+    category: 'time',
+    initiators: ['hr'],
+    steps: ['approver'],
+    fields: [
+      field('days', 'الأيام المضافة أو المستعادة', 'number', { ...required, min: -365, max: 365 }),
+      effectiveDate,
+      reason,
+    ],
+  },
+  {
+    kind: 'overtime',
+    title: 'عمل إضافي',
+    description: 'تسجيل التكليف والساعات والتعويض المقترح للمراجعة.',
+    category: 'time',
+    initiators: ['employee', 'manager'],
+    steps: ['manager', 'hr', 'approver'],
+    fields: [
+      field('date', 'تاريخ العمل', 'date', required),
+      field('hours', 'عدد الساعات', 'number', { ...required, min: 0.25, max: 16 }),
+      field('compensation', 'نوع التعويض المقترح', 'select', {
+        ...required,
+        options: options([
+          ['payment', 'مقابل مالي'],
+          ['leave', 'وقت تعويضي باتفاق'],
+        ]),
+      }),
+      field('amount', 'المبلغ المقترح بالريال', 'money', { ...financial, min: 0, max: 1000000 }),
+      field('consent', 'موافقة الموظف على المقترح', 'checkbox', required),
+      reason,
+    ],
+  },
+  {
+    kind: 'reward',
+    title: 'توصية بمكافأة',
+    description: 'تقدير إنجاز موثق ومبلغ يخضع للمراجعة والاعتماد.',
+    category: 'financial',
+    initiators: ['manager', 'hr'],
+    steps: ['hr', 'approver'],
+    confidential: true,
+    fields: [amount, effectiveDate, field('achievement', 'الإنجاز', 'textarea', required), reason],
+  },
+  {
+    kind: 'separation',
+    title: 'إنهاء علاقة عمل',
+    description: 'تسجيل الحالة وتاريخها وخطة المراجعة وإخلاء الطرف.',
+    category: 'separation',
+    initiators: ['employee', 'manager', 'hr'],
+    steps: ['hr', 'approver'],
+    confidential: true,
+    fields: [
+      field('reasonType', 'نوع الحالة', 'select', {
+        ...required,
+        options: options([
+          ['resignation', 'استقالة'],
+          ['contract_end', 'نهاية عقد'],
+          ['mutual', 'اتفاق الطرفين'],
+          ['employer', 'إنهاء من صاحب العمل'],
+          ['other', 'حالة تحتاج مراجعة'],
+        ]),
+      }),
+      field('noticeDate', 'تاريخ الإشعار', 'date', required),
+      field('lastDay', 'آخر يوم مقترح', 'date', required),
+      field('handover', 'خطة التسليم', 'textarea', required),
+      reason,
+    ],
+  },
+  {
+    kind: 'settlement',
+    title: 'تسوية نهائية',
+    description: 'توثيق بنود محسوبة ومراجعتها دون افتراض استحقاق أو تحويل أموال.',
+    category: 'separation',
+    initiators: ['hr'],
+    steps: ['finance', 'approver'],
+    confidential: true,
+    printable: true,
+    fields: [
+      field('separationReference', 'مرجع حالة الانتهاء', 'text', required),
+      field('lastDay', 'آخر يوم عمل', 'date', required),
+      field('wageBasis', 'الأجر المستخدم بالريال', 'money', { ...required, ...financial, min: 0 }),
+      field('serviceDays', 'أيام الخدمة المعتمدة', 'number', { ...required, min: 0, max: 30000 }),
+      field('excludedDays', 'أيام مستبعدة معتمدة', 'number', { ...required, min: 0, max: 30000 }),
+      field('leaveDays', 'رصيد الإجازة المراد تسويته', 'number', {
+        ...required,
+        min: 0,
+        max: 1000,
+      }),
+      field('eosAmount', 'مبلغ مكافأة الخدمة المراجع', 'money', {
+        ...required,
+        ...financial,
+        min: 0,
+      }),
+      field('leaveAmount', 'بدل الرصيد المراجع', 'money', { ...required, ...financial, min: 0 }),
+      field('otherAmount', 'مستحقات أخرى', 'money', { ...financial, min: 0 }),
+      field('deductions', 'استقطاعات موثقة', 'money', { ...financial, min: 0 }),
+      field('calculationReference', 'قاعدة الحساب ومصدر المراجعة', 'textarea', required),
+      reason,
+    ],
+  },
+  {
+    kind: 'discipline',
+    title: 'إجراء إداري',
+    description: 'توثيق الواقعة والإبلاغ والتحقيق والدفاع وقرار مقترح.',
+    category: 'compliance',
+    initiators: ['manager', 'hr'],
+    steps: ['hr', 'approver'],
+    confidential: true,
+    fields: [
+      field('incidentDate', 'تاريخ الواقعة', 'date', required),
+      field('incident', 'وصف الواقعة', 'textarea', required),
+      field('notice', 'بيانات إبلاغ الموظف', 'textarea', required),
+      field('investigation', 'محضر التحقيق', 'textarea', required),
+      field('defense', 'رد الموظف', 'textarea', required),
+      field('policyReference', 'مرجع اللائحة المعتمدة', 'text', required),
+      field('proposedDecision', 'القرار المقترح', 'textarea', required),
+      reason,
+    ],
+  },
+  {
+    kind: 'grievance',
+    title: 'تظلم',
+    description: 'عرض الاعتراض والأسانيد لمراجعة مستقلة.',
+    category: 'compliance',
+    initiators: ['employee', 'manager'],
+    steps: ['hr', 'approver'],
+    confidential: true,
+    fields: [
+      field('decisionReference', 'مرجع القرار محل التظلم', 'text', required),
+      field('requestedResolution', 'النتيجة المطلوبة', 'textarea', required),
+      reason,
+    ],
+  },
+];
+// In this synthetic workflow, a specialist preparing a request forwards it to
+// the next independent role. This is an explicit route, never self approval.
+for (const form of formDefinitions) {
+  if (
+    [
+      'probation',
+      'transfer',
+      'reward',
+      'separation',
+      'discipline',
+      'salary_letter',
+      'employment_letter',
+      'experience_letter',
+    ].includes(form.kind)
+  ) {
+    form.stepsByInitiator = { hr: ['approver'] };
+  }
+  if (form.kind === 'clearance') form.stepsByInitiator = { hr: ['finance', 'approver'] };
+  if (form.kind === 'special_leave') form.stepsByInitiator = { manager: ['hr'] };
+  if (form.kind === 'overtime') form.stepsByInitiator = { manager: ['hr', 'approver'] };
+}
+export const formByKind = Object.fromEntries(
+  formDefinitions.map((form) => [form.kind, form]),
+) as Record<RequestKind, FormDefinition>;

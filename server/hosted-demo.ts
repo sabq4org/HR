@@ -1,14 +1,19 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { createHash, randomBytes } from 'node:crypto';
 import { createApp } from './app.js';
-import { createDatabase, type Db } from './database.js';
+import { createDatabase, createPostgresDatabase, type Db } from './database.js';
 
 const WORKSPACE_COOKIE = '__Host-sabq_hr_workspace';
 const DEFAULT_IDLE_TTL_MS = 2 * 60 * 60 * 1000;
 const ABSOLUTE_TTL_MS = 8 * 60 * 60 * 1000;
 const HARD_WORKSPACE_CAP = 50;
 const MUTATION_CAP_PER_WORKSPACE = 250;
-type HostedOptions = { publicOrigin: string; workspaceTtlMs?: number; maxWorkspaces?: number };
+type HostedOptions = {
+  publicOrigin: string;
+  workspaceTtlMs?: number;
+  maxWorkspaces?: number;
+  databaseUrl?: string;
+};
 type Workspace = {
   app: Express;
   db: Db;
@@ -40,10 +45,59 @@ function knownApi(method: string, path: string): boolean {
     return true;
   if (method === 'DELETE' && path === '/api/session') return true;
   if (method === 'POST' && /^\/api\/leaves\/[^/]+\/(decision|cancel)$/.test(path)) return true;
+  if (
+    method === 'GET' &&
+    [
+      '/api/admin/overview',
+      '/api/admin/documents',
+      '/api/admin/reports',
+      '/api/admin/reports/export',
+      '/api/admin/audit',
+    ].includes(path)
+  )
+    return true;
+  if (
+    (method === 'GET' || method === 'POST') &&
+    ['/api/admin/requests', '/api/admin/attendance', '/api/admin/policies'].includes(path)
+  )
+    return true;
+  if (method === 'GET' && /^\/api\/admin\/(employees\/[^/]+|requests\/[^/]+)$/.test(path))
+    return true;
+  if (
+    method === 'POST' &&
+    /^\/api\/admin\/(employees\/[^/]+(\/documents|\/rehire)?|requests\/[^/]+\/actions|attendance\/[^/]+\/decision|policies\/[^/]+\/actions|documents\/[^/]+\/archive)$/.test(
+      path,
+    )
+  )
+    return true;
+  if (method === 'PATCH' && /^\/api\/admin\/(employees\/[^/]+|requests\/[^/]+)$/.test(path))
+    return true;
+  if (method === 'GET' && /^\/api\/admin\/documents\/[^/]+\/download$/.test(path)) return true;
+  if (
+    method === 'GET' &&
+    ['/api/admin/payroll', '/api/admin/imports/employees/template'].includes(path)
+  )
+    return true;
+  if (
+    method === 'POST' &&
+    [
+      '/api/admin/employees',
+      '/api/admin/payroll',
+      '/api/admin/imports/employees/preview',
+      '/api/admin/imports/employees/commit',
+    ].includes(path)
+  )
+    return true;
+  if (method === 'GET' && /^\/api\/admin\/payroll\/[^/]+(\/export)?$/.test(path)) return true;
+  if (method === 'PATCH' && /^\/api\/admin\/payroll\/[^/]+$/.test(path)) return true;
+  if (method === 'POST' && /^\/api\/admin\/payroll\/[^/]+\/(actions|payments)$/.test(path))
+    return true;
   return false;
 }
 
-export function createHostedDemoApp(options: HostedOptions): { app: Express; close: () => void } {
+export async function createHostedDemoApp(
+  options: HostedOptions,
+): Promise<{ app: Express; close: () => Promise<void> }> {
   const parsedOrigin = new URL(options.publicOrigin);
   if (
     parsedOrigin.protocol !== 'https:' ||
@@ -71,46 +125,62 @@ export function createHostedDemoApp(options: HostedOptions): { app: Express; clo
   }
 
   // Fail startup on schema or seed errors before the platform receives a healthy response.
-  const probe = createDatabase();
-  probe.close();
+  const probe = options.databaseUrl
+    ? await createPostgresDatabase(
+        options.databaseUrl,
+        `hr_preview_${randomBytes(16).toString('hex')}`,
+      )
+    : await createDatabase();
+  await probe.close();
 
   const workspaces = new Map<string, Workspace>();
+  let pendingCreations = 0;
   const app = express();
   app.disable('x-powered-by');
 
-  const closeWorkspace = (key: string) => {
+  const closeWorkspace = async (key: string) => {
     const workspace = workspaces.get(key);
     if (!workspace) return;
     workspaces.delete(key);
     try {
-      workspace.db.close();
+      await workspace.db.close();
     } catch {
       /* already closing */
     }
   };
   const expireWorkspace = (workspace: Workspace, now: number) =>
     now - workspace.lastSeenAt >= workspaceTtlMs || now - workspace.createdAt >= ABSOLUTE_TTL_MS;
-  const pruneExpired = (now = Date.now()) => {
+  const pruneExpired = async (now = Date.now()) => {
     for (const [key, workspace] of workspaces)
-      if (expireWorkspace(workspace, now)) closeWorkspace(key);
+      if (expireWorkspace(workspace, now)) await closeWorkspace(key);
   };
-  const createWorkspace = (
+  const createWorkspace = async (
     now = Date.now(),
-  ): { key: string; token: string; workspace: Workspace } | undefined => {
-    pruneExpired(now);
-    if (workspaces.size >= maxWorkspaces) return undefined;
+  ): Promise<{ key: string; token: string; workspace: Workspace } | undefined> => {
+    await pruneExpired(now);
+    if (workspaces.size + pendingCreations >= maxWorkspaces) return undefined;
+    pendingCreations += 1;
     const token = randomBytes(32).toString('base64url');
     const key = tokenKey(token);
-    const db = createDatabase();
-    const workspace: Workspace = {
-      db,
-      app: createApp(db, { publicOrigin }),
-      createdAt: now,
-      lastSeenAt: now,
-      mutations: 0,
-    };
-    workspaces.set(key, workspace);
-    return { key, token, workspace };
+    try {
+      const db = options.databaseUrl
+        ? await createPostgresDatabase(
+            options.databaseUrl,
+            `hr_preview_${randomBytes(16).toString('hex')}`,
+          )
+        : await createDatabase();
+      const workspace: Workspace = {
+        db,
+        app: createApp(db, { publicOrigin }),
+        createdAt: now,
+        lastSeenAt: now,
+        mutations: 0,
+      };
+      workspaces.set(key, workspace);
+      return { key, token, workspace };
+    } finally {
+      pendingCreations -= 1;
+    }
   };
   const refreshCookie = (res: Response, workspace: Workspace, now: number, token?: string) => {
     const value = token ?? '';
@@ -126,7 +196,7 @@ export function createHostedDemoApp(options: HostedOptions): { app: Express; clo
     });
   };
 
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     if (req.path.startsWith('/api')) {
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('Pragma', 'no-cache');
@@ -134,7 +204,7 @@ export function createHostedDemoApp(options: HostedOptions): { app: Express; clo
     }
     next();
   });
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     const host = req.get('host')?.toLowerCase();
     const isHealthPath =
       req.path === '/api/health' && (req.method === 'GET' || req.method === 'HEAD');
@@ -165,14 +235,14 @@ export function createHostedDemoApp(options: HostedOptions): { app: Express; clo
       const incoming = tokenFromRequest(req);
       const incomingKey = incoming ? tokenKey(incoming) : undefined;
       const existing = incomingKey ? workspaces.get(incomingKey) : undefined;
-      if (existing && expireWorkspace(existing, now)) closeWorkspace(incomingKey!);
+      if (existing && expireWorkspace(existing, now)) await closeWorkspace(incomingKey!);
       const renewed = incomingKey ? workspaces.get(incomingKey) : undefined;
       if (renewed) {
         renewed.lastSeenAt = now;
         refreshCookie(res, renewed, now, incoming);
         return renewed.app(req, res, next);
       }
-      const created = createWorkspace(now);
+      const created = await createWorkspace(now);
       if (!created)
         return jsonError(
           res,
@@ -195,7 +265,7 @@ export function createHostedDemoApp(options: HostedOptions): { app: Express; clo
     }
     const now = Date.now();
     if (expireWorkspace(workspace, now)) {
-      closeWorkspace(key!);
+      await closeWorkspace(key!);
       return jsonError(
         res,
         401,
@@ -228,11 +298,13 @@ export function createHostedDemoApp(options: HostedOptions): { app: Express; clo
   });
 
   const sweepMs = Math.max(10, Math.min(workspaceTtlMs, 60_000));
-  const cleanupTimer = setInterval(() => pruneExpired(), sweepMs);
+  const cleanupTimer = setInterval(() => {
+    void pruneExpired().catch(() => {});
+  }, sweepMs);
   cleanupTimer.unref();
-  const close = () => {
+  const close = async () => {
     clearInterval(cleanupTimer);
-    for (const key of [...workspaces.keys()]) closeWorkspace(key);
+    await Promise.all([...workspaces.keys()].map((key) => closeWorkspace(key)));
   };
   return { app, close };
 }

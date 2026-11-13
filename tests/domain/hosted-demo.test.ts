@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request as httpRequest, type Server } from 'node:http';
+import { existsSync } from 'node:fs';
 import { createHostedDemoApp } from '../../server/hosted-demo.js';
 import { todayInRiyadh } from '../../server/database.js';
+
+if (existsSync('.env.pg-test')) process.loadEnvFile('.env.pg-test');
+const pgUrl = process.env.HR_TEST_DATABASE_URL;
 
 const PUBLIC_ORIGIN = 'https://hr-production-90b34ef5.up.railway.app';
 const PUBLIC_HOST = 'hr-production-90b34ef5.up.railway.app';
@@ -10,8 +14,10 @@ const WORKSPACE_COOKIE = '__Host-sabq_hr_workspace';
 const USER_COOKIE = '__Host-sabq_hr_demo';
 
 type Reply = { status: number; headers: import('node:http').IncomingHttpHeaders; body: string };
-async function listen(options: { workspaceTtlMs?: number; maxWorkspaces?: number } = {}) {
-  const hosted = createHostedDemoApp({ publicOrigin: PUBLIC_ORIGIN, ...options });
+async function listen(
+  options: { workspaceTtlMs?: number; maxWorkspaces?: number; databaseUrl?: string } = {},
+) {
+  const hosted = await createHostedDemoApp({ publicOrigin: PUBLIC_ORIGIN, ...options });
   const server = createServer(hosted.app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -24,7 +30,7 @@ async function listen(options: { workspaceTtlMs?: number; maxWorkspaces?: number
       await new Promise<void>((resolve, reject) =>
         server.close((e) => (e ? reject(e) : resolve())),
       );
-      hosted.close();
+      await hosted.close();
     },
   };
 }
@@ -297,6 +303,115 @@ test('per-workspace mutation quota stops unbounded requests', async () => {
         })
       ).status,
       429,
+    );
+  } finally {
+    await env.close();
+  }
+});
+
+test(
+  'hosted workspaces use isolated PostgreSQL schemas when configured',
+  { skip: !pgUrl },
+  async () => {
+    const env = await listen({ databaseUrl: pgUrl });
+    try {
+      const first = await createWorkspace(env.server, env.port);
+      const second = await createWorkspace(env.server, env.port);
+      const saraA = await login(env.server, env.port, first.workspaceCookie, 'emp-sara');
+      const saraB = await login(env.server, env.port, second.workspaceCookie, 'emp-sara');
+      const cookieA = `${saraA.workspaceCookie}; ${saraA.userCookie}`;
+      const cookieB = `${saraB.workspaceCookie}; ${saraB.userCookie}`;
+      const start = futureSunday(91);
+      const submitted = await request(env.server, env.port, '/api/leaves', {
+        method: 'POST',
+        origin: PUBLIC_ORIGIN,
+        cookie: cookieA,
+        headers: { 'idempotency-key': 'pg-hosted-isolation' },
+        body: { startDate: start, endDate: plus(start, 1), note: 'مساحة PostgreSQL الأولى' },
+      });
+      assert.equal(submitted.status, 201);
+      const leaveId = json<{ leave: { id: string } }>(submitted).leave.id;
+      const bootstrap = await request(env.server, env.port, '/api/bootstrap', { cookie: cookieB });
+      assert.equal(bootstrap.status, 200);
+      assert.doesNotMatch(bootstrap.body, new RegExp(leaveId));
+    } finally {
+      await env.close();
+    }
+  },
+);
+
+test('hosted administrative routes create private employee files inside the visitor workspace', async () => {
+  const env = await listen();
+  try {
+    const one = await createWorkspace(env.server, env.port);
+    const two = await createWorkspace(env.server, env.port);
+    const hr = await login(env.server, env.port, one.workspaceCookie, 'emp-noura');
+    const other = await login(env.server, env.port, two.workspaceCookie, 'emp-noura');
+    const ownCookie = `${hr.workspaceCookie}; ${hr.userCookie}`;
+    const otherCookie = `${other.workspaceCookie}; ${other.userCookie}`;
+    const created = await request(env.server, env.port, '/api/admin/employees', {
+      method: 'POST',
+      origin: PUBLIC_ORIGIN,
+      cookie: ownCookie,
+      headers: { 'idempotency-key': 'hosted-employee-create' },
+      body: {
+        values: {
+          name: 'ملف اصطناعي مستقل',
+          employeeNumber: 'ISOLATED-001',
+          department: 'التحرير',
+          title: 'محرر',
+          email: 'isolated@example.test',
+          location: 'الرياض',
+          joinDate: '2026-01-01',
+        },
+      },
+    });
+    assert.equal(created.status, 201, created.body);
+    const id = json<{ file: { employee: { id: string } } }>(created).file.employee.id;
+    assert.equal(
+      (await request(env.server, env.port, `/api/admin/employees/${id}`, { cookie: otherCookie }))
+        .status,
+      404,
+    );
+    const uploaded = await request(env.server, env.port, `/api/admin/employees/${id}/documents`, {
+      method: 'POST',
+      origin: PUBLIC_ORIGIN,
+      cookie: ownCookie,
+      headers: { 'idempotency-key': 'hosted-private-upload' },
+      body: {
+        category: 'cv',
+        filename: 'synthetic.pdf',
+        mimeType: 'application/pdf',
+        contentBase64: Buffer.from('%PDF-1.4\n% synthetic\n%%EOF').toString('base64'),
+      },
+    });
+    assert.equal(uploaded.status, 201, uploaded.body);
+    const docId = json<{ document: { id: string } }>(uploaded).document.id;
+    const own = await request(env.server, env.port, `/api/admin/documents/${docId}/download`, {
+      cookie: ownCookie,
+    });
+    assert.equal(own.status, 200);
+    assert.match(own.headers['content-disposition'] ?? '', /attachment/);
+    assert.equal(
+      (
+        await request(env.server, env.port, `/api/admin/documents/${docId}/download`, {
+          cookie: otherCookie,
+        })
+      ).status,
+      404,
+    );
+    assert.equal(
+      (await request(env.server, env.port, '/api/admin/payroll/sources', { cookie: ownCookie }))
+        .status,
+      200,
+    );
+    assert.equal(
+      (
+        await request(env.server, env.port, '/api/admin/imports/employees/template', {
+          cookie: ownCookie,
+        })
+      ).status,
+      200,
     );
   } finally {
     await env.close();

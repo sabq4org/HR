@@ -1,0 +1,64 @@
+CREATE TABLE IF NOT EXISTS payroll_runs (
+  id TEXT PRIMARY KEY, period TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+  state TEXT NOT NULL CHECK(state IN ('draft','pending_finance','pending_approver','closed','rejected')),
+  prepared_by TEXT NOT NULL REFERENCES employees(id), reviewed_by TEXT REFERENCES employees(id),
+  approved_by TEXT REFERENCES employees(id), policy_id TEXT NOT NULL REFERENCES administrative_policies(id),
+  correction_of TEXT REFERENCES payroll_runs(id), reason TEXT NOT NULL, created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL, closed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS payroll_runs_state_period ON payroll_runs(state, period);
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_one_primary_run_per_period
+ON payroll_runs(period) WHERE correction_of IS NULL AND state <> 'rejected';
+CREATE TABLE IF NOT EXISTS payroll_lines (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES payroll_runs(id), employee_id TEXT NOT NULL REFERENCES employees(id),
+  component TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('earning','deduction')),
+  amount_minor INTEGER NOT NULL CHECK(amount_minor>=0), source TEXT NOT NULL,
+  source_request_id TEXT REFERENCES administrative_requests(id), created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS payroll_lines_run_employee ON payroll_lines(run_id, employee_id);
+CREATE TABLE IF NOT EXISTS payroll_payments (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES payroll_runs(id), employee_id TEXT NOT NULL REFERENCES employees(id),
+  state TEXT NOT NULL CHECK(state IN ('pending','paid','failed','partial')), paid_minor INTEGER NOT NULL CHECK(paid_minor>=0),
+  encrypted_reference TEXT NOT NULL DEFAULT '', recorded_at TEXT NOT NULL, recorded_by TEXT NOT NULL REFERENCES employees(id),
+  UNIQUE(run_id,employee_id)
+);
+CREATE OR REPLACE FUNCTION prevent_closed_payroll_change() RETURNS trigger AS $$
+BEGIN
+  IF (SELECT state FROM payroll_runs WHERE id=OLD.run_id)='closed' THEN
+    RAISE EXCEPTION 'closed payroll lines are immutable';
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER payroll_lines_closed_no_update BEFORE UPDATE ON payroll_lines FOR EACH ROW EXECUTE FUNCTION prevent_closed_payroll_change();
+CREATE TRIGGER payroll_lines_closed_no_delete BEFORE DELETE ON payroll_lines FOR EACH ROW EXECUTE FUNCTION prevent_closed_payroll_change();
+CREATE OR REPLACE FUNCTION prevent_closed_payroll_run_change() RETURNS trigger AS $$
+BEGIN
+  IF OLD.state='closed' THEN RAISE EXCEPTION 'closed payroll run is immutable'; END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER payroll_run_closed_no_update BEFORE UPDATE ON payroll_runs FOR EACH ROW EXECUTE FUNCTION prevent_closed_payroll_run_change();
+CREATE TRIGGER payroll_run_closed_no_delete BEFORE DELETE ON payroll_runs FOR EACH ROW EXECUTE FUNCTION prevent_closed_payroll_run_change();
+
+CREATE TABLE IF NOT EXISTS payroll_commands (
+  actor_id TEXT NOT NULL, action TEXT NOT NULL, command_key TEXT NOT NULL,
+  payload_hash TEXT NOT NULL, response_json TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY(actor_id, action, command_key)
+);
+CREATE TABLE IF NOT EXISTS payroll_events (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES payroll_runs(id),
+  actor_id TEXT NOT NULL, actor_role TEXT NOT NULL, action TEXT NOT NULL,
+  reason TEXT, created_at TEXT NOT NULL, version INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS payroll_events_run ON payroll_events(run_id, created_at);
+CREATE OR REPLACE FUNCTION prevent_payroll_event_mutation() RETURNS trigger AS $$
+BEGIN RAISE EXCEPTION 'payroll events are append-only'; END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER payroll_events_no_update BEFORE UPDATE ON payroll_events FOR EACH ROW EXECUTE FUNCTION prevent_payroll_event_mutation();
+CREATE TRIGGER payroll_events_no_delete BEFORE DELETE ON payroll_events FOR EACH ROW EXECUTE FUNCTION prevent_payroll_event_mutation();
+INSERT INTO administrative_policies(id,policy_key,version,name,effective_from,source,state,values_json,created_by,approved_by,created_at)
+VALUES('payroll-policy-demo-v1','payroll-demo',1,'قواعد رواتب تجريبية','2026-01-01',
+       'قيم تجريبية للعرض فقط؛ لا تمثل نظام العمل أو التأمينات أو مدد.', 'synthetic_approved',
+       '{"currency":"SAR","calculation":"synthetic-profile-components"}',
+       'emp-noura','emp-abdullah','2026-01-01T00:00:00.000Z') ON CONFLICT(id) DO NOTHING;
