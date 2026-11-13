@@ -14,8 +14,8 @@
 ## التحقق الحالي
 
 - التنسيق والأنواع والبناء: ناجحة.
-- `npm test`: **65/65**، دون تخطي، تشمل SQLite وPostgreSQL وعزل المساحات والصلاحيات.
-- قبول الخدمات على PostgreSQL: **22/22**.
+- `npm test`: **66/66**، دون تخطي، تشمل SQLite وPostgreSQL وعزل المساحات والصلاحيات.
+- قبول الخدمات على PostgreSQL: **23/23**.
 - `npm run test:recovery`: نجاح استعادة SQLite وPostgreSQL مع فك الحقول والمرفق المشفر.
 - `npm run test:e2e`: **24/24** على Chromium وWebKit؛ موظف واستيراد وخطابات ومكافأة ورواتب وطباعة وإتاحة آلية وشاشات 390/320 بكسل.
 - `npm audit --omit=dev --audit-level=moderate`: صفر ثغرات معلنة.

@@ -277,6 +277,10 @@ for (const scenario of scenarios)
       const h = await harness();
       try {
         const before = await (await h.call('employee', '/bootstrap')).json();
+        const periodsBefore = await h.db.read(
+          'SELECT * FROM employment_periods WHERE employee_id=? ORDER BY id',
+          [actors.employee],
+        );
         const created = await h.call(scenario.creator, '/admin/requests', 'POST', {
           kind: scenario.kind,
           employeeId: actors.employee,
@@ -317,10 +321,39 @@ for (const scenario of scenarios)
         if (scenario.kind === 'contract') {
           assert.equal(file.values.contractStart, today);
           assert.equal(file.values.basicSalary, 12345.67);
+          assert.deepEqual(
+            await h.db.read('SELECT * FROM employment_periods WHERE employee_id=? ORDER BY id', [
+              actors.employee,
+            ]),
+            periodsBefore,
+            'Contract renewal must preserve the continuous service period',
+          );
         }
         if (scenario.kind === 'transfer') {
           assert.equal(file.employee.department, 'التحقيقات');
           assert.equal(file.employee.title, 'محررة أولى');
+          const history = await h.db.read<{
+            field_key: string;
+            effective_at: string;
+            actor_id: string;
+          }>(
+            'SELECT field_key,effective_at,actor_id FROM employee_profile_history WHERE employee_id=?',
+            [actors.employee],
+          );
+          for (const field of ['department', 'title']) {
+            assert.ok(
+              history.some(
+                (entry) =>
+                  entry.field_key === field &&
+                  entry.effective_at === today &&
+                  entry.actor_id === actors.approver,
+              ),
+              'Transfer must record each changed field and approving actor',
+            );
+          }
+          assert.ok(
+            file.history.some((event: { action: string }) => event.action === 'field_updated'),
+          );
         }
         if (scenario.kind === 'separation') {
           assert.equal(file.employee.status, 'terminated');
@@ -512,3 +545,23 @@ test(
     }
   },
 );
+
+test('An employee cannot become their own reporting manager', async () => {
+  const h = await harness();
+  try {
+    const before = (await (await h.call('hr', `/admin/employees/${actors.manager}`)).json()).file;
+    const result = await h.call('hr', `/admin/employees/${actors.manager}`, 'PATCH', {
+      version: before.version,
+      values: { managerId: actors.manager },
+      reason: 'اختبار منع الإشراف الذاتي',
+      effectiveAt: today,
+    });
+    assert.equal(result.status, 400, await result.clone().text());
+    assert.equal((await result.json()).error.code, 'INVALID_MANAGER');
+    const after = (await (await h.call('hr', `/admin/employees/${actors.manager}`)).json()).file;
+    assert.equal(after.version, before.version);
+    assert.equal(after.employee.managerId, before.employee.managerId);
+  } finally {
+    await h.close();
+  }
+});

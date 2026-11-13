@@ -247,6 +247,7 @@ export async function saveProfileValues(
         : undefined;
     if (
       !manager ||
+      manager.id === employeeId ||
       manager.role !== 'manager' ||
       !['active', 'on_leave'].includes(manager.status)
     ) {

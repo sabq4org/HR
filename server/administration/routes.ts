@@ -957,37 +957,20 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         true,
       );
     if (row.kind === 'transfer') {
-      validateEffectiveAt(String(values.effectiveDate ?? ''));
-      const changes: string[] = [];
-      const params: unknown[] = [];
-      if (typeof values.department === 'string') {
-        changes.push('department=?');
-        params.push(values.department);
+      const changes: FormValues = {};
+      for (const key of ['department', 'title', 'managerId']) {
+        if (typeof values[key] === 'string') changes[key] = values[key];
       }
-      if (typeof values.title === 'string') {
-        changes.push('title=?');
-        params.push(values.title);
-      }
-      if (typeof values.managerId === 'string') {
-        const manager = await readEmployee(tx, values.managerId);
-        if (
-          !manager ||
-          manager.role !== 'manager' ||
-          !['active', 'on_leave'].includes(manager.status)
-        )
-          throw fault(400, 'INVALID_MANAGER', 'المدير الجديد غير صالح.');
-        changes.push('manager_id=?');
-        params.push(values.managerId);
-      }
-      if (changes.length) {
-        changes.push('record_version=record_version+1');
-        const changed = await tx.execute(
-          `UPDATE employees SET ${changes.join(',')} WHERE id=? AND record_version=?`,
-          [...params, row.employee_id, owner.record_version],
-        );
-        if (changed.rowCount !== 1)
-          throw fault(409, 'STALE_VERSION', 'تغير الملف قبل تطبيق النقل.');
-      }
+      await saveProfileValues(
+        tx,
+        actor,
+        row.employee_id,
+        changes,
+        reason || String(values.reason ?? 'Approved synthetic transfer'),
+        String(values.effectiveDate ?? ''),
+        owner.record_version,
+        true,
+      );
     }
     if (row.kind === 'contract') {
       if (values.endDate && String(values.endDate) < String(values.startDate))
@@ -1011,18 +994,8 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         owner.record_version,
         true,
       );
-      await tx.execute(
-        "INSERT INTO employment_periods(id,employee_id,start_date,end_date,relationship_type,source,status,created_at) VALUES(?,?,?,?,?,?,'synthetic-demo-only',?)",
-        [
-          newId(),
-          row.employee_id,
-          values.startDate,
-          values.endDate ?? null,
-          String(values.contractType),
-          'Approved synthetic contract request; not a legal instrument.',
-          now,
-        ],
-      );
+      // Contract renewal updates the contract history within the same service period.
+      // Only rehire starts a new employment period after the previous one has closed.
     }
     if (row.kind === 'separation') {
       const lastDay = String(values.lastDay);
