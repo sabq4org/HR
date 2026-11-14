@@ -12,6 +12,12 @@
 - **الترحيل 019** في SQLite وPostgres. قوائم الترحيلات في الاختبارات حُدّثت إلى 19.
 - **الاختبارات:** `tests/domain/leave-entitlement.test.ts` (SQLite وPostgreSQL) و`tests/e2e/leave-entitlement.spec.ts`.
 
+## 2026-11-15 — زر «اعتماد» يظهر لمالك النظام في صفحة السياسات (فرع `grok/hr-owner-approve-button`)
+
+- **السبب:** الواجهة تقرأ `me` من `/api/bootstrap`، و`systemOwner` كان يُرسل في `/api/session` فقط. لذلك كان شرط `canApprove` في `/settings/policies` خاطئًا دائمًا لمالك النظام، فلا يظهر له إلا «إيقاف»، مع أن الخادم يسمح له بالاعتماد (القرار 014).
+- **الإصلاح:** `/api/bootstrap` يضيف `systemOwner: true` لمالك النظام فقط. صلاحيات الخادم كما هي: منع الاعتماد الذاتي، ورفض حساب الموارد البشرية الذي ليس مالكًا.
+- **الاختبارات:** `tests/domain/system-owner-bootstrap.test.ts`.
+
 ## 2026-11-15 — مسودة قواعد الرواتب لمفتاح محاسب سبق وإصلاح اعتماد السياسات (فرع `grok/hr-policy-draft`)
 
 - **نطاق جديد** `hr.policy.draft`: `POST /api/service/hr/policies` ينشئ إصدار قواعد رواتب في حالة `draft` فقط، بنفس تحقق الإنشاء الإداري وقسم التأمينات (`parseGosiRule`). `created_by` هو حساب الخدمة `svc-sabq-accountant` حتى يعتمد علي الإصدار دون `SELF_APPROVAL`. القراءة: `GET /policies` و`GET /policies/:id`. اعتماد أو إيقاف القواعد بالمفتاح يرد `403 POLICY_ACTION_FORBIDDEN` دائمًا، والخادم يرفض الإقلاع إن ضُبط `hr.policy.approve` أو `hr.policy.activate` أو `hr.policy.retire`. التدقيق: `service_policy_draft_created` بمعرّف الإصدار وتاريخي السريان فقط، بلا قيم.
