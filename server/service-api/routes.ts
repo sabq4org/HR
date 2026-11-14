@@ -39,9 +39,15 @@ import { saveProfileValues } from '../administration/service.js';
 import { createPayrollCommands } from '../payroll/index.js';
 import { SERVICE_ACCOUNT, serviceMayRunPayrollAction, type HrScope } from './keys.js';
 import { ensureServiceAccountRow } from './service-account.js';
+import { registerHrServiceExports } from './exports.js';
 
 export type HrServiceContext = { scopes: readonly HrScope[]; keyId: string };
-type Options = { db: AsyncDb; contextFor: (req: Request) => HrServiceContext | undefined };
+type Options = {
+  db: AsyncDb;
+  contextFor: (req: Request) => HrServiceContext | undefined;
+  /** Private data mode (the printouts say «بيانات خاصة» like the in-app report). */
+  privateData?: boolean;
+};
 type Row = Record<string, any>;
 
 const fieldByKey = new Map(employeeFields.map((field) => [field.key, field]));
@@ -66,12 +72,15 @@ export function normalizeArabic(value: string): string {
     .trim();
 }
 
-function requireKey(context: HrServiceContext | undefined): HrServiceContext {
+export function requireKey(context: HrServiceContext | undefined): HrServiceContext {
   if (!context) throw fault(401, 'API_KEY_REQUIRED', 'هذا المسار لمفتاح خدمة الموارد البشرية فقط.');
   return context;
 }
 
-function requireScope(context: HrServiceContext | undefined, scope: HrScope): HrServiceContext {
+export function requireScope(
+  context: HrServiceContext | undefined,
+  scope: HrScope,
+): HrServiceContext {
   context = requireKey(context);
   if (!context.scopes.includes(scope))
     throw fault(403, 'API_KEY_SCOPE', `المفتاح لا يملك صلاحية ${scope}.`);
@@ -89,7 +98,7 @@ function summary(row: EmployeeRow) {
   };
 }
 
-async function employeeOr404(db: AsyncDb, id: string): Promise<EmployeeRow> {
+export async function employeeOr404(db: AsyncDb, id: string): Promise<EmployeeRow> {
   const row = await readEmployee(db, id);
   if (!row) throw fault(404, 'EMPLOYEE_NOT_FOUND', 'الموظف غير موجود.');
   return row;
@@ -125,7 +134,7 @@ async function auditRead(
 
 const isAction = (value: unknown): value is { action: unknown } =>
   typeof value === 'object' && value !== null && 'action' in value;
-const param = (req: Request, name: string) => String(req.params[name] ?? '');
+export const param = (req: Request, name: string) => String(req.params[name] ?? '');
 
 /**
  * Profile fields the key never edits directly, even with hr.employees.write: they belong to a
@@ -159,7 +168,10 @@ const serviceAudit = (context: HrServiceContext) => ({
 // The payroll domain's own actor shape; 'service' is accepted only for draft and submit.
 const payrollServiceActor = { id: SERVICE_ACCOUNT.id, role: 'service' as const };
 
-export function registerHrServiceApi(app: Express, { db, contextFor }: Options) {
+export function registerHrServiceApi(
+  app: Express,
+  { db, contextFor, privateData = false }: Options,
+) {
   app.get(
     '/api/service/hr/employees',
     route(async (req, res) => {
@@ -493,6 +505,8 @@ export function registerHrServiceApi(app: Express, { db, contextFor }: Options) 
       res.json({ run: await payrollResponse(context, result.run) });
     }),
   );
+
+  registerHrServiceExports(app, { db, contextFor, privateData });
 
   app.use('/api/service/hr', (_req, res) => {
     res.status(404).json({ error: { code: 'NOT_FOUND', message: 'المسار غير موجود.' } });
