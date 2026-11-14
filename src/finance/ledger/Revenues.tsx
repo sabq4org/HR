@@ -7,6 +7,9 @@ import {
   type LedgerVoucher,
   type TaxCode,
 } from '../../../shared/ledger';
+import { canApproveAndPost } from '../../../shared/ledger';
+import { isTaxAcceptedInvoice } from '../../../shared/finance';
+import { useApp } from '../../lib';
 import { Alert, Empty, Field, Status } from '../index';
 import {
   AccountSelect,
@@ -37,6 +40,8 @@ const kindLabel: Record<string, string> = {
 };
 
 export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
+  const { data: session } = useApp();
+  const mayApprove = canApproveAndPost(session.me.role);
   const mutate = useMutate();
   const load = useCallback(
     async () => ({
@@ -165,7 +170,7 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
               required
             />
           </Field>
-          <Field label="أودع في">
+          <Field label="الحساب البنكي">
             <AccountSelect
               accounts={accounts}
               value={cashAccount}
@@ -210,9 +215,9 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
       invoice.documentType !== 'out_of_scope';
     return (
       <LedgerForm
-        title={`ترحيل الفاتورة ${invoice.number} إلى الدفاتر`}
+        title={`اعتماد وترحيل الفاتورة ${invoice.number}`}
         close={close}
-        submitLabel="ترحيل القيد"
+        submitLabel="اعتماد وترحيل"
         note={
           <>
             يُسجَّل القيد بتاريخ الفاتورة {ltr(invoice.issueDate)}: مدين العملاء{' '}
@@ -226,7 +231,7 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
             revenueAccountCode: account,
             ...(needsZero ? { zeroLinesTaxCode: zeroCode } : {}),
           });
-          await done('رُحّلت الفاتورة إلى الدفاتر.');
+          await done('اعتُمدت الفاتورة ورُحّلت إلى الدفاتر.');
         }}
       >
         <div className="fin-grid">
@@ -266,9 +271,9 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
       voucher = form.invoice.voucher;
     return (
       <LedgerForm
-        title={`تحصيل الفاتورة ${invoice.number}`}
+        title={`تسجيل دفعة على الفاتورة ${invoice.number}`}
         close={close}
-        submitLabel="تسجيل التحصيل"
+        submitLabel="تسجيل الدفعة"
         note={`المتبقي على ${invoice.customerName}: ${fmt(voucher.outstandingHalalas)} ر.س. يمكن تسجيل دفعة جزئية.`}
         submit={async () => {
           await mutate(`/invoices/${invoice.invoiceId}/receipts`, {
@@ -277,11 +282,11 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
             cashAccountCode: cashAccount,
             reference,
           });
-          await done('سُجّل التحصيل.');
+          await done('سُجّلت الدفعة.');
         }}
       >
         <div className="fin-grid">
-          <Field label="تاريخ التحصيل">
+          <Field label="تاريخ السداد">
             <input
               type="date"
               value={date}
@@ -290,7 +295,7 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
               required
             />
           </Field>
-          <Field label="المبلغ المحصل">
+          <Field label="المبلغ">
             <input
               inputMode="decimal"
               value={amount}
@@ -306,7 +311,7 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
               filter={cash}
             />
           </Field>
-          <Field label="مرجع الحوالة (اختياري)">
+          <Field label="المرجع (اختياري)">
             <input
               value={reference}
               onChange={(e) => setReference(e.target.value)}
@@ -435,13 +440,14 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
                       </td>
                       <td className="fin-actions">
                         {!voucher ? (
-                          <button
-                            className="text-button"
-                            disabled={invoice.status === 'rejected'}
-                            onClick={() => open({ kind: 'post', invoice })}
-                          >
-                            ترحيل
-                          </button>
+                          mayApprove && isTaxAcceptedInvoice(invoice.status) ? (
+                            <button
+                              className="text-button"
+                              onClick={() => open({ kind: 'post', invoice })}
+                            >
+                              اعتماد وترحيل
+                            </button>
+                          ) : null
                         ) : (
                           <>
                             <button
@@ -449,7 +455,7 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
                               disabled={voucher.outstandingHalalas <= 0}
                               onClick={() => open({ kind: 'receipt', invoice })}
                             >
-                              تحصيل
+                              تسجيل دفعة
                             </button>
                             <button
                               className="text-button"

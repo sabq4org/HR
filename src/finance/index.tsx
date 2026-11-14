@@ -37,6 +37,8 @@ import type {
   FinanceSeller,
   FinanceSettings,
 } from '../../shared/finance';
+import type { InvoiceLedgerState, LedgerAccount, LedgerOverview } from '../../shared/ledger';
+import { InvoicePaymentForm } from './InvoicePaymentForm';
 import { useSearchParams } from 'react-router-dom';
 import { api, Modal, PageHeading, useApp } from '../lib';
 import { CustomerStatementModal } from './Statement';
@@ -211,17 +213,37 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
   const [convertDates, setConvertDates] = useState({ issueDate: today(), dueDate: '' });
   const [purchaseOrder, setPurchaseOrder] = useState('');
   const [finalInvoice, setFinalInvoice] = useState<FinanceInvoice | null>(null);
+  const [ledgerAccounts, setLedgerAccounts] = useState<LedgerAccount[]>([]);
+  const [ledgerInvoices, setLedgerInvoices] = useState<InvoiceLedgerState[]>([]);
+  const [receiptInvoice, setReceiptInvoice] = useState<FinanceInvoice | null>(null);
   const keys = useRef<Record<string, string>>({});
+  const loadLedger = useCallback(async () => {
+    try {
+      const ledger = await api<LedgerOverview>('/finance/ledger');
+      if (!ledger.initialized) {
+        setLedgerAccounts([]);
+        setLedgerInvoices([]);
+        return;
+      }
+      const invoices = await api<{ invoices: InvoiceLedgerState[] }>('/finance/ledger/invoices');
+      setLedgerAccounts(ledger.accounts);
+      setLedgerInvoices(invoices.invoices);
+    } catch {
+      setLedgerAccounts([]);
+      setLedgerInvoices([]);
+    }
+  }, []);
   const load = useCallback(async () => {
     setLoadError('');
     try {
       const result = await api<FinanceOverview>('/finance');
       setOverview(result);
       setSettingsForm(result.settings);
+      await loadLedger();
     } catch (error) {
       setLoadError(errorText(error));
     }
-  }, []);
+  }, [loadLedger]);
   useEffect(() => {
     if (access) void load();
   }, [access, load]);
@@ -1041,6 +1063,18 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                                 النسخة الأصلية من وافق
                               </button>
                             )}
+                            {(() => {
+                              const posted = ledgerInvoices.find((item) => item.invoiceId === i.id);
+                              const open = posted?.voucher && posted.voucher.outstandingHalalas > 0;
+                              return open ? (
+                                <button
+                                  className="button primary small"
+                                  onClick={() => setReceiptInvoice(i)}
+                                >
+                                  تسجيل دفعة
+                                </button>
+                              ) : null;
+                            })()}
                           </td>
                         </tr>
                       ))}
@@ -1762,6 +1796,23 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
           </form>
         </FormPage>
       )}
+      {receiptInvoice &&
+        (() => {
+          const state = ledgerInvoices.find((item) => item.invoiceId === receiptInvoice.id);
+          return state?.voucher ? (
+            <InvoicePaymentForm
+              invoice={receiptInvoice}
+              state={state}
+              accounts={ledgerAccounts}
+              close={() => setReceiptInvoice(null)}
+              onDone={async (message) => {
+                setReceiptInvoice(null);
+                await load();
+                notify(message);
+              }}
+            />
+          ) : null;
+        })()}
       {statementCustomer && (
         <CustomerStatementModal
           customer={statementCustomer}
@@ -1808,6 +1859,21 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                 النسخة الأصلية من وافق
               </button>
             )}
+            {(() => {
+              const posted = ledgerInvoices.find((item) => item.invoiceId === finalInvoice.id);
+              const open = posted?.voucher && posted.voucher.outstandingHalalas > 0;
+              return open ? (
+                <button
+                  className="button primary"
+                  onClick={() => {
+                    setReceiptInvoice(finalInvoice);
+                    setFinalInvoice(null);
+                  }}
+                >
+                  تسجيل دفعة
+                </button>
+              ) : null;
+            })()}
           </div>
           <InvoicePaper
             invoice={finalInvoice}
