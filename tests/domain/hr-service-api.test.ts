@@ -203,14 +203,20 @@ async function scenario(db: Db) {
     const events = await db.read<any>(
       "SELECT * FROM administration_events WHERE resource_type='service_access' ORDER BY created_at,id",
     );
-    const actions = new Set(events.map((e) => e.action));
-    for (const action of [
-      'service_read_sensitive_profile',
-      'service_read_compensation',
-      'service_read_sensitive_leave',
-      'service_read_payroll_amounts',
-    ])
-      assert.ok(actions.has(action), action);
+    const byAction = new Map(events.map((e) => [e.action, e]));
+    for (const [action, resourceId] of [
+      ['service_read_sensitive_profile', 'emp-sara'],
+      ['service_read_compensation', 'emp-sara'],
+      ['service_read_sensitive_leave', 'emp-sara'],
+      ['service_read_payroll_list', '2026-07'],
+      ['service_read_payroll_amounts', 'svc-run-1'],
+    ]) {
+      const event = byAction.get(action);
+      assert.ok(event, action);
+      assert.equal(event.resource_type, 'service_access', action);
+      assert.equal(event.resource_id, resourceId, action);
+      assert.equal(event.actor_id, SERVICE_ACCOUNT.id, action);
+    }
     for (const event of events) {
       assert.equal(event.actor_id, SERVICE_ACCOUNT.id);
       assert.equal(event.actor_role, 'service');
@@ -220,6 +226,7 @@ async function scenario(db: Db) {
       assert.match(details.keyId, /^[0-9a-f]{12}$/);
       assert.ok(!event.details_json.includes(SYNTHETIC_IBAN));
       assert.ok(!event.details_json.includes(SYNTHETIC_ID));
+      assert.ok(!event.details_json.includes('1200000'));
       assert.ok(!event.details_json.includes(hrKey));
     }
     assert.ok(
@@ -227,6 +234,14 @@ async function scenario(db: Db) {
         events.find((e) => e.action === 'service_read_compensation').details_json,
       ).fields.includes('iban'),
     );
+    const listDetails = JSON.parse(
+      events.find((e) => e.action === 'service_read_payroll_list').details_json,
+    );
+    assert.equal(listDetails.month, '2026-07');
+    assert.equal(listDetails.count, 1);
+    assert.deepEqual(listDetails.fields, ['deductionsMinor', 'earningsMinor', 'netMinor']);
+    assert.equal(listDetails.earningsMinor, undefined);
+    assert.equal(listDetails.totals, undefined);
 
     // The HR key reaches nothing else: no finance, no browser routes, no writes, no payroll actions.
     for (const [method, path] of [
@@ -303,6 +318,10 @@ async function scenario(db: Db) {
   // Payroll without compensation: run structure, no amounts.
   const payrollOnly = await app(['hr.payroll.read']);
   try {
+    const listed = await payrollOnly.call(hrKey, 'GET', '/api/service/hr/payroll?month=2026-07');
+    assert.equal(listed.status, 200, listed.text);
+    assert.equal(listed.body.runs.length, 1);
+    assert.equal(listed.body.runs[0].totals, undefined);
     const run = await payrollOnly.call(hrKey, 'GET', '/api/service/hr/payroll/svc-run-1');
     assert.equal(run.status, 200, run.text);
     assert.equal(run.body.lines[0].amountMinor, undefined);
