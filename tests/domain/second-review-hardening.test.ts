@@ -296,6 +296,34 @@ test('a legacy binding checks every encrypted record kind, not only profiles and
   }
 });
 
+test('a legacy binding also proves the key against encrypted finance records', async () => {
+  const { verifyDataKeyBinding } = await import('../../server/data-key.js');
+  const { encryptSensitive } = await import('../../server/administration/security.js');
+  process.env.HR_DATA_KEY = keyA;
+  const db = await createDatabase(':memory:');
+  try {
+    await db.execute("UPDATE employee_profile_data SET encrypted_values_json='{}'");
+    const now = new Date().toISOString();
+    await db.execute(
+      'INSERT INTO finance_customers(id,owner_id,version,customer_ciphertext,created_at,updated_at) VALUES(?,?,1,?,?,?)',
+      [
+        'cust-1',
+        'emp-omar',
+        encryptSensitive('{"name":"عميل وهمي"}', 'finance:customer:cust-1'),
+        now,
+        now,
+      ],
+    );
+    process.env.HR_DATA_KEY = keyB;
+    await assert.rejects(verifyDataKeyBinding(db), { code: 'DATA_KEY_MISMATCH' });
+    process.env.HR_DATA_KEY = keyA;
+    assert.equal(await verifyDataKeyBinding(db), 'bound');
+  } finally {
+    process.env.HR_DATA_KEY = keyA;
+    await db.close();
+  }
+});
+
 // Note 9: applied migrations could be edited without anyone noticing.
 test('an applied migration that changed on disk stops startup', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'hr-migration-checksum-'));

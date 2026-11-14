@@ -33,7 +33,7 @@ test('SQLite adapter awaits transactions, rolls back, and reopens migrations', a
     );
     assert.equal(
       (await first.read<{ n: number }>('SELECT count(*) AS n FROM schema_migrations'))[0].n,
-      9,
+      11,
     );
   } finally {
     await first.close();
@@ -55,7 +55,7 @@ test(
             'SELECT version FROM schema_migrations ORDER BY version',
           )
         ).map((row) => row.version),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       );
       const roles = await db.read<{ id: string; role: string }>(
         "SELECT id,role FROM employee_access WHERE id IN ('emp-reem','emp-abdullah','emp-hind') ORDER BY id",

@@ -12,7 +12,7 @@
 - **‎.gitignore:** يستبعد ملفات Excel وCSV.
 - **إعداد التشغيل:** نُقل من `server/index.ts` إلى `server/runtime-config.ts` ليُختبر.
 - **الاختبارات:** `tests/domain/second-review-hardening.test.ts` (8 اختبارات؛ 7 فشلت على `35876ac` ونجحت بعد الإصلاح).
-- **المرجع:** [قرار 008](docs/decisions/008-second-review-hardening.md).
+- **المرجع:** [قرار 009](docs/decisions/009-second-review-hardening.md).
 
 ## 2026-11-14 — تشغيل خاص على Railway وNeon بكلمة مرور (فرع `claude/project-thread-e4jmmy`)
 

@@ -103,6 +103,31 @@ const SOURCES: { sql: string; map: (row: Record<string, string>) => Sample[] }[]
     sql: "SELECT run_id,employee_id,encrypted_reference AS v FROM payroll_payments WHERE encrypted_reference LIKE 'v1.%' ORDER BY id LIMIT 3",
     map: (r) => [{ value: r.v, context: `payroll-payment:${r.run_id}:${r.employee_id}` }],
   },
+  // Finance (migration 010): owner-scoped settings, provider credentials and documents.
+  {
+    sql: 'SELECT owner_id,seller_ciphertext AS v FROM finance_settings ORDER BY owner_id LIMIT 3',
+    map: (r) => [{ value: r.v, context: `finance:seller:${r.owner_id}` }],
+  },
+  {
+    sql: 'SELECT owner_id,api_key_ciphertext AS v FROM finance_provider_credentials ORDER BY owner_id LIMIT 3',
+    map: (r) => [{ value: r.v, context: `finance:api-key:${r.owner_id}` }],
+  },
+  {
+    sql: 'SELECT id,customer_ciphertext AS v FROM finance_customers ORDER BY id LIMIT 3',
+    map: (r) => [{ value: r.v, context: `finance:customer:${r.id}` }],
+  },
+  {
+    sql: 'SELECT id,quote_ciphertext AS v FROM finance_quotes ORDER BY id LIMIT 3',
+    map: (r) => [{ value: r.v, context: `finance:quote:${r.id}` }],
+  },
+  {
+    sql: 'SELECT id,invoice_ciphertext AS v FROM finance_invoices ORDER BY id LIMIT 3',
+    map: (r) => [{ value: r.v, context: `finance:invoice:${r.id}` }],
+  },
+  {
+    sql: "SELECT invoice_id,content_ciphertext AS v FROM finance_private_artifacts WHERE artifact_type='pdf' ORDER BY invoice_id LIMIT 3",
+    map: (r) => [{ value: r.v, context: `finance:artifact:${r.invoice_id}:pdf` }],
+  },
 ];
 
 async function encryptedSamples(db: Db): Promise<Sample[]> {
