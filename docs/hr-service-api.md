@@ -149,19 +149,42 @@ curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "Idempotency-K
 
 `draft` ← `pending_finance`، لمسودة أعدّها المفتاح نفسه فقط (`403 transition_forbidden` لمسودة أعدّها شخص). `version` غير مطابق: `409 version_conflict`. بعدها المراجعة للمالية والاعتماد (الذي يغلق المسير) للمعتمد، من الواجهة. `approve` و`close` و`review` و`reject` بالمفتاح: `403 PAYROLL_ACTION_FORBIDDEN` دائمًا.
 
+## التصدير (PDF وCSV وXLSX والتنزيل)
+
+كل تصدير في التطبيق له مسار للمفتاح، بنفس المولّد أو قالب الطباعة الذي تستخدمه الواجهة (لا قوالب مستقلة). ملفات PDF يرسمها Chromium في الخادم من مكوّن React نفسه وورقة الأنماط نفسها التي تطبعها الواجهة بـ`window.print`، والرد يحمل `x-pdf-renderer: chromium`، وبلا Chromium يرد `503 PDF_RENDERER_UNAVAILABLE`. كل تصدير يكتب حدثًا في `administration_events` (`resource_type = service_access`) باسم «محاسب سبق» بأسماء الأقسام والحقول وعدد الصفوف فقط، بلا قيم. كل الردود `cache-control: private, no-store`.
+
+| التصدير في التطبيق                                                                                       | مسار المفتاح                                                                          | النطاق                                                                                                                                      | حدث التدقيق                                                                  | الحالة                                                                                          |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| تقرير الملف الوظيفي («طباعة / حفظ PDF»)                                                                  | `GET /employees/:id/report.pdf`                                                       | `hr.employees.read`؛ الراتب والبنك والتأمينات بـ`hr.compensation.read`؛ الهوية والطبي بـ`hr.sensitive.read`؛ قسم الإجازات بـ`hr.leave.read` | `service_export_profile_report` (الأقسام، أسماء الحقول الحساسة، عدد الوثائق) | متاح                                                                                            |
+| تنزيل وثيقة موظف                                                                                         | `GET /employees/:id/documents` ثم `GET /employees/:id/documents/:documentId/download` | `hr.employees.read`؛ وثائق الصنف المالي بـ`hr.compensation.read`، والشخصي والطبي بـ`hr.sensitive.read`                                      | `service_document_downloaded` (الصنف)                                        | متاح                                                                                            |
+| طباعة النسخة المعتمدة لطلب قابل للطباعة (تعريف بالراتب، تعريف، شهادة خبرة، عقد، ملحق، إخلاء طرف، مخالصة) | `GET /employees/:id/letters` ثم `GET /employees/:id/letters/:requestId/letter.pdf`    | `hr.employees.read` + `hr.compensation.read` + `hr.sensitive.read` (النسخة مجمّدة ولا تُحجب حقلًا حقلًا)                                        | `service_export_issued_letter` (النوع والمرجع)                               | متاح، قراءة فقط                                                                                 |
+| تصدير CSV للمسير                                                                                         | `GET /payroll/:id/export.csv`                                                         | `hr.payroll.read` + `hr.compensation.read`                                                                                                  | `service_export_payroll_csv` (الفترة والحالة وعدد السطور)                    | متاح                                                                                            |
+| طباعة كشف الراتب (مسير مغلق)                                                                             | `GET /payroll/:id/payslips/:employeeId/payslip.pdf`                                   | `hr.payroll.read` + `hr.compensation.read`                                                                                                  | `service_export_payslip`                                                     | متاح، للمسيرات المغلقة فقط كما في الواجهة (`409 PAYROLL_NOT_CLOSED`)                            |
+| تقارير CSV: الموظفون، الطلبات، الحضور                                                                    | `GET /reports/export.csv?type=employees\|requests\|attendance`                        | `hr.employees.read` (الطلبات والحضور أعداد وحالات بلا هوية موظف)                                                                            | `service_export_report_csv` (النوع وعدد الصفوف)                              | متاح                                                                                            |
+| نموذج استيراد الموظفين XLSX (فارغ)                                                                       | `GET /imports/employees/template.xlsx`                                                | `hr.employees.read`                                                                                                                         | `service_export_import_template`                                             | متاح                                                                                            |
+| مستندات المالية (عرض السعر، الفاتورة، كشف الحساب، تقارير الدفتر)                                         | `/api/finance/...`                                                                    | مفتاح المالية `sabqfin_`                                                                                                                    | كما هي                                                                       | تبقى على مفتاح المالية                                                                          |
+| طباعة صفحة الطلب كاملة (قيم النموذج والمسار الزمني)                                                      | —                                                                                     | —                                                                                                                                           | —                                                                            | غير متاح: المفتاح لا يملك وصولًا للطلبات الإدارية. يحتاج قرارًا بنطاق جديد مثل `hr.requests.read` |
+
+قواعد الحجب في التقرير هي قواعد مسارات JSON نفسها. يُترك من التقرير المطبوع بالمفتاح: الطلبات الإدارية، وأسباب تغييرات الحقول (نص حر)، والمسار الزمني للملف؛ لأنها خارج صلاحيات المفتاح.
+
+**ما يغيّر الحالة ولا يُعرض كتصدير:** إصدار النسخة المعتمدة لخطاب أو عقد يحدث عند اعتماد الطلب (رقم مرجع ونسخة مجمّدة)، وهو اعتماد بشري. المفتاح يقرأ النسخ الصادرة فقط، وإصدارها بالمفتاح يحتاج قرار كتابة مستقلًا. ورفع الوثائق وأرشفتها واستيراد الموظفين كتابات خارج نطاق المفتاح.
+
 ## الأخطاء
 
-| الرمز                                                       | المعنى                                                                |
-| ----------------------------------------------------------- | --------------------------------------------------------------------- |
-| `401 API_KEY_DISABLED`                                      | المفتاح غير مفعّل في هذه النسخة (لا بصمات أو لا نطاقات أو وضع غير خاص) |
-| `401 INVALID_API_KEY`                                       | مفتاح خاطئ                                                            |
-| `403 API_KEY_SCOPE`                                         | المسار أو الطريقة خارج نطاق المفتاح، أو النطاق المطلوب غير ممنوح      |
-| `404 EMPLOYEE_NOT_FOUND` / `PAYROLL_NOT_FOUND`              | المعرّف غير موجود                                                      |
-| `400 IDEMPOTENCY_KEY_REQUIRED` / `idempotency_key_required` | كتابة بلا `Idempotency-Key`                                           |
-| `403 FIELD_NOT_ALLOWED_FOR_SERVICE`                         | حقل له مسار بشري فقط                                                  |
-| `403 PAYROLL_ACTION_FORBIDDEN`                              | اعتماد أو إغلاق أو مراجعة أو رفض مسير بالمفتاح                        |
-| `409 STALE_VERSION` / `version_conflict`                    | الملف أو المسير تغيّر منذ قراءته                                       |
-| `429 API_KEY_LOCKED`                                        | محاولات خاطئة كثيرة                                                   |
+| الرمز                                                               | المعنى                                                                |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `401 API_KEY_DISABLED`                                              | المفتاح غير مفعّل في هذه النسخة (لا بصمات أو لا نطاقات أو وضع غير خاص) |
+| `401 INVALID_API_KEY`                                               | مفتاح خاطئ                                                            |
+| `403 API_KEY_SCOPE`                                                 | المسار أو الطريقة خارج نطاق المفتاح، أو النطاق المطلوب غير ممنوح      |
+| `404 EMPLOYEE_NOT_FOUND` / `PAYROLL_NOT_FOUND`                      | المعرّف غير موجود                                                      |
+| `404 DOCUMENT_NOT_FOUND` / `LETTER_NOT_FOUND` / `PAYSLIP_NOT_FOUND` | غير موجود أو خارج نطاق المفتاح                                        |
+| `409 PAYROLL_NOT_CLOSED`                                            | كشف الراتب لمسير غير مغلق                                             |
+| `503 PDF_RENDERER_UNAVAILABLE`                                      | Chromium غير متاح على الخادم                                          |
+| `400 IDEMPOTENCY_KEY_REQUIRED` / `idempotency_key_required`         | كتابة بلا `Idempotency-Key`                                           |
+| `403 FIELD_NOT_ALLOWED_FOR_SERVICE`                                 | حقل له مسار بشري فقط                                                  |
+| `403 PAYROLL_ACTION_FORBIDDEN`                                      | اعتماد أو إغلاق أو مراجعة أو رفض مسير بالمفتاح                        |
+| `409 STALE_VERSION` / `version_conflict`                            | الملف أو المسير تغيّر منذ قراءته                                       |
+| `429 API_KEY_LOCKED`                                                | محاولات خاطئة كثيرة                                                   |
 
 ## حدود معروفة
 
