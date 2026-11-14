@@ -492,15 +492,38 @@ export function createPayrollCommands(db: AsyncDb) {
       throw fail(409, 'empty_correction', 'أدخل فرقًا ماليًا قبل اعتماد مسير التصحيح.');
     let base = new Map<string, number>();
     if (run.correction_of) {
+      // A correction is measured against everything already closed for the same base run:
+      // the base itself plus every earlier closed correction in its chain, whichever run each
+      // one pointed at. Comparing with the run named in correction_of alone let a second
+      // correction ignore the first (net could fall below zero) and made a correction of a
+      // correction compare against a bare delta (valid nets were refused).
+      let rootId = String(run.correction_of);
+      for (let depth = 0; ; depth += 1) {
+        if (depth > 1000) throw fail(409, 'invalid_correction', 'سلسلة التصحيح غير صالحة.');
+        const parent = (
+          await tx.read<Row>('SELECT correction_of FROM payroll_runs WHERE id=?', [rootId])
+        )[0];
+        if (!parent?.correction_of) break;
+        rootId = String(parent.correction_of);
+      }
+      // Corrections must share the base run's period, and a period has one non-rejected base,
+      // so the closed runs of this period that are the root or a correction form the chain.
       const original = await tx.read<Row>(
-        "SELECT employee_id,kind,amount_minor FROM payroll_lines WHERE run_id=? AND (SELECT state FROM payroll_runs WHERE id=?)='closed'",
-        [run.correction_of, run.correction_of],
+        `SELECT l.employee_id,l.kind,l.amount_minor FROM payroll_lines l
+         JOIN payroll_runs r ON r.id=l.run_id
+         WHERE r.period=? AND r.state='closed' AND r.id<>?
+           AND (r.id=? OR r.correction_of IS NOT NULL)`,
+        [run.period, run.id, rootId],
       );
       for (const line of original) {
         const amount = Number(line.amount_minor) * (line.kind === 'earning' ? 1 : -1);
         base.set(line.employee_id, (base.get(line.employee_id) || 0) + amount);
         if (!Number.isSafeInteger(base.get(line.employee_id)))
-          throw fail(400, 'payroll_total_invalid', 'مجموع المسير الأصلي يتجاوز دقة العملة الآمنة.');
+          throw fail(
+            400,
+            'payroll_total_invalid',
+            'مجموع المسير الأصلي وتصحيحاته يتجاوز دقة العملة الآمنة.',
+          );
       }
     }
     for (const [employeeId, delta] of deltas) {
