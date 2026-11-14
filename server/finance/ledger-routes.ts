@@ -356,6 +356,8 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
       b = requireRecord(req.body),
       id = routeId(req.params.id);
     const payload = { date: dateValue(b.date), reason: text(b.reason, 300) };
+    if (!canApproveAndPost(actor.role))
+      throw fault(403, 'FORBIDDEN', 'عكس القيود والمستندات متاح لمسؤول النظام فقط.');
     const reversal = await mutation(
       req,
       actor,
@@ -800,6 +802,8 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
       date: dateValue(b.date),
       reason: text(b.reason, 300),
     };
+    if (!canApproveAndPost(actor.role))
+      throw fault(403, 'FORBIDDEN', 'عكس القيود والمستندات متاح لمسؤول النظام فقط.');
     await mutation(req, actor, `finance.ledger.voucher.reverse:${id}`, payload, async (tx) => {
       await ledger.reverseVoucher(tx, actor, id, payload.version, payload.date, payload.reason);
       return id;

@@ -20,7 +20,7 @@ export type TaxRole = 'base' | 'output' | 'input';
 export const salesTaxCodes: readonly TaxCode[] = ['S', 'ZD', 'ZE', 'E', 'O'];
 export const purchaseTaxCodes: readonly TaxCode[] = ['S', 'ND', 'RC', 'IMP', 'ZD', 'E', 'O'];
 export const VAT_RATE_BPS = 1500;
-/** Manual approve-and-post is limited to the system administrator (HR role). */
+/** Manual approve-and-post and reversals are limited to the system administrator (HR role). */
 export function canApproveAndPost(role: Role): boolean {
   return role === 'hr';
 }
