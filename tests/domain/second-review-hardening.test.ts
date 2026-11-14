@@ -322,6 +322,29 @@ test('a legacy binding also proves the key against encrypted finance records', a
     process.env.HR_DATA_KEY = keyA;
     await db.close();
   }
+  // Ledger records (migration 012) alone are enough to refuse a wrong key.
+  const ledger = await createDatabase(':memory:');
+  try {
+    await ledger.execute("UPDATE employee_profile_data SET encrypted_values_json='{}'");
+    const now = new Date().toISOString();
+    await ledger.execute(
+      'INSERT INTO finance_vendors(id,owner_id,version,vendor_ciphertext,created_at,updated_at) VALUES(?,?,1,?,?,?)',
+      [
+        'vendor-1',
+        'emp-omar',
+        encryptSensitive('{"name":"مورد وهمي"}', 'finance:vendor:vendor-1'),
+        now,
+        now,
+      ],
+    );
+    process.env.HR_DATA_KEY = keyB;
+    await assert.rejects(verifyDataKeyBinding(ledger), { code: 'DATA_KEY_MISMATCH' });
+    process.env.HR_DATA_KEY = keyA;
+    assert.equal(await verifyDataKeyBinding(ledger), 'bound');
+  } finally {
+    process.env.HR_DATA_KEY = keyA;
+    await ledger.close();
+  }
 });
 
 // Note 9: applied migrations could be edited without anyone noticing.

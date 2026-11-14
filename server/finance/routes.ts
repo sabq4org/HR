@@ -15,8 +15,13 @@ import type {
   FinanceSeller,
   FinanceSettings,
 } from '../../shared/finance.js';
-import { financeDocumentTypes, zeroLineDocumentTypes } from '../../shared/finance.js';
-import type { AsyncDb } from '../database.js';
+import {
+  completeSeller,
+  financeDocumentTypes,
+  zeroLineDocumentTypes,
+} from '../../shared/finance.js';
+import { todayInRiyadh, type AsyncDb } from '../database.js';
+import type { CustomerStatement } from '../../shared/ledger.js';
 import { decryptSensitive, encryptSensitive } from '../administration/security.js';
 import type { Actor } from '../administration/service.js';
 import {
@@ -35,6 +40,8 @@ import {
   type WafeqClientLike as WafeqProvider,
 } from '../integrations/wafeq.js';
 export type { WafeqClientLike } from '../integrations/wafeq.js';
+import { autoPostInvoice, customerStatement } from './ledger.js';
+import { registerLedger } from './ledger-routes.js';
 
 export type FinanceAccessOptions = { privateMode: boolean; allowedActorId?: string };
 export function canAccessFinance(actor: Actor, access: FinanceAccessOptions): boolean {
@@ -93,7 +100,7 @@ type QuoteRow = {
   created_at: string;
   invoice_id: string | null;
 };
-type InvoiceRow = {
+export type InvoiceRow = {
   id: string;
   owner_id: string;
   quote_id: string;
@@ -117,14 +124,14 @@ const emptySeller = (): FinanceSeller => ({
   commercialRegistration: '',
   address: emptyAddress(),
 });
-const now = () => new Date().toISOString();
+export const now = () => new Date().toISOString();
 const denied = () =>
   fault(403, 'FINANCE_ACCESS_DENIED', 'لا تملك صلاحية الوصول إلى المعاينة المالية.');
 function owner(actor: Actor, access: FinanceAccessOptions) {
   if (!canAccessFinance(actor, access)) throw denied();
   return actor.id;
 }
-function safeJson<T>(ciphertext: string, context: string): T {
+export function safeJson<T>(ciphertext: string, context: string): T {
   try {
     return JSON.parse(decryptSensitive(ciphertext, context)) as T;
   } catch (error) {
@@ -137,20 +144,20 @@ function validDate(value: unknown): value is string {
   const d = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
-function dateValue(value: unknown): string {
+export function dateValue(value: unknown): string {
   if (!validDate(value)) throw fault(400, 'INVALID_DATE', 'أدخل تاريخًا صحيحًا.');
   return value;
 }
-function routeId(value: string | string[]): string {
+export function routeId(value: string | string[]): string {
   if (typeof value !== 'string') throw fault(400, 'INVALID_ID', 'معرّف المورد غير صالح.');
   return value;
 }
-function text(value: unknown, max: number, code = 'INVALID_INPUT'): string {
+export function text(value: unknown, max: number, code = 'INVALID_INPUT'): string {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > max)
     throw fault(400, code, 'تحقق من الحقول المطلوبة.');
   return value.trim();
 }
-function optionalText(value: unknown, max: number): string {
+export function optionalText(value: unknown, max: number): string {
   if (value === undefined || value === null) return '';
   if (typeof value !== 'string' || value.length > max)
     throw fault(400, 'INVALID_INPUT', 'تحقق من الحقول النصية.');
@@ -174,7 +181,7 @@ function addressValue(value: unknown): FinanceAddress {
       : { additionalNumber: optionalText(a.additionalNumber, 20) }),
   };
 }
-function validateVat(value: unknown, optional = true): string {
+export function validateVat(value: unknown, optional = true): string {
   const vat = optionalText(value, 15);
   if ((!optional && !vat) || (vat && !/^3\d{13}3$/.test(vat)))
     throw fault(
@@ -414,7 +421,11 @@ async function readCatalogItem(
   if (!row) throw fault(404, 'CATALOG_ITEM_NOT_FOUND', 'البند المحفوظ غير موجود.');
   return catalogItem(row);
 }
-async function readInvoice(db: AsyncDb, ownerId: string, id: string): Promise<FinanceInvoice> {
+export async function readInvoice(
+  db: AsyncDb,
+  ownerId: string,
+  id: string,
+): Promise<FinanceInvoice> {
   const row = (
     await db.read<InvoiceRow>('SELECT * FROM finance_invoices WHERE owner_id=? AND id=?', [
       ownerId,
@@ -449,9 +460,12 @@ async function getSettings(
     )
   )[0];
   return {
-    seller: row
-      ? safeJson<FinanceSeller>(row.seller_ciphertext, `finance:seller:${ownerId}`)
-      : emptySeller(),
+    // The private workspace issues for one company; its registered details back any empty field.
+    seller: ((saved) => (privateMode ? completeSeller(saved) : saved))(
+      row
+        ? safeJson<FinanceSeller>(row.seller_ciphertext, `finance:seller:${ownerId}`)
+        : emptySeller(),
+    ),
     version: row?.version ?? 1,
     mode: privateMode ? 'private' : 'preview',
     apiKeyConfigured: !!key,
@@ -657,7 +671,7 @@ function route(handler: (req: Request, res: Response) => Promise<void>) {
     void handler(req, res).catch((e) => sendErr(res, e));
   };
 }
-function audited(
+export function audited(
   db: AsyncDb,
   actor: Actor,
   kind: string,
@@ -681,11 +695,11 @@ function audited(
     ],
   );
 }
-function requireFinance(actor: Actor, access: FinanceAccessOptions) {
+export function requireFinance(actor: Actor, access: FinanceAccessOptions) {
   actorOrThrow(actor);
   owner(actor, access);
 }
-function idempotent<T>(
+export function idempotent<T>(
   db: AsyncDb,
   actor: Actor,
   action: string,
@@ -1564,6 +1578,7 @@ export function registerFinance(
         operation.id,
       ],
     );
+    await autoPostInvoice(db, actor, updated);
     res.json({ invoice: updated });
   });
   registerRoute(app, 'post', '/api/finance/invoices/:id/refresh', async (req, res) => {
@@ -1585,6 +1600,7 @@ export function registerFinance(
         ...(mapped.status === 'cleared' ? {} : { canDownloadXml: false }),
         syncMessage: undefined,
       });
+      await autoPostInvoice(db, actor, updated);
       res.json({ invoice: updated });
     } catch {
       throw fault(503, 'WAFEQ_REFRESH_FAILED', 'تعذر تحديث حالة الفاتورة من وافق.');
@@ -1638,4 +1654,22 @@ export function registerFinance(
     // The provider has no documented QR image contract yet; do not return JSON to an <img> caller.
     throw fault(409, 'ARTIFACT_UNAVAILABLE', 'صيغة صورة QR الرسمية لم تثبت بعد.');
   });
+  registerRoute(app, 'get', '/api/finance/customers/:id/statement', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    const customer = await readCustomer(db, actor.id, routeId(req.params.id));
+    const bound = (name: string) =>
+      typeof req.query[name] === 'string' && req.query[name] ? dateValue(req.query[name]) : null;
+    const from = bound('from'),
+      to = bound('to') ?? todayInRiyadh();
+    if (from && from > to)
+      throw fault(400, 'INVALID_DATE_RANGE', 'بداية الفترة يجب ألا تتجاوز نهايتها.');
+    const statement: CustomerStatement = {
+      customer: customerSnapshot(customer),
+      seller: (await getSettings(db, actor.id, privateMode)).seller,
+      ...(await customerStatement(db, actor.id, customer.id, from, to)),
+    };
+    res.json({ statement });
+  });
+  registerLedger(app, { db, requireActor, access });
 }

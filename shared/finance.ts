@@ -41,6 +41,52 @@ export interface FinanceSeller {
     iban: string;
   };
 }
+/**
+ * Legal identity of the issuing company as on its commercial registration, VAT certificate and
+ * national address proof. Public details printed on every document; used in the private workspace
+ * wherever the saved settings leave a field empty.
+ */
+export const companySeller: FinanceSeller = {
+  name: 'شركة صحيفة سبق الإلكترونية',
+  vatNumber: '315027341800003',
+  commercialRegistration: '7004271396',
+  address: {
+    line: 'طريق صلاح الدين الأيوبي',
+    buildingNumber: '6567',
+    additionalNumber: '2305',
+    district: 'حي الزهراء',
+    city: 'الرياض',
+    postalCode: '12812',
+    country: 'SA',
+  },
+};
+/** Fills only the fields a seller record leaves empty; saved values always win. */
+export function completeSeller(
+  seller: FinanceSeller,
+  fallback: FinanceSeller = companySeller,
+): FinanceSeller {
+  const bank = seller.bankAccount;
+  const hasBank = bank && Object.values(bank).some((value) => value.trim());
+  return {
+    ...seller,
+    name: seller.name.trim() || fallback.name,
+    vatNumber: seller.vatNumber.trim() || fallback.vatNumber,
+    commercialRegistration:
+      seller.commercialRegistration?.trim() || fallback.commercialRegistration,
+    // An address is taken whole, so a saved street is never mixed with another district.
+    address:
+      seller.address.line.trim() || seller.address.city.trim() ? seller.address : fallback.address,
+    ...(hasBank || !fallback.bankAccount ? {} : { bankAccount: fallback.bankAccount }),
+  };
+}
+export const sellerAddressText = (address: FinanceAddress) =>
+  [
+    [address.buildingNumber, address.line].filter(Boolean).join(' '),
+    address.district,
+    [address.city, address.postalCode].filter(Boolean).join(' '),
+  ]
+    .filter(Boolean)
+    .join('، ');
 export interface FinanceSettings {
   seller: FinanceSeller;
   version: number;

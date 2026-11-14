@@ -73,7 +73,7 @@ import {
 } from './administration';
 import { PayrollPage } from './payroll';
 import { EmployeeImportPage } from './imports';
-import { FinancePage } from './finance';
+import { FinancePortal } from './finance/portal';
 
 function EmployeeFileRoute() {
   const { id } = useParams();
@@ -662,7 +662,7 @@ export default function App() {
               <Route path="/requests/:id" element={<RequestRoute />} />
               <Route path="/attendance" element={<AttendancePage />} />
               <Route path="/documents" element={<DocumentsPage />} />
-              <Route path="/finance" element={<FinancePage />} />
+              <Route path="/finance" element={<FinancePortal />} />
               <Route path="/payroll" element={<PayrollPage actor={data.me} />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/settings/policies" element={<PoliciesPage />} />

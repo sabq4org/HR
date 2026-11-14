@@ -128,6 +128,31 @@ const SOURCES: { sql: string; map: (row: Record<string, string>) => Sample[] }[]
     sql: "SELECT invoice_id,content_ciphertext AS v FROM finance_private_artifacts WHERE artifact_type='pdf' ORDER BY invoice_id LIMIT 3",
     map: (r) => [{ value: r.v, context: `finance:artifact:${r.invoice_id}:pdf` }],
   },
+  // Finance ledger (migration 012).
+  {
+    sql: 'SELECT id,description_ciphertext AS v FROM finance_journal_entries ORDER BY id LIMIT 3',
+    map: (r) => [{ value: r.v, context: `finance:journal:${r.id}` }],
+  },
+  {
+    sql: 'SELECT id,memo_ciphertext AS v FROM finance_journal_lines WHERE memo_ciphertext IS NOT NULL ORDER BY id LIMIT 3',
+    map: (r) => [{ value: r.v, context: `finance:journal-line:${r.id}` }],
+  },
+  {
+    sql: 'SELECT id,vendor_ciphertext AS v FROM finance_vendors ORDER BY id LIMIT 3',
+    map: (r) => [{ value: r.v, context: `finance:vendor:${r.id}` }],
+  },
+  {
+    sql: 'SELECT id,details_ciphertext AS v FROM finance_vouchers ORDER BY id LIMIT 3',
+    map: (r) => [{ value: r.v, context: `finance:voucher:${r.id}` }],
+  },
+  {
+    sql: 'SELECT id,correction_note_ciphertext AS n,filing_reference_ciphertext AS f FROM finance_vat_returns WHERE correction_note_ciphertext IS NOT NULL OR filing_reference_ciphertext IS NOT NULL ORDER BY id LIMIT 3',
+    map: (r) =>
+      [
+        { value: r.n, context: `finance:vat-note:${r.id}` },
+        { value: r.f, context: `finance:vat-reference:${r.id}` },
+      ].filter((x) => x.value),
+  },
 ];
 
 async function encryptedSamples(db: Db): Promise<Sample[]> {
