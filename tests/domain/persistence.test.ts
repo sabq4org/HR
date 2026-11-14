@@ -133,7 +133,7 @@ test(
   'PostgreSQL private seed=false migrations add no synthetic policies or fixtures',
   { skip: !pgUrl },
   async () => {
-    const schema = `hr_preview_private_seed_test_${randomBytes(16).toString('hex')}`;
+    const schema = `hr_preview_${randomBytes(16).toString('hex')}`;
     const db = await createPostgresDatabase(pgUrl!, schema, { seed: false });
     try {
       for (const table of [
