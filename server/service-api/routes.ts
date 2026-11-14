@@ -89,6 +89,7 @@ async function auditRead(
   resourceId: string,
   action: string,
   fields: string[],
+  extra: Record<string, unknown> = {},
 ) {
   if (!fields.length) return;
   await appendEvent(db, serviceActor, 'service_access', resourceId, action, null, {
@@ -96,6 +97,7 @@ async function auditRead(
     actorKind: 'service_key',
     keyId: context.keyId,
     fields: [...fields].sort(),
+    ...extra,
   });
 }
 
@@ -243,6 +245,15 @@ export function registerHrServiceApi(app: Express, { db, contextFor }: Options) 
         const { employeeCount, totals } = await runTotals(row.id);
         runs.push({ ...runSummary(row), employeeCount, ...(withAmounts ? { totals } : {}) });
       }
+      if (withAmounts && runs.length)
+        await auditRead(
+          db,
+          context,
+          month ?? 'all',
+          'service_read_payroll_list',
+          ['deductionsMinor', 'earningsMinor', 'netMinor'],
+          { month: month ?? null, count: runs.length },
+        );
       res.json({ runs });
     }),
   );
