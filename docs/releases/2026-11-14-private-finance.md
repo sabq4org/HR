@@ -63,7 +63,7 @@
 | الخادم والموصل      | `server/finance/routes.ts`، `server/integrations/wafeq.ts`، `server/app.ts`، `server/index.ts`                                                             |
 | عقد البيانات        | `shared/finance.ts`، `shared/contracts.ts`                                                                                                                 |
 | واجهة وطباعة        | `src/finance/index.tsx`، `src/finance/finance.css`، `src/App.tsx`                                                                                          |
-| الترحيل             | `server/migrations/009_finance.sql` ونسخة PostgreSQL المناظرة                                                                                              |
+| الترحيل             | `server/migrations/010_finance.sql` ونسخة PostgreSQL المناظرة                                                                                              |
 | الاختبارات والإعداد | اختبارات المالية والموصل والجلسات، `tests/e2e/finance.spec.ts`، `tests/support/finance-server.ts`، `playwright.finance.config.ts`، CI وملفات إعداد التشغيل |
 | التوثيق             | دليل المالية، عقد وافق، مراجعة الدليل والعينات، رسالة الدعم، القرار 008، هذا التقرير وفهارس المشروع                                                        |
 
