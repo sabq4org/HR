@@ -35,6 +35,41 @@ export function mayReadEmployee(actor: Actor, employee: EmployeeRow): boolean {
   return actor.role === 'manager' && employee.manager_id === actor.id;
 }
 
+/**
+ * Single source of truth for which administrative-request values an actor may see.
+ * - Owner and HR see everything.
+ * - Forms marked `confidential` (grievance, discipline, separation, settlement, advance,
+ *   reward, bank change, salary letter) reveal nothing to anyone else unless the actor's
+ *   role is an explicit non-manager step of that request, or the actor created it.
+ *   Managers and auditors therefore no longer read grievance/discipline content.
+ * - `financial` fields are visible to finance, and to an approver who is a step of the
+ *   request (an approver cannot decide an amount they cannot see). Other `sensitive`
+ *   fields (personal, medical) stay hidden from everyone except owner and HR.
+ * See docs/decisions/004-security-hardening.md.
+ */
+export function visibleRequestValues(
+  actor: Actor,
+  request: { ownerId: string; createdBy: string; kind: string; steps: Role[] },
+  values: FormValues,
+): FormValues {
+  if (actor.id === request.ownerId || actor.role === 'hr') return values;
+  const form = formByKind[request.kind as keyof typeof formByKind];
+  const assignedStep = actor.role !== 'manager' && request.steps.includes(actor.role);
+  const result: FormValues = Object.create(null) as FormValues;
+  if (form?.confidential && !assignedStep && actor.id !== request.createdBy) return result;
+  for (const [key, value] of Object.entries(values)) {
+    const sensitivity = form?.fields.find((f) => f.key === key)?.sensitive;
+    if (!sensitivity) {
+      if (actor.role !== 'finance') result[key] = value;
+    } else if (
+      sensitivity === 'financial' &&
+      (actor.role === 'finance' || (actor.role === 'approver' && assignedStep))
+    )
+      result[key] = value;
+  }
+  return result;
+}
+
 export function mayManageEmployee(actor: Actor, employee: EmployeeRow): boolean {
   return actor.role === 'hr' && actor.id !== employee.id;
 }
@@ -558,14 +593,12 @@ export async function getEmployeeFile(
       const form = formByKind[row.kind as keyof typeof formByKind];
       if (!form) return null;
       const allValues = readProtectedFormValues(row.values_json, `admin-request:${row.id}:values`);
-      const values: FormValues = Object.create(null) as FormValues;
-      for (const [key, value] of Object.entries(allValues)) {
-        const field = form.fields.find((f) => f.key === key);
-        if (actor.id === employeeId || actor.role === 'hr') values[key] = value;
-        else if (!field?.sensitive && actor.role !== 'finance') values[key] = value;
-        else if (field?.sensitive === 'financial' && actor.role === 'finance') values[key] = value;
-      }
       const steps = JSON.parse(row.steps_json) as Role[];
+      const values = visibleRequestValues(
+        actor,
+        { ownerId: employeeId, createdBy: row.created_by, kind: row.kind, steps },
+        allValues,
+      );
       return {
         id: row.id,
         number: row.request_number,
