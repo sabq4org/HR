@@ -28,7 +28,13 @@ import {
 } from '../../server/finance/document-html.js';
 import { invoiceQrSrc } from '../../server/finance/qr-image.js';
 import { completeSeller, formatIban, type FinanceSeller } from '../../shared/finance.js';
-import { INTERNAL_COPY_LABEL, quoteFooterText } from '../../src/finance/paper.js';
+import {
+  INTERNAL_COPY_LABEL,
+  invoiceStatusKind,
+  invoiceStatusText,
+  quoteFooterText,
+  quoteStatus,
+} from '../../src/finance/paper.js';
 
 process.env.HR_DATA_KEY ??= randomBytes(32).toString('base64url');
 const OWNER = 'emp-finance-pdf-owner';
@@ -212,7 +218,7 @@ test('quote HTML follows the real status, groups the IBAN and right-aligns bank 
     const draft = quoteHtml(app.quote, full);
     assert.equal(app.quote.status, 'draft');
     assert.ok(draft.includes('مسودة عرض سعر'), 'draft badge');
-    assert.ok(!draft.includes('تم التحويل إلى فاتورة'), 'draft is not converted');
+    assert.ok(!draft.includes('تم التحويل إلى مسودة فاتورة'), 'draft is not converted');
     assert.ok(draft.includes('SA60 0000 0000 0000 0000 1234'), 'grouped IBAN');
     assert.ok(!draft.includes('SA6000000000000000001234'), 'ungrouped IBAN stays out of the paper');
     assert.match(
@@ -222,7 +228,7 @@ test('quote HTML follows the real status, groups the IBAN and right-aligns bank 
     assert.match(draft, /<dd class="fin-bank-value" dir="ltr">\s*0000000000000\s*<\/dd>/);
 
     const converted = quoteHtml({ ...app.quote, status: 'converted' }, full);
-    assert.ok(converted.includes('تم التحويل إلى فاتورة'), 'converted badge');
+    assert.ok(converted.includes('تم التحويل إلى مسودة فاتورة'), 'converted badge');
     assert.ok(!converted.includes('مسودة عرض سعر'), 'converted is not a draft badge');
 
     const invoice = invoiceHtml(app.invoice, completeSeller(app.invoice.seller, seller));
@@ -237,6 +243,38 @@ test('quote HTML follows the real status, groups the IBAN and right-aligns bank 
     );
     assert.match(css, /\.fin-bank-card dd\.fin-bank-value\s*\{[^}]*unicode-bidi:\s*isolate/);
     assert.match(css, /\.fin-bank-card dd\.fin-bank-value\s*\{[^}]*direction:\s*ltr/);
+  } finally {
+    await app.close();
+  }
+});
+
+test('invoice and linked quote only show issued green badges after confirmed acceptance', async () => {
+  const app = await serve();
+  try {
+    const quote = { ...app.quote, status: 'converted' as const, invoiceId: app.invoice.id };
+    assert.deepEqual(quoteStatus(quote, app.invoice), {
+      text: 'تم التحويل إلى مسودة فاتورة',
+      kind: 'waiting',
+    });
+    assert.equal(quoteStatus(quote).kind, 'waiting', 'missing invoice does not imply issuance');
+    for (const status of ['syncing', 'pending', 'rejected', 'reconciliation_required'] as const) {
+      const invoice = { ...app.invoice, status, wafeqId: 'synthetic-provider-id' };
+      assert.notEqual(invoiceStatusKind(status), 'good', status);
+      assert.notEqual(quoteStatus(quote, invoice).kind, 'good', status);
+      assert.ok(!invoiceStatusText(invoice).includes('صادرة'), status);
+      assert.notEqual(quoteStatus(quote, invoice).text, 'تم إصدار الفاتورة', status);
+    }
+    for (const status of ['cleared', 'reported'] as const) {
+      const invoice = { ...app.invoice, status };
+      assert.equal(invoiceStatusText(invoice), 'فاتورة ضريبية صادرة');
+      assert.equal(invoiceStatusKind(status), 'good');
+      assert.deepEqual(quoteStatus(quote, invoice), { text: 'تم إصدار الفاتورة', kind: 'good' });
+      assert.equal(
+        invoiceStatusText({ ...invoice, documentType: 'out_of_scope' }),
+        'فاتورة صادرة',
+        'non-tax invoice is not labelled as a tax invoice',
+      );
+    }
   } finally {
     await app.close();
   }
