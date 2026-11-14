@@ -1167,12 +1167,16 @@ test('customers saved in Wafeq are listed for review and imported once, linked a
       buildingNumber: '',
       additionalNumber: '',
     },
+    country: 'SA',
     externalId: '',
   });
   providerContacts = [
     contact('w-1', 'Synthetic Media Co', '300000000000003'),
     contact('w-2', 'Sample LLC'),
     contact('w-3', 'Synthetic Events Co'),
+    // Same VAT number as w-1 under another id, and a contact outside Saudi Arabia.
+    contact('w-4', 'Synthetic Media Branch', '300000000000003'),
+    { ...contact('w-5', 'Synthetic Abroad Co'), country: 'AE' },
   ];
   try {
     // A local customer with the same name is already covered.
@@ -1186,15 +1190,17 @@ test('customers saved in Wafeq are listed for review and imported once, linked a
         ['w-1', 'new'],
         ['w-2', 'exists'],
         ['w-3', 'new'],
+        ['w-4', 'new'],
+        ['w-5', 'unsupported'],
       ],
     );
     assert.equal((await api('/api/finance/wafeq/customers/import', post({ ids: [] }))).status, 400);
     const first = await api(
       '/api/finance/wafeq/customers/import',
-      post({ ids: ['w-1', 'w-2'] }, 'import-1'),
+      post({ ids: ['w-1', 'w-2', 'w-4', 'w-5'] }, 'import-1'),
     );
     assert.equal(first.status, 201);
-    assert.deepEqual(await first.json(), { imported: 1, skipped: 1 });
+    assert.deepEqual(await first.json(), { imported: 1, skipped: 3 });
     // A second request, even with a new key, does not duplicate.
     const again = await api(
       '/api/finance/wafeq/customers/import',

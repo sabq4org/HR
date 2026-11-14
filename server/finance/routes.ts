@@ -991,18 +991,15 @@ export function registerFinance(
   // Import of the customers already saved in Wafeq. Both routes only read from the provider.
   // A contact is treated as already present when a local customer is linked to it, was the source
   // of it, or shares its VAT number or exact name.
-  const wafeqCandidates = async (ownerId: string) => {
-    const client = await storedClient(db, ownerId, clientFactory);
-    let contacts: WafeqContact[];
-    try {
-      contacts = await client.listCustomers();
-    } catch (error) {
-      const code = error instanceof WafeqApiError ? error.code : 'provider_unavailable';
-      throw fault(503, 'WAFEQ_UNAVAILABLE', `تعذرت قراءة العملاء من وافق (${code}).`);
-    }
-    const rows = await db.read<CustomerRow>('SELECT * FROM finance_customers WHERE owner_id=?', [
-      ownerId,
-    ]);
+  // Which Wafeq contacts the saved customers already cover. Read again inside the import
+  // transaction and extended as rows are inserted, so one request cannot add the same name or
+  // VAT number twice.
+  const saudi = (country: string) => !country || /^(sa|sau|saudi arabia)$/i.test(country);
+  const localCoverage = async (reader: AsyncDb, ownerId: string) => {
+    const rows = await reader.read<CustomerRow>(
+      'SELECT * FROM finance_customers WHERE owner_id=?',
+      [ownerId],
+    );
     const linked = new Set<string>(),
       ids = new Set<string>(),
       vats = new Set<string>(),
@@ -1018,29 +1015,52 @@ export function registerFinance(
       if (saved.vatNumber) vats.add(saved.vatNumber);
       names.add(key(saved.name));
     }
+    return {
+      has: (contact: WafeqContact) =>
+        linked.has(contact.id) ||
+        ids.has(contact.externalId) ||
+        (!!contact.vatNumber && vats.has(contact.vatNumber)) ||
+        names.has(key(contact.name)),
+      add: (contact: WafeqContact) => {
+        linked.add(contact.id);
+        if (contact.vatNumber) vats.add(contact.vatNumber);
+        names.add(key(contact.name));
+      },
+    };
+  };
+  const wafeqCandidates = async (ownerId: string) => {
+    const client = await storedClient(db, ownerId, clientFactory);
+    let contacts: WafeqContact[];
+    try {
+      contacts = await client.listCustomers();
+    } catch (error) {
+      const code = error instanceof WafeqApiError ? error.code : 'provider_unavailable';
+      throw fault(503, 'WAFEQ_UNAVAILABLE', `تعذرت قراءة العملاء من وافق (${code}).`);
+    }
     const seen = new Set<string>();
+    const covered = await localCoverage(db, ownerId);
     return contacts
       .filter((c) => !seen.has(c.id) && seen.add(c.id))
       .map((contact) => ({
         contact,
-        exists:
-          linked.has(contact.id) ||
-          ids.has(contact.externalId) ||
-          (!!contact.vatNumber && vats.has(contact.vatNumber)) ||
-          names.has(key(contact.name)),
+        status: (!saudi(contact.country)
+          ? 'unsupported'
+          : covered.has(contact)
+            ? 'exists'
+            : 'new') as WafeqImportCandidate['status'],
       }));
   };
   registerRoute(app, 'get', '/api/finance/wafeq/customers', async (req, res) => {
     const actor = await auth(req);
     requireFinance(actor, access);
     const contacts: WafeqImportCandidate[] = (await wafeqCandidates(actor.id)).map(
-      ({ contact, exists }) => ({
+      ({ contact, status }) => ({
         id: contact.id,
         name: contact.name,
         vatNumber: contact.vatNumber,
         email: contact.email,
         city: contact.address.city,
-        status: exists ? 'exists' : 'new',
+        status,
       }),
     );
     res.set('cache-control', 'private, no-store').json({ contacts });
@@ -1068,13 +1088,10 @@ export function registerFinance(
       { ids: [...wanted].sort() },
       async (tx) => {
         let imported = 0;
-        for (const { contact, exists } of chosen) {
-          if (exists) continue;
-          const taken = await tx.read<{ id: string }>(
-            'SELECT id FROM finance_customers WHERE owner_id=? AND wafeq_id=?',
-            [actor.id, contact.id],
-          );
-          if (taken.length) continue;
+        const covered = await localCoverage(tx, actor.id);
+        for (const { contact, status } of chosen) {
+          if (status !== 'new' || covered.has(contact)) continue;
+          covered.add(contact);
           const id = newId(),
             createdAt = now();
           const input: FinanceCustomerInput = {

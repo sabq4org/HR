@@ -41,6 +41,8 @@ export interface WafeqContact {
     buildingNumber: string;
     additionalNumber: string;
   };
+  /** As returned by the provider; empty when it gives none. */
+  country: string;
   externalId: string;
 }
 
@@ -194,6 +196,7 @@ function responseContact(row: unknown): WafeqContact | null {
       buildingNumber: field(row.building_number, 20),
       additionalNumber: field(row.additional_number, 20),
     },
+    country: field(row.country, 60),
     externalId: field(row.external_id, 255),
   };
 }

@@ -119,12 +119,12 @@ export function WafeqImportModal({
                 </thead>
                 <tbody>
                   {contacts.map((c) => (
-                    <tr key={c.id} className={c.status === 'exists' ? 'fin-import-exists' : ''}>
+                    <tr key={c.id} className={c.status === 'new' ? '' : 'fin-import-exists'}>
                       <td>
                         <input
                           type="checkbox"
                           aria-label={`اختيار ${c.name}`}
-                          disabled={c.status === 'exists' || busy}
+                          disabled={c.status !== 'new' || busy}
                           checked={picked.has(c.id)}
                           onChange={() => toggle(c.id)}
                         />
@@ -137,8 +137,14 @@ export function WafeqImportModal({
                       <td>{c.city || '—'}</td>
                       <td>
                         <Status
-                          text={c.status === 'exists' ? 'موجود عندك' : 'جديد'}
-                          kind={c.status === 'exists' ? 'neutral' : 'good'}
+                          text={
+                            c.status === 'exists'
+                              ? 'موجود عندك'
+                              : c.status === 'unsupported'
+                                ? 'خارج السعودية'
+                                : 'جديد'
+                          }
+                          kind={c.status === 'new' ? 'good' : 'neutral'}
                         />
                       </td>
                     </tr>

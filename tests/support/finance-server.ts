@@ -53,6 +53,7 @@ const provider: WafeqClientLike = {
         vatNumber: '300000000100003',
         phone: '0110000001',
         address: { ...blank, line: 'طريق الاختبار', city: 'الرياض', postalCode: '12345' },
+        country: 'SA',
         externalId: '',
       },
       {
@@ -63,6 +64,7 @@ const provider: WafeqClientLike = {
         vatNumber: '',
         phone: '',
         address: { ...blank, city: 'جدة' },
+        country: 'SA',
         externalId: '',
       },
     ];

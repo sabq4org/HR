@@ -35,7 +35,8 @@ export interface WafeqImportCandidate {
   vatNumber: string;
   email: string;
   city: string;
-  status: 'new' | 'exists';
+  /** `unsupported`: an address outside Saudi Arabia, which local customers cannot hold. */
+  status: 'new' | 'exists' | 'unsupported';
 }
 export interface FinanceSeller {
   name: string;
