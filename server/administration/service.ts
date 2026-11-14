@@ -230,10 +230,21 @@ export function filterProfileValues(actor: Actor, ownerId: string, values: FormV
   const output: FormValues = Object.create(null) as FormValues;
   for (const [key, value] of Object.entries(values)) {
     const field = byKey.get(key);
+    if (!field) continue;
     if (!field?.sensitive && actor.role !== 'finance') output[key] = value;
     if (field?.sensitive === 'financial' && actor.role === 'finance') output[key] = value;
   }
   return output;
+}
+
+export function mayReadProfileHistoryField(
+  actor: Actor,
+  ownerId: string,
+  fieldKey: string,
+): boolean {
+  const field = byKey.get(fieldKey);
+  if (actor.id === ownerId || actor.role === 'hr') return true;
+  return !!field && field.sensitive === 'financial' && actor.role === 'finance';
 }
 
 function mergeValues(base: FormValues, patch: FormValues): FormValues {
@@ -273,6 +284,71 @@ export async function saveProfileValues(
   if (!reason.trim() || reason.length > 1000)
     throw fault(400, 'REASON_REQUIRED', 'أدخل سببًا للتعديل.');
   const validated = validateValues(employeeFields, values, { partial: true });
+  const before = await getProfileValues(tx, employeeId);
+  const bankKeys = [
+    'bankCountry',
+    'bankAccountName',
+    'accountNumber',
+    'accountType',
+    'currency',
+    'bankName',
+    'iban',
+    'swiftCode',
+    'bankBranch',
+  ];
+  const bankChanged = bankKeys.some(
+    (key) =>
+      key in validated &&
+      JSON.stringify(validated[key] ?? null) !== JSON.stringify(before[key] ?? null),
+  );
+  if (bankChanged) {
+    validated.bankVerificationStatus = 'unverified';
+    validated.bankVerificationSource = null;
+    validated.bankVerifiedAt = null;
+  }
+  const insuranceKeys = [
+    'insuranceRegistrationStatus',
+    'insuranceStartDate',
+    'employeeContributionPercent',
+    'employerContributionPercent',
+    'insuranceCategory',
+    'insuredWage',
+    'insuranceNumber',
+  ];
+  if (
+    insuranceKeys.some(
+      (key) =>
+        key in validated &&
+        JSON.stringify(validated[key] ?? null) !== JSON.stringify(before[key] ?? null),
+    )
+  ) {
+    validated.insuranceVerificationStatus = 'unverified';
+    if (!('insuranceSource' in validated)) validated.insuranceSource = null;
+    if (!('insuranceEffectiveDate' in validated)) validated.insuranceEffectiveDate = null;
+  }
+  const leaveEntitlementKeys = ['annualLeaveEntitlement'];
+  if (
+    leaveEntitlementKeys.some(
+      (key) =>
+        key in validated &&
+        JSON.stringify(validated[key] ?? null) !== JSON.stringify(before[key] ?? null),
+    )
+  ) {
+    validated.annualLeaveVerificationStatus = 'unverified';
+    if (!('annualLeaveSource' in validated)) validated.annualLeaveSource = null;
+    if (!('annualLeaveEffectiveDate' in validated)) validated.annualLeaveEffectiveDate = null;
+  }
+  const salaryKeys = ['basicSalary', 'housingAllowance', 'transportAllowance', 'otherAllowance'];
+  if (
+    salaryKeys.some(
+      (key) =>
+        key in validated &&
+        JSON.stringify(validated[key] ?? null) !== JSON.stringify(before[key] ?? null),
+    )
+  ) {
+    if (!('salarySource' in validated)) validated.salarySource = null;
+    if (!('salaryEffectiveDate' in validated)) validated.salaryEffectiveDate = null;
+  }
   if ('employmentStatus' in validated && typeof validated.employmentStatus !== 'string')
     throw fault(400, 'INVALID_STATUS', 'اختر حالة وظيفية صالحة.');
   if ('managerId' in validated && validated.managerId) {
@@ -289,8 +365,8 @@ export async function saveProfileValues(
       throw fault(400, 'INVALID_MANAGER', 'المدير المحدد غير موجود.');
     }
   }
-  const before = await getProfileValues(tx, employeeId);
   const after = mergeValues(before, validated);
+  validateProfileRelationships(after);
   const now = new Date().toISOString();
   const assignments: string[] = [];
   const params: unknown[] = [];
@@ -365,6 +441,55 @@ export async function saveProfileValues(
     );
   }
   return employee.record_version + 1;
+}
+
+export function validateProfileRelationships(values: FormValues): void {
+  if (
+    values.bankVerificationStatus === 'verified' &&
+    (!(typeof values.bankVerificationSource === 'string' && values.bankVerificationSource.trim()) ||
+      !(typeof values.bankVerifiedAt === 'string' && values.bankVerifiedAt))
+  ) {
+    throw fault(
+      400,
+      'BANK_VERIFICATION_EVIDENCE_REQUIRED',
+      'يتطلب توثيق الحساب مصدرًا وتاريخ تحقق مسجلين.',
+    );
+  }
+  if (
+    values.insuranceVerificationStatus === 'verified' &&
+    (!(typeof values.insuranceSource === 'string' && values.insuranceSource.trim()) ||
+      !(typeof values.insuranceEffectiveDate === 'string' && values.insuranceEffectiveDate))
+  )
+    throw fault(
+      400,
+      'INSURANCE_VERIFICATION_EVIDENCE_REQUIRED',
+      'يتطلب توثيق بيانات التأمينات مصدرًا وتاريخ سريان.',
+    );
+  if (
+    values.annualLeaveVerificationStatus === 'verified' &&
+    (!(typeof values.annualLeaveSource === 'string' && values.annualLeaveSource.trim()) ||
+      !(typeof values.annualLeaveEffectiveDate === 'string' && values.annualLeaveEffectiveDate))
+  )
+    throw fault(
+      400,
+      'LEAVE_VERIFICATION_EVIDENCE_REQUIRED',
+      'يتطلب توثيق الاستحقاق مصدرًا وتاريخ سريان.',
+    );
+  if (
+    typeof values.salaryEffectiveDate === 'string' &&
+    values.salaryEffectiveDate > todayInRiyadh()
+  )
+    throw fault(
+      400,
+      'FUTURE_SALARY_DATE',
+      'تاريخ سريان الراتب المسجل لا يمكن أن يكون في المستقبل.',
+    );
+  if (
+    typeof values.medicalStartDate === 'string' &&
+    typeof values.medicalEndDate === 'string' &&
+    values.medicalEndDate < values.medicalStartDate
+  )
+    throw fault(400, 'INVALID_MEDICAL_DATES', 'نهاية التغطية الطبية تسبق بدايتها.');
 }
 
 export async function appendEvent(
@@ -570,6 +695,14 @@ export async function getEmployeeFile(
   };
   const allValues = { ...baseValues, ...(await getProfileValues(db, employeeId)) } as FormValues;
   const values = filterProfileValues(actor, employeeId, allValues);
+  const hasValue = (key: string) => {
+    const value = values[key];
+    if (value === undefined || value === null || value === '') return false;
+    if (typeof value === 'string' && /^غير محدد$/u.test(value.trim())) return false;
+    if (key === 'email' && typeof value === 'string' && value.endsWith('@pending.invalid'))
+      return false;
+    return true;
+  };
   const periods = await db.read<{
     id: string;
     start_date: string;
@@ -719,12 +852,369 @@ export async function getEmployeeFile(
       )[0]?.id ?? null,
   };
   const required = employeeFields.filter((field) => field.required);
-  const missing = required
+  const missing = required.filter((field) => !hasValue(field.key)).map((field) => field.key);
+  const visibleFieldKeys = employeeFields
     .filter(
       (field) =>
-        values[field.key] === undefined || values[field.key] === null || values[field.key] === '',
+        actor.id === employeeId ||
+        actor.role === 'hr' ||
+        (!field.sensitive && actor.role !== 'finance') ||
+        (field.sensitive === 'financial' && actor.role === 'finance'),
     )
     .map((field) => field.key);
+  const sectionReadiness: EmployeeFile['sectionReadiness'] = Object.create(null);
+  const coreBySection: Record<string, string[]> = {
+    'البيانات الأساسية': ['name', 'employeeNumber'],
+    التواصل: ['email'],
+    العمل: ['department', 'title', 'joinDate', 'location'],
+    العقد: ['contractType', 'contractStart'],
+  };
+  for (const [group, keys] of Object.entries(coreBySection)) {
+    const missingFields = keys.filter((key) => visibleFieldKeys.includes(key) && !hasValue(key));
+    sectionReadiness[group] = {
+      completed: keys.length - missingFields.length,
+      total: keys.length,
+      missing: missingFields,
+      status: missingFields.length ? 'incomplete' : 'complete',
+    };
+  }
+  const historyRows = await db.read<any>(
+    'SELECT id,field_key,old_value_ciphertext,new_value_ciphertext,effective_at,reason_ciphertext,actor_id,created_at FROM employee_profile_history WHERE employee_id=? ORDER BY effective_at DESC,created_at DESC LIMIT 200',
+    [employeeId],
+  );
+  const fieldHistory = await Promise.all(
+    historyRows.flatMap((entry) => {
+      const allowed = mayReadProfileHistoryField(actor, employeeId, entry.field_key);
+      if (!allowed) return [];
+      return [
+        (async () => {
+          const actorRow = await readEmployee(db, entry.actor_id);
+          let oldValue: FormValues[string] | null = null;
+          let newValue: FormValues[string] | null = null;
+          let reason: string | null = null;
+          try {
+            if (entry.old_value_ciphertext)
+              oldValue = JSON.parse(
+                decryptSensitive(entry.old_value_ciphertext, `employee-history:${entry.id}:old`),
+              );
+            if (entry.new_value_ciphertext)
+              newValue = JSON.parse(
+                decryptSensitive(entry.new_value_ciphertext, `employee-history:${entry.id}:new`),
+              );
+            if (entry.reason_ciphertext && (actor.id === employeeId || actor.role === 'hr'))
+              reason = decryptSensitive(
+                entry.reason_ciphertext,
+                `employee-history:${entry.id}:reason`,
+              );
+          } catch {
+            /* Fail closed: history remains useful without exposing undeciphered data. */
+          }
+          return {
+            id: entry.id,
+            fieldKey: entry.field_key,
+            oldValue,
+            newValue,
+            effectiveAt: entry.effective_at,
+            reason,
+            actorId: entry.actor_id,
+            actorName: actorRow?.name ?? 'مستخدم',
+            createdAt: entry.created_at,
+          };
+        })(),
+      ];
+    }),
+  );
+  const ledger = await db.read<{
+    id: number;
+    kind: string;
+    days: number;
+    created_at: string;
+    leave_id: string | null;
+    actor_id: string | null;
+  }>(
+    'SELECT id,kind,days,created_at,leave_id,actor_id FROM leave_ledger WHERE employee_id=? ORDER BY created_at,id',
+    [employeeId],
+  );
+  const adjustmentRows = await db.read<{
+    request_id: string;
+    effective_at: string;
+    ledger_id: number | null;
+    source_ciphertext: string | null;
+  }>(
+    'SELECT request_id,effective_at,ledger_id,source_ciphertext FROM leave_balance_adjustments WHERE employee_id=?',
+    [employeeId],
+  );
+  const openingRows = await db.read<{
+    request_id: string;
+    days: number;
+    effective_at: string;
+    ledger_id: number | null;
+    source_ciphertext: string;
+    created_at: string;
+  }>(
+    'SELECT request_id,days,effective_at,ledger_id,source_ciphertext,created_at FROM leave_balance_openings WHERE employee_id=?',
+    [employeeId],
+  );
+  const adjustmentByLedger = new Map(
+    adjustmentRows
+      .filter((row) => row.ledger_id !== null)
+      .map((row) => [Number(row.ledger_id), row]),
+  );
+  const allocations = ledger
+    .filter((row) => row.kind === 'allocation')
+    .reduce((sum, row) => sum + Number(row.days), 0);
+  const reserves = ledger
+    .filter((row) => row.kind === 'reserve')
+    .reduce((sum, row) => sum + Number(row.days), 0);
+  const releases = ledger
+    .filter((row) => row.kind === 'release')
+    .reduce((sum, row) => sum + Number(row.days), 0);
+  const consumed = ledger
+    .filter((row) => row.kind === 'consume')
+    .reduce((sum, row) => sum + Number(row.days), 0);
+  const policyRows = await db.read<{ approval_status: string }>(
+    "SELECT approval_status FROM policy_versions WHERE policy_key='annual-leave' AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) ORDER BY effective_from DESC LIMIT 1",
+    [todayInRiyadh(), todayInRiyadh()],
+  );
+  const policyApproved = policyRows[0]?.approval_status === 'approved';
+  const balanceKnown = allocations !== 0 || ledger.some((row) => row.kind === 'allocation');
+  const setReadiness = (
+    name: string,
+    keys: string[],
+    statusOverride?: EmployeeFile['sectionReadiness'][string]['status'],
+  ) => {
+    const visible = keys.filter((key) => visibleFieldKeys.includes(key));
+    const present = visible.filter(hasValue);
+    const missingFields = visible.filter((key) => !hasValue(key));
+    const status = statusOverride ?? (missingFields.length ? 'incomplete' : 'complete');
+    sectionReadiness[name] = {
+      completed: present.length,
+      total: visible.length,
+      missing: missingFields,
+      status,
+    };
+  };
+  const bankKeys = [
+    'bankAccountName',
+    'bankName',
+    'accountNumber',
+    'iban',
+    'swiftCode',
+    'bankBranch',
+    'bankCountry',
+    'accountType',
+    'currency',
+  ];
+  const bankPopulated = bankKeys.some(hasValue);
+  setReadiness(
+    'البنك',
+    bankKeys,
+    values.bankVerificationStatus === 'not_applicable'
+      ? 'not_applicable'
+      : bankPopulated &&
+          values.bankVerificationStatus === 'verified' &&
+          hasValue('bankVerificationSource') &&
+          hasValue('bankVerifiedAt')
+        ? 'complete'
+        : bankPopulated
+          ? 'unverified'
+          : 'incomplete',
+  );
+  const salaryKeys = [
+    'basicSalary',
+    'housingAllowance',
+    'transportAllowance',
+    'otherAllowance',
+    'wagesProtectionAmount',
+  ];
+  const salaryPopulated = salaryKeys.some(hasValue);
+  setReadiness(
+    'المالية',
+    [
+      ...salaryKeys,
+      'salarySource',
+      'salaryEffectiveDate',
+      'wagesProtectionSource',
+      'wagesProtectionDate',
+    ],
+    'incomplete',
+  );
+  if (
+    salaryPopulated &&
+    hasValue('salarySource') &&
+    hasValue('salaryEffectiveDate') &&
+    (!hasValue('wagesProtectionAmount') ||
+      (hasValue('wagesProtectionSource') && hasValue('wagesProtectionDate')))
+  )
+    sectionReadiness['المالية'].status = 'complete';
+  const insuranceKeys = [
+    'insuranceNumber',
+    'insuredWage',
+    'insuranceRegistrationStatus',
+    'insuranceStartDate',
+    'employeeContributionPercent',
+    'employerContributionPercent',
+  ];
+  const insurancePopulated = insuranceKeys.some(hasValue);
+  setReadiness(
+    'التأمينات',
+    [...insuranceKeys, 'insuranceSource', 'insuranceEffectiveDate'],
+    values.insuranceRegistrationStatus === 'not_applicable'
+      ? 'not_applicable'
+      : insurancePopulated
+        ? values.insuranceVerificationStatus === 'verified' &&
+          hasValue('insuranceSource') &&
+          hasValue('insuranceEffectiveDate')
+          ? 'complete'
+          : 'unverified'
+        : 'incomplete',
+  );
+  const medicalKeys = [
+    'medicalCoverageStatus',
+    'medicalProvider',
+    'medicalPolicyNumber',
+    'medicalMemberNumber',
+    'medicalStartDate',
+    'medicalEndDate',
+  ];
+  const medicalPopulated = medicalKeys.some(hasValue);
+  setReadiness(
+    'التأمين الطبي',
+    medicalKeys,
+    values.medicalCoverageStatus === 'not_covered'
+      ? 'not_applicable'
+      : values.medicalCoverageStatus === 'covered' &&
+          hasValue('medicalProvider') &&
+          (hasValue('medicalPolicyNumber') || hasValue('medicalMemberNumber')) &&
+          hasValue('medicalStartDate')
+        ? 'complete'
+        : medicalPopulated
+          ? 'unverified'
+          : 'incomplete',
+  );
+  setReadiness(
+    'الإجازات',
+    ['annualLeaveEntitlement', 'annualLeaveSource', 'annualLeaveEffectiveDate'],
+    values.annualLeaveVerificationStatus === 'not_applicable'
+      ? 'not_applicable'
+      : !hasValue('annualLeaveEntitlement')
+        ? 'incomplete'
+        : values.annualLeaveVerificationStatus === 'verified' &&
+            hasValue('annualLeaveSource') &&
+            hasValue('annualLeaveEffectiveDate')
+          ? 'complete'
+          : 'unverified',
+  );
+  const docReadiness = (category: string) =>
+    documents.some(
+      (doc) =>
+        doc.category === category &&
+        doc.state === 'active' &&
+        (!doc.expiresAt || doc.expiresAt >= todayInRiyadh()),
+    );
+  const bankDocumentReady = docReadiness('bank_letter');
+  const insuranceDocumentReady = docReadiness('insurance');
+  const medicalDocumentReady = docReadiness('medical_insurance');
+  sectionReadiness['مستند البنك'] = {
+    completed: bankDocumentReady ? 1 : 0,
+    total: 1,
+    missing: bankDocumentReady ? [] : ['bank_letter'],
+    status: bankDocumentReady ? 'complete' : 'incomplete',
+  };
+  sectionReadiness['مستند التأمينات'] = {
+    completed: insuranceDocumentReady ? 1 : 0,
+    total: 1,
+    missing: insuranceDocumentReady ? [] : ['insurance'],
+    status: insuranceDocumentReady ? 'complete' : 'incomplete',
+  };
+  sectionReadiness['مستند التأمين الطبي'] = {
+    completed: medicalDocumentReady ? 1 : 0,
+    total: 1,
+    missing: medicalDocumentReady ? [] : ['medical_insurance'],
+    status: medicalDocumentReady ? 'complete' : 'incomplete',
+  };
+  const contractDocumentReady = documents.some(
+    (doc) =>
+      ['contract', 'amendment'].includes(doc.category) &&
+      doc.state === 'active' &&
+      (!doc.expiresAt || doc.expiresAt >= todayInRiyadh()),
+  );
+  sectionReadiness['مستند العقد'] = {
+    completed: contractDocumentReady ? 1 : 0,
+    total: 1,
+    missing: contractDocumentReady ? [] : ['contract'],
+    status: contractDocumentReady ? 'complete' : 'incomplete',
+  };
+  const openingRow = openingRows[0];
+  const legacyOpening = ledger
+    .filter((row) => row.kind === 'allocation' && !row.actor_id)
+    .reduce((sum, row) => sum + Number(row.days), 0);
+  const openingBalance = openingRow
+    ? Number(openingRow.days)
+    : legacyOpening > 0
+      ? legacyOpening
+      : null;
+  let openingSource = 'رصيد افتتاحي معتمد';
+  if (openingRow && (actor.id === employeeId || actor.role === 'hr')) {
+    try {
+      openingSource = decryptSensitive(
+        openingRow.source_ciphertext,
+        `leave-opening:${openingRow.request_id}:source`,
+      );
+    } catch {
+      openingSource = 'مصدر محمي';
+    }
+  }
+  const leaveMovements = ledger.map((row) => {
+    const adjustment = adjustmentByLedger.get(Number(row.id));
+    let movementSource =
+      row.id === openingRow?.ledger_id
+        ? openingSource
+        : adjustment
+          ? 'تسوية رصيد معتمدة'
+          : row.leave_id
+            ? `طلب ${row.leave_id}`
+            : row.actor_id
+              ? 'تسجيل إداري'
+              : 'سجل الرصيد';
+    if (adjustment?.source_ciphertext && (actor.id === employeeId || actor.role === 'hr')) {
+      try {
+        movementSource = decryptSensitive(
+          adjustment.source_ciphertext,
+          `leave-adjustment:${adjustment.request_id}:source`,
+        );
+      } catch {
+        movementSource = 'مصدر محمي';
+      }
+    }
+    return {
+      id: String(row.id),
+      kind: row.kind,
+      days: Number(row.days),
+      createdAt: row.created_at,
+      effectiveAt:
+        row.id === openingRow?.ledger_id
+          ? openingRow.effective_at
+          : (adjustment?.effective_at ?? row.created_at.slice(0, 10)),
+      source: movementSource,
+    };
+  });
+  if (openingRow && Number(openingRow.days) === 0)
+    leaveMovements.push({
+      id: `opening:${employeeId}`,
+      kind: 'opening',
+      days: 0,
+      createdAt: openingRow.created_at,
+      effectiveAt: openingRow.effective_at,
+      source: openingSource,
+    });
+  const closedRows =
+    actor.id === employeeId || ['hr', 'finance', 'approver', 'auditor'].includes(actor.role)
+      ? await db.read<{ id: string; period: string; closed_at: string | null }>(
+          "SELECT r.id,r.period,r.closed_at FROM payroll_runs r JOIN payroll_lines l ON l.run_id=r.id WHERE l.employee_id=? AND r.state='closed' GROUP BY r.id ORDER BY r.period DESC LIMIT 60",
+          [employeeId],
+        )
+      : [];
   return {
     employee: employeeValue,
     version: employee.record_version,
@@ -740,6 +1230,25 @@ export async function getEmployeeFile(
     requests,
     documents,
     completeness: { completed: required.length - missing.length, total: required.length, missing },
+    visibleFieldKeys,
     history,
+    sectionReadiness,
+    fieldHistory,
+    leaveSummary: {
+      openingBalance,
+      allocated: balanceKnown || !!openingRow ? allocations : null,
+      available: balanceKnown || !!openingRow ? allocations - reserves - releases + consumed : null,
+      taken: Math.abs(consumed),
+      adjustments: adjustmentRows.length + (openingRow ? 1 : 0),
+      reserved: Math.max(0, reserves + releases),
+      policyApproved,
+      balanceKnown: balanceKnown || !!openingRow,
+    },
+    leaveMovements,
+    closedPayslips: closedRows.map((row) => ({
+      runId: row.id,
+      period: row.period,
+      closedAt: row.closed_at,
+    })),
   };
 }

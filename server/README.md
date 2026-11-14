@@ -13,7 +13,7 @@ Sensitive profile values, medical/request fields, file contents, history values/
 
 ## Schema upgrades
 
-Seven numbered migrations exist for each database dialect. Versions are recorded in `schema_migrations`; each migration and its version entry commit together. SQLite uses `BEGIN IMMEDIATE`, PostgreSQL uses transactions and an advisory lock.
+Eight numbered migrations exist for each database dialect. Versions are recorded in `schema_migrations`; each migration and its version entry commit together. SQLite uses `BEGIN IMMEDIATE`, PostgreSQL uses transactions and an advisory lock.
 
 1. Core employees, leave requests, decisions, append-only ledger and audit.
 2. Synthetic policy versions, schedules and employment periods.
@@ -24,7 +24,9 @@ Seven numbered migrations exist for each database dialect. Versions are recorded
 
 7. Pin new payroll runs to profile-components policy version 2; retain and retire only the intermediate local flat-salary version 1 without rewriting its values. Reject a policy whose calculator does not match the implemented synthetic engine.
 
-Seeds insert missing reference profiles/personas only; reopening never resets existing requests, ledgers, profiles, decisions or audit. All fixture values are fictional. No production data migration or cloud database provisioning has occurred.
+8. Append-only approved leave opening balances, including explicit zero, and exact ledger links for new balance corrections. Unique employee/request constraints prevent repeated opening allocations.
+
+Seeds insert missing reference profiles/personas only; reopening never resets existing requests, ledgers, profiles, decisions or audit. All fixture values are fictional. Private deployments bypass synthetic seeding. Use the separate private operation guides for authorized real-data import; never seed synthetic policies or balances into the private database.
 
 Before upgrading a persistent local preview, run `npm run db:backup`. For intermediate development databases that already contain payroll runs, check duplicate primary periods first:
 
@@ -35,7 +37,7 @@ WHERE correction_of IS NULL AND state <> 'rejected'
 GROUP BY period HAVING count(*) > 1;
 ```
 
-If any appear, stop and review the conflicting synthetic runs before applying migration 006. Never delete closed runs or rewrite their history to force the index. A failed migration rolls back and preserves the original database, but prevents startup until resolved. The local database used for this delivery passed all seven migrations after backup.
+If any appear, stop and review the conflicting synthetic runs before applying migration 006. Never delete closed runs or rewrite their history to force the index. A failed migration rolls back and preserves the original database, but prevents startup until resolved. Migration 008 is additive; it does not create employee balances. A private backup must precede persistent upgrades. Do not roll back to a server catalog that lacks sensitivity classifications for the new profile fields.
 
 ## Backup and restore
 

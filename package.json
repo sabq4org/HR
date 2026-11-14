@@ -20,6 +20,7 @@
     "preview": "NODE_ENV=production LOCAL_DEMO=true tsx server/index.ts",
     "private": "npm run build && NODE_ENV=production LOCAL_DEMO=true HR_DATA_MODE=private tsx server/index.ts",
     "private:import": "tsx scripts/private-import.ts",
+    "private:supplement": "tsx scripts/profile-supplement.ts",
     "private:access": "tsx scripts/private-access.ts",
     "test": "node --import tsx --test tests/domain/*.test.ts",
     "test:e2e": "playwright test",

@@ -886,11 +886,14 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
   const now = at();
   if (row.kind === 'leave_adjustment') {
     const days = Number(values.days);
+    const adjustmentType =
+      values.adjustmentType === 'opening_balance' ? 'opening_balance' : 'correction';
+    const adjustmentSource = typeof values.source === 'string' ? values.source.trim() : '';
     const effectiveAt =
       typeof values.effectiveDate === 'string' ? values.effectiveDate : now.slice(0, 10);
     if (
       !Number.isInteger(days) ||
-      days === 0 ||
+      (adjustmentType !== 'opening_balance' && days === 0) ||
       Math.abs(days) > 365 ||
       !validIsoDate(effectiveAt) ||
       effectiveAt > todayInRiyadh()
@@ -900,6 +903,61 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         'INVALID_ADJUSTMENT',
         'تسوية الرصيد يجب أن تكون عدد أيامًا صالحًا وسارية حتى اليوم.',
       );
+    if (
+      adjustmentType === 'opening_balance' &&
+      (days < 0 || !adjustmentSource || adjustmentSource.length > 500)
+    )
+      throw fault(
+        400,
+        'INVALID_OPENING_BALANCE',
+        'الرصيد الافتتاحي يتطلب رصيدًا غير سالب ومصدرًا موثقًا.',
+      );
+    if (adjustmentType === 'opening_balance') {
+      const existingOpening = await tx.read(
+        'SELECT id FROM leave_balance_openings WHERE employee_id=?',
+        [row.employee_id],
+      );
+      const anyLedgerMovement = await tx.read(
+        'SELECT id FROM leave_ledger WHERE employee_id=? LIMIT 1',
+        [row.employee_id],
+      );
+      if (existingOpening.length || anyLedgerMovement.length)
+        throw fault(
+          409,
+          'OPENING_BALANCE_ALREADY_EXISTS',
+          'يوجد رصيد أو حركة سابقة؛ استخدم طلب تسوية رصيد مستقل.',
+        );
+      let ledgerId: number | null = null;
+      if (days > 0) {
+        await tx.execute(
+          'INSERT INTO leave_ledger(employee_id,kind,days,created_at,actor_id) VALUES(?,?,?,?,?)',
+          [row.employee_id, 'allocation', days, now, actor.id],
+        );
+        ledgerId = Number(
+          (
+            await tx.read<{ id: number }>(
+              'SELECT id FROM leave_ledger WHERE employee_id=? ORDER BY id DESC LIMIT 1',
+              [row.employee_id],
+            )
+          )[0]?.id,
+        );
+      }
+      await tx.execute(
+        'INSERT INTO leave_balance_openings(id,employee_id,request_id,days,effective_at,ledger_id,source_ciphertext,actor_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+        [
+          newId(),
+          row.employee_id,
+          row.id,
+          days,
+          effectiveAt,
+          ledgerId,
+          encryptSensitive(adjustmentSource, `leave-opening:${row.id}:source`),
+          actor.id,
+          now,
+        ],
+      );
+      return;
+    }
     if (days < 0) {
       const sums = await tx.read<any>(
         'SELECT kind,SUM(days) days FROM leave_ledger WHERE employee_id=? GROUP BY kind',
@@ -912,7 +970,19 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         throw fault(409, 'INSUFFICIENT_BALANCE', 'لا يمكن خفض الرصيد إلى أقل من صفر.');
     }
     await tx.execute(
-      'INSERT INTO leave_balance_adjustments(id,employee_id,request_id,days,effective_at,reason,actor_id,created_at) VALUES(?,?,?,?,?,?,?,?)',
+      'INSERT INTO leave_ledger(employee_id,kind,days,created_at,actor_id) VALUES(?,?,?,?,?)',
+      [row.employee_id, days > 0 ? 'allocation' : 'consume', days, now, actor.id],
+    );
+    const ledgerId = Number(
+      (
+        await tx.read<{ id: number }>(
+          'SELECT id FROM leave_ledger WHERE employee_id=? ORDER BY id DESC LIMIT 1',
+          [row.employee_id],
+        )
+      )[0]?.id,
+    );
+    await tx.execute(
+      'INSERT INTO leave_balance_adjustments(id,employee_id,request_id,days,effective_at,reason,actor_id,created_at,ledger_id,source_ciphertext) VALUES(?,?,?,?,?,?,?,?,?,?)',
       [
         newId(),
         row.employee_id,
@@ -925,11 +995,11 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         ),
         actor.id,
         now,
+        ledgerId,
+        adjustmentSource
+          ? encryptSensitive(adjustmentSource, `leave-adjustment:${row.id}:source`)
+          : null,
       ],
-    );
-    await tx.execute(
-      'INSERT INTO leave_ledger(employee_id,kind,days,created_at,actor_id) VALUES(?,?,?,?,?)',
-      [row.employee_id, days > 0 ? 'allocation' : 'consume', days, now, actor.id],
     );
   }
   if (['data_change', 'bank_change', 'transfer', 'contract', 'separation'].includes(row.kind)) {

@@ -708,6 +708,429 @@
   gap: 2px;
   text-align: center;
 }
+.profile-readiness {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px 18px;
+  margin: 12px 0 20px;
+  padding: 15px 18px;
+  border: 1px solid var(--adm-line, #e5ebf1);
+  border-radius: 10px;
+  background: #f9fbfc;
+}
+.profile-readiness > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+}
+.profile-readiness span {
+  color: #52677e;
+  font-size: 12px;
+}
+.profile-readiness strong {
+  color: #1264a3;
+  font-size: 12px;
+}
+.profile-readiness small {
+  grid-column: 1 / -1;
+  color: #63778b;
+  font-size: 10px;
+}
+.profile-progress {
+  grid-column: 1 / -1;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #e3eaf0;
+}
+.profile-progress i {
+  display: block;
+  height: 100%;
+  background: #16826b;
+}
+.profile-section {
+  min-width: 0;
+}
+.profile-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.profile-section-heading h3 {
+  margin: 0 0 3px;
+}
+.profile-section-heading p {
+  margin: 0;
+  color: #63778b;
+  font-size: 12px;
+}
+.profile-section-heading .adm-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.profile-unavailable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #63778b;
+  font-size: 13px;
+}
+.profile-total {
+  display: grid;
+  gap: 4px;
+  margin-top: 18px;
+  padding: 15px;
+  border-inline-start: 3px solid #16826b;
+  background: #f1f7f5;
+}
+.profile-total span,
+.profile-total small {
+  color: #52677e;
+  font-size: 12px;
+}
+.profile-total strong {
+  color: #183c35;
+  font-size: 20px;
+}
+.profile-payslips {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding-inline-start: 18px;
+  font-size: 12px;
+}
+.profile-payslips a {
+  color: #1264a3;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.profile-policy-state {
+  color: #52677e;
+  font-size: 12px;
+}
+.profile-leave-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0 24px;
+}
+.profile-leave-stats > div {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid #e5ebf1;
+  border-radius: 8px;
+}
+.profile-leave-details {
+  margin-top: 8px;
+}
+.profile-leave-stats span,
+.profile-leave-stats small {
+  color: #52677e;
+  font-size: 11px;
+}
+.profile-leave-stats strong {
+  font-size: 18px;
+}
+.profile-subheading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 16px 0 8px;
+  font-size: 15px;
+}
+.profile-movements {
+  border-top: 1px solid #e5ebf1;
+}
+.profile-movements > div {
+  display: grid;
+  grid-template-columns: 100px minmax(90px, 1fr) minmax(110px, auto) minmax(100px, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 11px 4px;
+  border-bottom: 1px solid #edf1f5;
+  font-size: 12px;
+}
+.profile-movements small {
+  color: #63778b;
+  overflow-wrap: anywhere;
+}
+.profile-movement-days {
+  font-weight: 700;
+  direction: ltr;
+  text-align: right;
+}
+.profile-show-more {
+  margin-top: 12px;
+  color: #1264a3;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.employee-report-page {
+  min-height: 100vh;
+  padding: 24px;
+  background: #edf1f4;
+  color: #173149;
+}
+.employee-report-controls {
+  display: flex;
+  justify-content: space-between;
+  max-width: 850px;
+  margin: 0 auto 16px;
+}
+.employee-report {
+  max-width: 850px;
+  margin: 0 auto;
+  padding: 42px 48px;
+  background: white;
+  box-shadow: 0 4px 20px #132d4612;
+  font-family: 'IBM Plex Sans Arabic', sans-serif;
+}
+.employee-report-brand {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding-bottom: 18px;
+  border-bottom: 2px solid #1264a3;
+}
+.employee-report-brand img {
+  width: 74px;
+  height: 64px;
+  object-fit: contain;
+}
+.employee-report-brand h1 {
+  margin: 0;
+  font-family: 'Year of Handicrafts', 'IBM Plex Sans Arabic', sans-serif;
+  font-size: 25px;
+}
+.employee-report-brand p {
+  margin: 4px 0 0;
+  color: #52677e;
+  font-size: 11px;
+}
+.employee-report-identity {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: center;
+  padding: 20px 0;
+  border-bottom: 1px solid #dfe6ec;
+}
+.employee-report-identity h2 {
+  margin: 0 0 4px;
+  font-family: 'Year of Handicrafts', 'IBM Plex Sans Arabic', sans-serif;
+  font-size: 23px;
+}
+.employee-report-identity p {
+  margin: 0;
+  color: #52677e;
+  font-size: 12px;
+}
+.employee-report-identity dl {
+  display: flex;
+  gap: 22px;
+}
+.employee-report-identity dt,
+.employee-report-section dt {
+  color: #52677e;
+  font-size: 10px;
+}
+.employee-report-identity dd,
+.employee-report-section dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.employee-report-section {
+  margin: 20px 0 0;
+  break-inside: auto;
+  page-break-inside: auto;
+}
+.employee-report-section h3 {
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #dfe6ec;
+  font-family: 'Year of Handicrafts', 'IBM Plex Sans Arabic', sans-serif;
+  font-size: 17px;
+  break-after: avoid;
+  page-break-after: avoid;
+}
+.employee-report-fields {
+  table-layout: fixed;
+}
+.employee-report-fields td {
+  width: 50%;
+  vertical-align: top;
+}
+.employee-report-fields td + td {
+  padding-inline-start: 20px;
+}
+.employee-report-fields dl {
+  margin: 0;
+}
+.employee-report-section table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.employee-report-section th,
+.employee-report-section td {
+  padding: 8px;
+  border-bottom: 1px solid #e7edf1;
+  text-align: right;
+}
+.employee-report-section th {
+  color: #52677e;
+  font-weight: 600;
+}
+.employee-report footer {
+  margin-top: 28px;
+  padding-top: 9px;
+  border-top: 1px solid #dfe6ec;
+  color: #63778b;
+  font-size: 10px;
+}
+.employee-report-signature {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-top: 30px;
+  break-inside: avoid;
+}
+.employee-report-signature > div {
+  display: grid;
+  gap: 24px;
+  color: #52677e;
+  font-size: 11px;
+}
+.employee-report-signature i {
+  display: block;
+  border-bottom: 1px solid #aab8c3;
+}
+@media (max-width: 600px) {
+  .adm-profile {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .adm-completion {
+    margin-inline-start: 0;
+  }
+  .profile-leave-stats {
+    grid-template-columns: 1fr;
+  }
+  .profile-movements > div {
+    grid-template-columns: 78px minmax(0, 1fr);
+    gap: 6px 10px;
+  }
+  .profile-movements > div > :nth-child(3),
+  .profile-movements > div > :nth-child(4) {
+    grid-column: 2;
+  }
+  .employee-report-page {
+    padding: 10px;
+  }
+  .employee-report {
+    padding: 22px 16px;
+  }
+  .employee-report-identity {
+    display: block;
+  }
+  .employee-report-identity dl {
+    margin-top: 14px;
+  }
+  .employee-report-fields td {
+    display: block;
+    width: 100%;
+  }
+  .employee-report-fields td + td {
+    padding-inline-start: 8px;
+  }
+  .employee-report-section {
+    overflow-wrap: anywhere;
+  }
+}
+@media print {
+  @page {
+    size: A4;
+    margin: 15mm 14mm 17mm;
+  }
+  body:has(.employee-report-page) {
+    background: #fff !important;
+    color: #173149 !important;
+  }
+  html:has(.employee-report-page),
+  #root:has(.employee-report-page),
+  .app-shell:has(.employee-report-page),
+  .main-shell:has(.employee-report-page),
+  .main-content:has(.employee-report-page) {
+    min-height: 0 !important;
+    height: auto !important;
+    background: #fff !important;
+  }
+  body:has(.employee-report-page) #root > :not(.app-shell) {
+    display: none !important;
+  }
+  body:has(.employee-report-page) .app-shell {
+    display: block !important;
+    min-height: 0 !important;
+  }
+  body:has(.employee-report-page) .app-shell > :not(.main-shell),
+  body:has(.employee-report-page) .main-shell > :not(.main-content),
+  body:has(.employee-report-page) .main-content > :not(.employee-report-page) {
+    display: none !important;
+  }
+  body:has(.employee-report-page) .main-shell,
+  body:has(.employee-report-page) .main-content {
+    display: block !important;
+    width: auto !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .employee-report-page {
+    min-height: 0;
+    height: auto !important;
+    padding: 0;
+    background: #fff !important;
+  }
+  .employee-report-controls {
+    display: none !important;
+  }
+  .employee-report {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+  .employee-report-section table {
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+  .employee-report-fields td {
+    display: table-cell;
+    width: 50%;
+  }
+  .employee-report-section h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  .employee-report-section tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .employee-report-section th,
+  .employee-report-section td {
+    overflow-wrap: anywhere;
+  }
+}
 .adm-doc-count strong {
   font-size: 23px;
   color: var(--adm-blue);

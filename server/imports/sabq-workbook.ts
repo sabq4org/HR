@@ -20,6 +20,183 @@ export type MappedWorkbook = {
   photosFound: number;
 };
 
+export type SupplementRow = {
+  rowNumber: number;
+  /** Present only when the export itself carries a declared immutable source key. */
+  sourceId?: string;
+  values: FormValues;
+  issues: string[];
+};
+export type SupplementWorkbook = {
+  rows: SupplementRow[];
+  mappedColumns: string[];
+  ignoredColumns: string[];
+};
+
+const SUPPLEMENT_COLUMN_MAP: Record<string, string> = {
+  'معرف المصدر': '$sourceId',
+  'رقم المصدر': '$sourceId',
+  'معرف الموظف': '$sourceId',
+  'الرقم الوظيفي': '$sourceId',
+  'Employee ID': '$sourceId',
+  'Source ID': '$sourceId',
+  'الراتب الأساسي': 'basicSalary',
+  'بدل السكن': 'housingAllowance',
+  'بدل النقل': 'transportAllowance',
+  'بدلات ثابتة أخرى': 'otherAllowance',
+  'تاريخ سريان الراتب': 'salaryEffectiveDate',
+  'مصدر بيانات الراتب': 'salarySource',
+  'نوع الموظف': 'relationshipType',
+  نبذة: 'bio',
+  البنك: 'bankName',
+  الآيبان: 'iban',
+  'دولة البنك': 'bankCountry',
+  'رقم الحساب': 'accountNumber',
+  'نوع الحساب': 'accountType',
+  'العملة المفضلة': 'currency',
+  سويفت: 'swiftCode',
+  'فرع البنك': 'bankBranch',
+  'الاسم لدى البنك': 'bankAccountName',
+  'تاريخ تحديث الحساب البنكي': 'bankUpdatedAt',
+  'مصدر التحقق المصرفي': 'bankVerificationSource',
+  'تاريخ التحقق المصرفي': 'bankVerifiedAt',
+  'رقم التأمينات الاجتماعية': 'insuranceNumber',
+  'بداية التأمينات': 'insuranceStartDate',
+  'مصدر بيانات التأمينات': 'insuranceSource',
+  'تاريخ سريان بيانات التأمينات': 'insuranceEffectiveDate',
+  'لديه تأمين طبي': 'medicalCoverageStatus',
+  'شركة التأمين الطبي': 'medicalProvider',
+  'رقم التأمين الطبي': 'medicalPolicyNumber',
+  'أيام الإجازة السنوية': 'annualLeaveEntitlement',
+};
+const SUPPLEMENT_DATE_FIELDS = new Set([
+  'salaryEffectiveDate',
+  'bankUpdatedAt',
+  'bankVerifiedAt',
+  'insuranceStartDate',
+  'insuranceEffectiveDate',
+]);
+const SUPPLEMENT_MONEY_FIELDS = new Set([
+  'basicSalary',
+  'housingAllowance',
+  'transportAllowance',
+  'otherAllowance',
+]);
+
+function parseMoney(value: ExcelJS.CellValue): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : null;
+  const raw = text(value)
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/[٬,]/g, '')
+    .replace(/٫/g, '.')
+    .replace(/\s/g, '');
+  if (!raw) return null;
+  if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
+  const result = Number(raw);
+  return Number.isFinite(result) ? result : null;
+}
+
+function parseCount(value: ExcelJS.CellValue): number | null {
+  if (typeof value === 'number')
+    return Number.isFinite(value) && value >= 0 && Number.isInteger(value * 100) ? value : null;
+  const raw = text(value)
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/٫/g, '.')
+    .trim();
+  if (!raw) return null;
+  if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
+  const result = Number(raw);
+  return Number.isFinite(result) && result >= 0 ? result : null;
+}
+
+function mapRelationship(value: string): string | null {
+  const normalized = value.replace(/\s/g, '').toLowerCase();
+  if (
+    ['موظف', 'موظفة', 'موظفون', 'موظفرسمي', 'موظفةرسمية', 'employee', 'employees'].includes(
+      normalized,
+    )
+  )
+    return 'employee';
+  if (['متعاون', 'متعاونة', 'متعاونون', 'collaborator', 'collaborators'].includes(normalized))
+    return 'collaborator';
+  return null;
+}
+
+function mapAccountType(value: string): string | null {
+  const normalized = value.replace(/\s/g, '').toLowerCase();
+  if (/جاري|current|checking/.test(normalized)) return 'current';
+  if (/ادخار|توفير|savings?/.test(normalized)) return 'savings';
+  if (/أخرى|اخرى|other/.test(normalized)) return 'other';
+  return null;
+}
+
+function mapCoverage(value: string): string | null {
+  const normalized = value.trim().toLowerCase();
+  if (YES.has(normalized)) return 'covered';
+  if (NO.has(normalized)) return 'not_covered';
+  return null;
+}
+
+/** Maps optional profile fields without inferring empty values or printing workbook contents. */
+export async function mapSabqSupplementWorkbook(bytes: Buffer): Promise<SupplementWorkbook> {
+  inspectWorkbookZip(bytes);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) throw new Error('The workbook has no sheets.');
+  const headers = new Map<number, string>();
+  sheet.getRow(1).eachCell((cell, column) => headers.set(column, text(cell.value)));
+  const mappedColumns = [...headers.values()].filter((header) => header in SUPPLEMENT_COLUMN_MAP);
+  const ignoredColumns = [...headers.values()].filter(
+    (header) => header && !(header in SUPPLEMENT_COLUMN_MAP),
+  );
+  const rows: SupplementRow[] = [];
+  for (let r = 2; r <= sheet.rowCount; r++) {
+    const values: FormValues = Object.create(null) as FormValues;
+    const issues: string[] = [];
+    let sourceId: string | undefined;
+    for (const [column, header] of headers) {
+      const field = SUPPLEMENT_COLUMN_MAP[header];
+      if (!field) continue;
+      const cell = sheet.getRow(r).getCell(column).value;
+      const raw = text(cell);
+      if (!raw) continue;
+      if (field === '$sourceId') {
+        sourceId = raw;
+      } else if (SUPPLEMENT_DATE_FIELDS.has(field)) {
+        const date = parseDate(cell);
+        if (date) values[field] = date;
+        else issues.push(`invalid_date:${field}`);
+      } else if (SUPPLEMENT_MONEY_FIELDS.has(field)) {
+        const amount = parseMoney(cell);
+        if (amount !== null) values[field] = amount;
+        else issues.push(`invalid_money:${field}`);
+      } else if (field === 'annualLeaveEntitlement') {
+        const days = parseCount(cell);
+        if (days !== null && days <= 366) values[field] = days;
+        else issues.push(`invalid_number:${field}`);
+      } else if (field === 'relationshipType') {
+        const relationship = mapRelationship(raw);
+        if (relationship) values[field] = relationship;
+        else issues.push(`unknown_relationship:${field}`);
+      } else if (field === 'medicalCoverageStatus') {
+        const coverage = mapCoverage(raw);
+        if (coverage) values[field] = coverage;
+        else issues.push(`unknown_coverage:${field}`);
+      } else if (field === 'accountType') {
+        const accountType = mapAccountType(raw);
+        if (accountType) values[field] = accountType;
+        else issues.push(`unknown_account_type:${field}`);
+      } else {
+        values[field] = raw;
+      }
+    }
+    if (sourceId || Object.keys(values).length || issues.length)
+      rows.push({ rowNumber: r, sourceId, values, issues });
+  }
+  return { rows, mappedColumns, ignoredColumns };
+}
+
 /** Workbook header → employee field key. Columns not listed here are ignored on purpose. */
 export const COLUMN_MAP: Record<string, string> = {
   'اسم الموظف': 'name',

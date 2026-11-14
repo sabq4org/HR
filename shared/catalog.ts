@@ -74,6 +74,14 @@ export const employeeFields: FormField[] = [
     group: 'العمل',
     hint: 'وصف تنظيمي؛ احتساب الإجازة يتبع سياسة الدوام المفعّلة.',
   }),
+  field('relationshipType', 'نوع العلاقة', 'select', {
+    group: 'العمل',
+    options: options([
+      ['employee', 'موظف'],
+      ['collaborator', 'متعاون'],
+    ]),
+  }),
+  field('bio', 'نبذة مهنية', 'textarea', { group: 'العمل' }),
   field('employmentStatus', 'الحالة الوظيفية', 'select', {
     group: 'العمل',
     options: options([
@@ -122,6 +130,11 @@ export const employeeFields: FormField[] = [
   field('housingAllowance', 'بدل السكن', 'money', { group: 'المالية', ...financial, min: 0 }),
   field('transportAllowance', 'بدل النقل', 'money', { group: 'المالية', ...financial, min: 0 }),
   field('otherAllowance', 'بدلات ثابتة أخرى', 'money', { group: 'المالية', ...financial, min: 0 }),
+  field('salaryEffectiveDate', 'تاريخ سريان الراتب المسجل', 'date', {
+    group: 'المالية',
+    ...financial,
+  }),
+  field('salarySource', 'مصدر بيانات الراتب', 'text', { group: 'المالية', ...financial }),
   field('variablePayDescription', 'العمولات والعناصر المتغيرة', 'textarea', {
     group: 'المالية',
     ...financial,
@@ -136,11 +149,53 @@ export const employeeFields: FormField[] = [
       hint: 'تسجيل الاتفاق لا يحسم صحته النظامية أو أثره الحسابي.',
     },
   ),
-  field('bankName', 'البنك', 'text', { group: 'المالية', ...financial }),
+  field('bankName', 'البنك', 'text', { group: 'البنك', ...financial }),
   field('iban', 'الآيبان', 'text', {
-    group: 'المالية',
+    group: 'البنك',
     ...financial,
     hint: 'لا تدخل رقم حساب حقيقي في المعاينة.',
+  }),
+  field('bankCountry', 'دولة البنك', 'text', { group: 'البنك', ...financial }),
+  field('bankAccountName', 'الاسم لدى البنك', 'text', { group: 'البنك', ...financial }),
+  field('swiftCode', 'رمز سويفت', 'text', { group: 'البنك', ...financial }),
+  field('bankBranch', 'فرع البنك', 'text', { group: 'البنك', ...financial }),
+  field('accountNumber', 'رقم الحساب', 'text', { group: 'البنك', ...financial }),
+  field('accountType', 'نوع الحساب', 'select', {
+    group: 'البنك',
+    ...financial,
+    options: options([
+      ['current', 'جاري'],
+      ['savings', 'ادخار'],
+      ['other', 'أخرى'],
+    ]),
+  }),
+  field('currency', 'عملة الحساب', 'text', { group: 'البنك', ...financial }),
+  field('bankUpdatedAt', 'تاريخ آخر تحديث مصرفي', 'date', { group: 'البنك', ...financial }),
+  field('bankVerificationStatus', 'حالة التحقق من الحساب', 'select', {
+    group: 'البنك',
+    ...financial,
+    options: options([
+      ['unverified', 'غير متحقق'],
+      ['pending', 'قيد المراجعة'],
+      ['verified', 'تم التحقق'],
+      ['rejected', 'مرفوض'],
+      ['not_applicable', 'لا ينطبق'],
+    ]),
+  }),
+  field('bankVerificationSource', 'مصدر التحقق المصرفي', 'text', { group: 'البنك', ...financial }),
+  field('bankVerifiedAt', 'تاريخ التحقق المصرفي', 'date', { group: 'البنك', ...financial }),
+  field('wagesProtectionAmount', 'مبلغ حماية الأجور المسجل', 'money', {
+    group: 'المالية',
+    ...financial,
+    min: 0,
+  }),
+  field('wagesProtectionSource', 'مصدر مبلغ حماية الأجور', 'text', {
+    group: 'المالية',
+    ...financial,
+  }),
+  field('wagesProtectionDate', 'تاريخ مبلغ حماية الأجور', 'date', {
+    group: 'المالية',
+    ...financial,
   }),
   field('insuranceNumber', 'رقم اشتراك التأمينات', 'text', { group: 'التأمينات', ...financial }),
   field('insuranceCategory', 'فئة التأمينات', 'select', {
@@ -156,6 +211,98 @@ export const employeeFields: FormField[] = [
     group: 'التأمينات',
     ...financial,
     min: 0,
+  }),
+  field('insuranceRegistrationStatus', 'حالة التسجيل بالتأمينات', 'select', {
+    group: 'التأمينات',
+    ...financial,
+    options: options([
+      ['unregistered', 'غير مسجل'],
+      ['pending', 'قيد الإجراء'],
+      ['registered', 'مسجل حسب السجل'],
+      ['not_applicable', 'لا ينطبق'],
+    ]),
+  }),
+  field('insuranceStartDate', 'تاريخ بدء التسجيل', 'date', { group: 'التأمينات', ...financial }),
+  field('employeeContributionPercent', 'نسبة الموظف المسجلة (%)', 'number', {
+    group: 'التأمينات',
+    ...financial,
+    min: 0,
+    max: 100,
+  }),
+  field('employerContributionPercent', 'نسبة صاحب العمل المسجلة (%)', 'number', {
+    group: 'التأمينات',
+    ...financial,
+    min: 0,
+    max: 100,
+  }),
+  field('insuranceSource', 'مصدر بيانات التأمينات', 'text', { group: 'التأمينات', ...financial }),
+  field('insuranceEffectiveDate', 'تاريخ سريان بيانات التأمينات', 'date', {
+    group: 'التأمينات',
+    ...financial,
+  }),
+  field('insuranceVerificationStatus', 'حالة التحقق من بيانات التأمينات', 'select', {
+    group: 'التأمينات',
+    ...financial,
+    options: options([
+      ['unverified', 'غير متحقق'],
+      ['verified', 'تم التحقق'],
+      ['needs_review', 'تحتاج مراجعة'],
+      ['not_applicable', 'لا ينطبق'],
+    ]),
+  }),
+  field('medicalCoverageStatus', 'حالة التغطية الطبية', 'select', {
+    group: 'التأمين الطبي',
+    sensitive: 'medical',
+    options: options([
+      ['covered', 'مشمول'],
+      ['not_covered', 'غير مشمول'],
+      ['pending', 'قيد الإجراء'],
+      ['unknown', 'غير معروف'],
+    ]),
+  }),
+  field('medicalProvider', 'شركة التأمين الطبي', 'text', {
+    group: 'التأمين الطبي',
+    sensitive: 'medical',
+  }),
+  field('medicalPolicyNumber', 'رقم الوثيقة الطبية', 'text', {
+    group: 'التأمين الطبي',
+    sensitive: 'medical',
+  }),
+  field('medicalMemberNumber', 'رقم العضوية الطبية', 'text', {
+    group: 'التأمين الطبي',
+    sensitive: 'medical',
+  }),
+  field('medicalStartDate', 'بداية التغطية الطبية', 'date', {
+    group: 'التأمين الطبي',
+    sensitive: 'medical',
+  }),
+  field('medicalEndDate', 'نهاية التغطية الطبية', 'date', {
+    group: 'التأمين الطبي',
+    sensitive: 'medical',
+  }),
+  field('annualLeaveEntitlement', 'استحقاق الإجازة السنوية المسجل (أيام)', 'number', {
+    group: 'الإجازات',
+    min: 0,
+    max: 366,
+    sensitive: 'personal',
+  }),
+  field('annualLeaveSource', 'مصدر استحقاق الإجازة', 'text', {
+    group: 'الإجازات',
+    sensitive: 'personal',
+  }),
+  field('annualLeaveEffectiveDate', 'تاريخ سريان الاستحقاق', 'date', {
+    group: 'الإجازات',
+    sensitive: 'personal',
+  }),
+  field('annualLeaveVerificationStatus', 'حالة التحقق من الاستحقاق', 'select', {
+    group: 'الإجازات',
+    sensitive: 'personal',
+    options: options([
+      ['unverified', 'غير متحقق'],
+      ['verified', 'تم التحقق'],
+      ['needs_review', 'تحتاج مراجعة'],
+      ['not_applicable', 'لا ينطبق'],
+    ]),
   }),
   field('sickWindowStart', 'بداية نافذة الإجازة المرضية', 'date', {
     group: 'الإجازات',
@@ -437,6 +584,13 @@ export const formDefinitions: FormDefinition[] = [
     initiators: ['hr'],
     steps: ['approver'],
     fields: [
+      field('adjustmentType', 'نوع التسوية', 'select', {
+        options: options([
+          ['correction', 'تصحيح رصيد'],
+          ['opening_balance', 'رصيد افتتاحي'],
+        ]),
+      }),
+      field('source', 'مصدر الرصيد أو التصحيح', 'text', financial),
       field('days', 'الأيام المضافة أو المستعادة', 'number', { ...required, min: -365, max: 365 }),
       effectiveDate,
       reason,
