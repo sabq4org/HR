@@ -460,7 +460,10 @@ export function ApprovalsPage() {
               : 'ستظهر هنا الطلبات عندما تصل إلى خطوتك في مسار الموافقة.'}
           </p>
         </div>
-        <span className="role-badge">{roleLabel[data.me.role]}</span>
+        <span className="role-badge">
+          {roleLabel[data.me.role]}
+          {data.me.systemOwner ? ' · مالك النظام' : ''}
+        </span>
       </div>
       <section className="panel">
         <div className="filter-toolbar">

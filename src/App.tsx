@@ -631,7 +631,10 @@ export default function App() {
               <Avatar person={data.me} size="sm" />
               <span>
                 <strong>{data.me.name}</strong>
-                <small>{roleLabel[data.me.role]}</small>
+                <small>
+                  {roleLabel[data.me.role]}
+                  {data.me.systemOwner ? ' · مالك النظام' : ''}
+                </small>
               </span>
               {accountMode ? <ShieldCheck size={16} /> : <ChevronsUpDown size={16} />}
             </button>
@@ -689,7 +692,10 @@ export default function App() {
                 <Avatar person={data.me} size="sm" />
                 <span>
                   {data.me.name.split(' ')[0]}
-                  <small>{roleLabel[data.me.role]}</small>
+                  <small>
+                    {roleLabel[data.me.role]}
+                    {data.me.systemOwner ? ' · مالك النظام' : ''}
+                  </small>
                 </span>
               </Link>
             </div>

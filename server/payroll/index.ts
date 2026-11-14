@@ -138,6 +138,20 @@ async function policyGosi(db: AsyncDb, policyId: string): Promise<GosiRule | nul
     );
   }
 }
+/**
+ * Staff or contractor for payroll. The payroll field wins; otherwise the existing profile field
+ * «نوع العلاقة» (موظف / متعاون) already says it, so HR does not enter it twice.
+ */
+export function payrollEmploymentTypeOf(
+  profile: Record<string, unknown>,
+): '' | 'staff' | 'contractor' {
+  const explicit = String(profile.payrollEmploymentType ?? '').trim();
+  if (explicit === 'staff' || explicit === 'contractor') return explicit;
+  const relation = String(profile.relationshipType ?? '').trim();
+  if (relation === 'employee') return 'staff';
+  if (relation === 'collaborator') return 'contractor';
+  return '';
+}
 const EXCLUSION_LABEL: Record<string, string> = {
   copy_left: 'في المسير السابق وليسوا على رأس العمل الآن (لم يُنسخوا)',
   copy_added: 'على رأس العمل ولم يكونوا في المسير السابق (أضيفوا من ملفاتهم)',
@@ -317,7 +331,7 @@ export function createPayrollCommands(db: AsyncDb) {
     );
     for (const person of missing) {
       const profile = await getProfileValues(tx, person.employee_id);
-      const typeValue = String(profile.payrollEmploymentType ?? '').trim();
+      const typeValue = payrollEmploymentTypeOf(profile);
       if (!typeValue && gosi)
         throw fail(
           400,
@@ -418,7 +432,7 @@ export function createPayrollCommands(db: AsyncDb) {
     const profile = await getProfileValues(tx, person.id);
     const blank = (value: unknown) =>
       value === undefined || value === null || String(value).trim() === '';
-    const typeValue = String(profile.payrollEmploymentType ?? '').trim();
+    const typeValue = payrollEmploymentTypeOf(profile);
     // A rule with an insurance section needs to know who is under GOSI.
     if (!typeValue && gosi) {
       return 'employment_type_missing';
@@ -759,12 +773,16 @@ export function createPayrollCommands(db: AsyncDb) {
           const count = (
             await tx.read<Row>('SELECT COUNT(*) count FROM payroll_lines WHERE run_id=?', [id])
           )[0];
-          if (Number(count?.count ?? 0) === 0)
+          if (Number(count?.count ?? 0) === 0) {
+            const reasons = [...exclusions]
+              .map(([code, n]) => `${EXCLUSION_LABEL[code] ?? code}: ${n}`)
+              .join('؛ ');
             throw fail(
               400,
               'no_salary_profiles',
-              'لا توجد ملفات رواتب مكتملة؛ أدخل الراتب الأساسي في الملف الوظيفي قبل إعداد المسير.',
+              `لا يوجد موظف على رأس العمل ملفه الوظيفي مكتمل للرواتب، فلم يُنشأ المسير.${reasons ? ` الأسباب: ${reasons}.` : ''} أكمل الحقول في قسم «المالية» من الملف الوظيفي ثم أعد المحاولة.`,
             );
+          }
         }
         await tx.execute(
           'INSERT INTO payroll_events(id,run_id,actor_id,actor_role,action,reason,created_at,version) VALUES(?,?,?,?,?,?,?,?)',

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import { createServer, type Server } from 'node:http';
 import { createDatabase, type AsyncDb } from '../../server/database.js';
-import { registerPayroll } from '../../server/payroll/index.js';
+import { payrollEmploymentTypeOf, registerPayroll } from '../../server/payroll/index.js';
 import { getProfileValues } from '../../server/administration/service.js';
 import { encryptSensitive } from '../../server/administration/security.js';
 import { employeeFields } from '../../shared/catalog.js';
@@ -539,4 +539,15 @@ test('an employee added to a draft by hand gets a register snapshot and the insu
   } finally {
     await f.close();
   }
+});
+
+test('staff or contractor falls back to the existing profile field «نوع العلاقة»', () => {
+  assert.equal(payrollEmploymentTypeOf({ payrollEmploymentType: 'contractor' }), 'contractor');
+  assert.equal(
+    payrollEmploymentTypeOf({ payrollEmploymentType: 'staff', relationshipType: 'collaborator' }),
+    'staff',
+  );
+  assert.equal(payrollEmploymentTypeOf({ relationshipType: 'employee' }), 'staff');
+  assert.equal(payrollEmploymentTypeOf({ relationshipType: 'collaborator' }), 'contractor');
+  assert.equal(payrollEmploymentTypeOf({}), '');
 });
