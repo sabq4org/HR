@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { createServer, type Server } from 'node:http';
-import { createDatabase } from '../../server/database.js';
+import { randomUUID } from 'node:crypto';
+import { createDatabase, createPostgresDatabase } from '../../server/database.js';
 import { registerPayroll } from '../../server/payroll/index.js';
 import type { Role } from '../../shared/contracts.js';
 
@@ -15,8 +16,8 @@ const identities: Record<string, { id: string; role: Role }> = {
   manager: { id: 'emp-omar', role: 'manager' },
   auditor: { id: 'emp-hind', role: 'auditor' },
 };
-async function fixture() {
-  const db = await createDatabase();
+async function fixture(open: () => ReturnType<typeof createDatabase> = () => createDatabase()) {
+  const db = await open();
   const app = express();
   app.use(express.json());
   registerPayroll(app, {
@@ -544,3 +545,137 @@ test('employees without complete synthetic salary components are excluded and co
     await f.close();
   }
 });
+
+async function correctionChainScenario(f: Awaited<ReturnType<typeof fixture>>) {
+  {
+    let step = 0;
+    const key = () => `chain-${++step}`;
+    async function close(id: string, version: number) {
+      const submit = await f.api<any>(
+        'hr',
+        `/${id}/actions`,
+        'POST',
+        { version, action: 'submit' },
+        key(),
+      );
+      assert.equal(submit.status, 200, JSON.stringify(submit.body));
+      const review = await f.api<any>(
+        'finance',
+        `/${id}/actions`,
+        'POST',
+        { version: version + 1, action: 'review' },
+        key(),
+      );
+      assert.equal(review.status, 200, JSON.stringify(review.body));
+      return f.api<any>(
+        'approver',
+        `/${id}/actions`,
+        'POST',
+        { version: version + 2, action: 'approve' },
+        key(),
+      );
+    }
+    // A correction that deducts `amount` from Sara's first line, ready for approval.
+    async function correction(of: string, amount: number) {
+      const made = await f.api<any>(
+        'hr',
+        '',
+        'POST',
+        {
+          period: '2026-09',
+          policyId: 'payroll-policy-demo-v1',
+          reason: 'تصحيح تجريبي متتالٍ',
+          correctionOf: of,
+        },
+        key(),
+      );
+      assert.equal(made.status, 200, JSON.stringify(made.body));
+      const lines = made.body.run.lines.map((line: any) => ({ ...line }));
+      const target = lines.find((line: any) => line.employeeId === 'emp-sara');
+      assert.ok(target, 'Sara has a placeholder line in the correction');
+      target.kind = 'deduction';
+      target.amountMinor = amount;
+      const edited = await f.api<any>(
+        'hr',
+        `/${made.body.run.id}`,
+        'PATCH',
+        { version: 1, lines, reason: 'فرق تجريبي' },
+        key(),
+      );
+      return { id: made.body.run.id as string, edited };
+    }
+
+    const base = await f.api<any>(
+      'hr',
+      '',
+      'POST',
+      { period: '2026-09', policyId: 'payroll-policy-demo-v1', reason: 'مسير أساسي تجريبي' },
+      key(),
+    );
+    assert.equal(base.status, 200);
+    const original = base.body.run.id as string;
+    const saraNet = base.body.run.lines
+      .filter((line: any) => line.employeeId === 'emp-sara')
+      .reduce(
+        (sum: number, line: any) =>
+          sum + (line.kind === 'earning' ? line.amountMinor : -line.amountMinor),
+        0,
+      );
+    assert.ok(saraNet > 1000, 'synthetic net is large enough for the scenario');
+    assert.equal((await close(original, 1)).body.run.state, 'closed');
+
+    // Two corrections of the original are drafted while both still look valid against it.
+    // The first takes Sara's net to 1000 halalas; the second deducts 1500 more.
+    const first = await correction(original, saraNet - 1000);
+    assert.equal(first.edited.status, 200, JSON.stringify(first.edited.body));
+    const second = await correction(original, 1500);
+    assert.equal(second.edited.status, 200, JSON.stringify(second.edited.body));
+    assert.equal((await close(first.id, 2)).body.run.state, 'closed');
+
+    // Closing the second would leave Sara at -500. Approval must see the first correction.
+    const overdraw = await close(second.id, 2);
+    assert.equal(overdraw.status, 400, JSON.stringify(overdraw.body));
+    assert.match(JSON.stringify(overdraw.body), /negative_net/);
+
+    // The same overdraw drafted after the first closed is refused when the lines are saved.
+    const late = await correction(original, 1500);
+    assert.equal(late.edited.status, 400, JSON.stringify(late.edited.body));
+    assert.match(JSON.stringify(late.edited.body), /negative_net/);
+
+    // A correction of the first correction deducting 400 leaves Sara at 600, which is valid.
+    // It must not be measured against the first correction's delta alone (which is negative).
+    const chained = await correction(first.id, 400);
+    assert.equal(chained.edited.status, 200, JSON.stringify(chained.edited.body));
+    const chainedClosed = await close(chained.id, 2);
+    assert.equal(chainedClosed.status, 200, JSON.stringify(chainedClosed.body));
+    assert.equal(chainedClosed.body.run.state, 'closed');
+  }
+}
+
+test('successive correction runs are checked against the cumulative closed net, not the original alone', async () => {
+  const f = await fixture();
+  try {
+    await correctionChainScenario(f);
+  } finally {
+    await f.close();
+  }
+});
+
+test(
+  'successive correction runs use the cumulative closed net on PostgreSQL',
+  { skip: !process.env.HR_TEST_DATABASE_URL },
+  async () => {
+    const f = await fixture(() =>
+      createPostgresDatabase(
+        process.env.HR_TEST_DATABASE_URL!,
+        `hr_preview_${randomUUID().replaceAll('-', '')}`,
+        { seed: true },
+      ),
+    );
+    try {
+      await correctionChainScenario(f);
+    } finally {
+      await f.close();
+    }
+  },
+);
