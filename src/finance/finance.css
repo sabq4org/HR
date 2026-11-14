@@ -1573,28 +1573,6 @@
   white-space: nowrap;
 }
 
-.fin-cancel-confirm {
-  display: grid;
-  gap: 12px;
-}
-.fin-cancel-confirm p {
-  margin: 0;
-  line-height: 1.8;
-}
-.fin-cancel-note {
-  padding: 10px 12px;
-  border: 1px solid #edd3cf;
-  border-radius: 8px;
-  background: #fff8f6;
-  color: #7c3a32;
-  font-size: 13px;
-}
-.fin-cancel-confirm footer {
-  display: flex;
-  justify-content: flex-start;
-  gap: 8px;
-  flex-wrap: wrap;
-}
 .button.danger {
   background: #b53a2e;
   border-color: #b53a2e;
