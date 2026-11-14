@@ -8,6 +8,7 @@ import {
   type MutableRefObject,
   type ReactNode,
 } from 'react';
+import { RiyalSign } from './RiyalSign';
 import {
   Check,
   CircleAlert,
@@ -1739,6 +1740,19 @@ function LineItemsTable({ lines }: { lines: FinanceLine[] }) {
   );
 }
 
+function PaperAmount({ halalas }: { halalas: number }) {
+  const value = new Intl.NumberFormat('en-SA', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(halalas / 100);
+  return (
+    <b dir="ltr" className="fin-paper-amount">
+      <RiyalSign />
+      {value}
+    </b>
+  );
+}
+
 function PaperTotals({
   subtotal,
   tax,
@@ -1757,15 +1771,15 @@ function PaperTotals({
       <div className="fin-paper-summary-rows" dir="rtl">
         <div>
           <span>المجموع الفرعي / Subtotal</span>
-          <b dir="ltr">{money(subtotal)}</b>
+          <PaperAmount halalas={subtotal} />
         </div>
         <div>
           <span>ضريبة القيمة المضافة / VAT</span>
-          <b dir="ltr">{money(tax)}</b>
+          <PaperAmount halalas={tax} />
         </div>
         <div className="fin-paper-grand-total">
           <span>{totalLabel}</span>
-          <b dir="ltr">{money(total)}</b>
+          <PaperAmount halalas={total} />
         </div>
       </div>
       {aside}

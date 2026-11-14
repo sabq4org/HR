@@ -685,6 +685,16 @@
   color: var(--paper-muted);
   font-size: 9px;
 }
+.fin-paper-amount {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.fin-riyal {
+  width: auto;
+  height: 0.95em;
+  flex: 0 0 auto;
+}
 .fin-paper-summary-rows b {
   font-weight: 600;
   white-space: nowrap;
