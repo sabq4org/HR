@@ -67,7 +67,7 @@ HR_FINANCE_API_KEY_HASHES="sha256:…" npm run finance:sandbox
 - الترويسة `x-pdf-renderer` تبيّن المحرك: `chromium`، أو `pdfkit` إذا لم يتوفر Chromium، فيرجع عرض السعر والفاتورة بالتخطيط القديم، ويرجع كشف الحساب `503 PDF_RENDERER_UNAVAILABLE`.
 - يبحث الخادم عن Chromium في `HR_PDF_CHROMIUM_PATH`، ثم `/usr/bin/chromium` و`/usr/bin/chromium-browser`، ثم نسخة Playwright المثبتة. على Railway يثبّته `railpack.json` (حزمة `chromium` في صورة التشغيل).
 - الصفحة المطبوعة لا تصل إلى الشبكة: تُخدم الخطوط والشعار من الملفات المحلية ويُحجب أي طلب آخر. متصفح واحد يعمل عند الطلب، والطلبات بالتتابع، ويُغلق بعد دقيقة من الخمول.
-- نسخة الفاتورة داخلية وليست فاتورة ضريبية، ولا تحمل رمز QR. الملف الرسمي على `GET /api/finance/invoices/:id/pdf` من المزود بعد القبول فقط.
+- نسخة الفاتورة على `document.pdf` داخلية دائماً، وتُوسم بـ«نسخة داخلية – ليست الفاتورة الضريبية الرسمية». إذا كانت الفاتورة معتمدة وفيها قيمة `qrCode` يُعرض الرمز من تلك القيمة في مسار Chromium. الملف الرسمي يبقى `GET /api/finance/invoices/:id/pdf` من المزود بعد القبول فقط.
 
 ```bash
 curl -fsS -H "Authorization: Bearer $KEY" -o quote.pdf "$HOST/api/finance/quotes/$QUOTE_ID/document.pdf"
