@@ -336,7 +336,8 @@ export interface AgingRow {
 }
 export interface CustomerStatementRow {
   date: string;
-  kind: 'invoice' | 'receipt' | 'credit_note';
+  /** `reversal` undoes an earlier receipt or credit note and carries its number. */
+  kind: 'invoice' | 'receipt' | 'credit_note' | 'reversal';
   /** Invoice number, or the receipt / credit note voucher number. */
   number: string;
   /** For a receipt or credit note: the invoice it settles. */

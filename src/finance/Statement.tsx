@@ -14,6 +14,7 @@ const kindText: Record<CustomerStatementRow['kind'], string> = {
   invoice: 'فاتورة',
   receipt: 'سداد',
   credit_note: 'إشعار دائن',
+  reversal: 'عكس',
 };
 
 /** Customer statement preview; prints on landscape A4 in the same paper style as the invoice. */
@@ -26,6 +27,9 @@ export function CustomerStatementModal({
 }) {
   const [range, setRange] = useState({ from: '', to: today() });
   const [statement, setStatement] = useState<CustomerStatement | null>(null);
+  // The range the visible statement was loaded for; printing waits until it matches the inputs.
+  const [loaded, setLoaded] = useState('');
+  const wanted = `${range.from}|${range.to}`;
   const [error, setError] = useState('');
   useEffect(() => {
     if (!range.to || (range.from && range.from > range.to)) {
@@ -43,6 +47,7 @@ export function CustomerStatementModal({
       .then((result) => {
         if (!live) return;
         setStatement(result.statement);
+        setLoaded(wanted);
         setError('');
       })
       .catch((reason: unknown) => {
@@ -51,7 +56,7 @@ export function CustomerStatementModal({
     return () => {
       live = false;
     };
-  }, [customer.id, range.from, range.to]);
+  }, [customer.id, range.from, range.to, wanted]);
   // Browsers without named-page support still need the sheet turned to landscape.
   useEffect(() => {
     const style = document.createElement('style');
@@ -88,7 +93,7 @@ export function CustomerStatementModal({
         </label>
         <button
           className="button primary"
-          disabled={!statement || Boolean(error)}
+          disabled={!statement || Boolean(error) || loaded !== wanted}
           onClick={() => window.print()}
         >
           <Printer size={16} />
@@ -108,7 +113,14 @@ export function CustomerStatementModal({
           {error}
         </p>
       )}
-      {statement && <StatementPaper statement={statement} />}
+      {statement && (
+        <div
+          aria-busy={loaded !== wanted}
+          className={loaded !== wanted ? 'fin-statement-stale' : ''}
+        >
+          <StatementPaper statement={statement} />
+        </div>
+      )}
     </Modal>
   );
 }
@@ -241,8 +253,8 @@ function StatementPaper({ statement }: { statement: CustomerStatement }) {
                 </td>
               </tr>
             )}
-            {statement.rows.map((row) => (
-              <tr key={`${row.kind}-${row.number}`}>
+            {statement.rows.map((row, index) => (
+              <tr key={`${index}-${row.number}`}>
                 <td dir="ltr">{row.date}</td>
                 <td>
                   <span className={`fin-statement-kind ${row.kind}`}>{kindText[row.kind]}</span>

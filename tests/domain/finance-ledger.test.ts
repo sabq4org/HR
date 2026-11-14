@@ -816,6 +816,43 @@ async function statementScenario(db: AsyncDb) {
       ).body.error.code,
       'INVALID_DATE_RANGE',
     );
+
+    // Reversing the receipt later adds a movement; the balance reported for July stays as it was.
+    const receipt = (
+      await h.get<{ vouchers: LedgerVoucher[] }>('/api/finance/ledger/vouchers?kind=receipt')
+    ).body.vouchers[0]!;
+    assert.equal(
+      (
+        await h.send(`/api/finance/ledger/vouchers/${receipt.id}/reverse`, {
+          version: receipt.version,
+          date: '2026-08-15',
+          reason: 'تحويل مرتجع',
+        })
+      ).status,
+      200,
+    );
+    const at = async (to: string) =>
+      (
+        await h.get<{ statement: CustomerStatement }>(
+          `/api/finance/customers/${customerId}/statement?to=${to}`,
+        )
+      ).body.statement;
+    const july = await at('2026-07-31'),
+      august = await at('2026-08-31');
+    assert.equal(july.closingHalalas, 650_000);
+    assert.equal(july.paidHalalas, 500_000);
+    assert.deepEqual(
+      august.rows.map((row) => [row.kind, row.debitHalalas, row.creditHalalas, row.balanceHalalas]),
+      [
+        ['invoice', 1_150_000, 0, 1_150_000],
+        ['receipt', 0, 500_000, 650_000],
+        ['reversal', 500_000, 0, 1_150_000],
+      ],
+    );
+    assert.equal(august.invoicedHalalas, 1_150_000);
+    assert.equal(august.paidHalalas, 0);
+    assert.equal(august.openInvoices[0]!.outstandingHalalas, 1_150_000);
+
     h.actor.current = { id: 'other-hr', role: 'hr' };
     assert.equal((await h.get(`/api/finance/customers/${customerId}/statement`)).status, 403);
   } finally {

@@ -1196,6 +1196,13 @@
   background: #e6eef6;
   color: #3f709f;
 }
+.fin-statement-kind.reversal {
+  background: #fdf1d8;
+  color: #846319;
+}
+.fin-statement-stale {
+  opacity: 0.45;
+}
 .fin-statement-empty {
   padding: 16px;
   color: var(--paper-muted);

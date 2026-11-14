@@ -1538,14 +1538,32 @@ export async function customerStatement(
   ).map((row) => safeJson<FinanceInvoice>(row.invoice_ciphertext, `finance:invoice:${row.id}`));
   const vouchers = invoices.length
     ? await db.read<VoucherRow>(
-        `${voucherSelect} WHERE v.owner_id=? AND v.status='posted' AND v.kind IN ('invoice','receipt','credit_note')`,
+        `${voucherSelect} WHERE v.owner_id=? AND v.kind IN ('invoice','receipt','credit_note')`,
         [ownerId],
       )
     : [];
   const postedByInvoice = new Map(
-    vouchers.filter((row) => row.kind === 'invoice').map((row) => [row.related_id, row]),
+    vouchers
+      .filter((row) => row.kind === 'invoice' && row.status === 'posted')
+      .map((row) => [row.related_id, row]),
   );
-  type Movement = Omit<CustomerStatementRow, 'balanceHalalas'> & { order: number; key: string };
+  // A reversed receipt or credit note stays on the statement with its reversal as a later
+  // movement, so a balance already reported for an earlier date never changes.
+  const reversedOn = new Map(
+    vouchers.some((row) => row.status === 'reversed')
+      ? (
+          await db.read<{ reversal_of: string; entry_date: string }>(
+            "SELECT reversal_of, entry_date FROM finance_journal_entries WHERE owner_id=? AND kind='reversal' AND reversal_of IS NOT NULL",
+            [ownerId],
+          )
+        ).map((row) => [row.reversal_of, row.entry_date])
+      : [],
+  );
+  type Movement = Omit<CustomerStatementRow, 'balanceHalalas'> & {
+    order: number;
+    key: string;
+    of?: 'receipt' | 'credit_note';
+  };
   const movements: Movement[] = [];
   const byVoucher = new Map<string, string>();
   let unpostedInvoices = 0;
@@ -1554,7 +1572,10 @@ export async function customerStatement(
     const approved = invoice.status === 'cleared' || invoice.status === 'reported';
     if (!posted && !approved) continue;
     if (!posted) unpostedInvoices += 1;
-    else byVoucher.set(posted.id, invoice.number);
+    // Settlements may hang on an earlier posting of the same invoice that was later reversed.
+    for (const row of vouchers)
+      if (row.kind === 'invoice' && row.related_id === invoice.id)
+        byVoucher.set(row.id, invoice.number);
     movements.push({
       date: invoice.issueDate,
       kind: 'invoice',
@@ -1572,9 +1593,26 @@ export async function customerStatement(
     const invoiceNumber = row.related_id ? byVoucher.get(row.related_id) : undefined;
     if (row.kind === 'invoice' || !invoiceNumber) continue;
     const reference = voucherDetails(row).reference;
+    const kind = row.kind as 'receipt' | 'credit_note';
+    const reversal = row.status === 'reversed' ? reversedOn.get(row.entry_id) : undefined;
+    if (row.status === 'reversed' && !reversal) continue;
+    if (reversal)
+      movements.push({
+        date: reversal,
+        kind: 'reversal',
+        number: row.number,
+        invoiceNumber,
+        description: `${kind === 'receipt' ? 'عكس سداد فاتورة' : 'عكس إشعار دائن على فاتورة'} ${invoiceNumber}`,
+        dueDate: '',
+        debitHalalas: n(row.total),
+        creditHalalas: 0,
+        order: 2,
+        key: row.number,
+        of: kind,
+      });
     movements.push({
       date: row.doc_date,
-      kind: row.kind as 'receipt' | 'credit_note',
+      kind,
       number: row.number,
       invoiceNumber,
       description:
@@ -1598,7 +1636,7 @@ export async function customerStatement(
   const rows: CustomerStatementRow[] = [];
   // Per-invoice balance on the closing date, whatever the start of the period is.
   const open = new Map<string, { total: number; settled: number; date: string; due: string }>();
-  for (const { order: _order, key: _key, ...item } of movements) {
+  for (const { order: _order, key: _key, of, ...item } of movements) {
     if (item.date > to) continue;
     balance += item.debitHalalas - item.creditHalalas;
     const state = open.get(item.invoiceNumber);
@@ -1609,14 +1647,16 @@ export async function customerStatement(
         date: item.date,
         due: item.dueDate || item.date,
       });
-    else if (state) state.settled += item.creditHalalas;
+    else if (state) state.settled += item.creditHalalas - item.debitHalalas;
     if (from && item.date < from) {
       openingHalalas = balance;
       continue;
     }
-    invoicedHalalas += item.debitHalalas;
-    if (item.kind === 'receipt') paidHalalas += item.creditHalalas;
-    if (item.kind === 'credit_note') creditedHalalas += item.creditHalalas;
+    if (item.kind === 'invoice') invoicedHalalas += item.debitHalalas;
+    if (item.kind === 'receipt' || of === 'receipt')
+      paidHalalas += item.creditHalalas - item.debitHalalas;
+    if (item.kind === 'credit_note' || of === 'credit_note')
+      creditedHalalas += item.creditHalalas - item.debitHalalas;
     rows.push({ ...item, balanceHalalas: balance });
   }
   const openInvoices = [...open.entries()]
