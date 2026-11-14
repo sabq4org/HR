@@ -613,7 +613,10 @@ test('private key is organization-bound and encrypted; customer and invoice sync
   );
   const individualQuote = (
     await json<{ quote: { id: string; version: number } }>(
-      await api('/api/finance/quotes', post(quoteBody(person.id), 'person-quote')),
+      await api(
+        '/api/finance/quotes',
+        post({ ...quoteBody(person.id), documentType: 'simplified' }, 'person-quote'),
+      ),
     )
   ).quote;
   const individualInvoice = (
@@ -639,6 +642,187 @@ test('private key is organization-bound and encrypted; customer and invoice sync
   );
   assert.equal(blocked.status, 409);
   assert.equal(clientCalls, personCallsBefore);
+});
+
+test('document type fixes line tax rules and the converted invoice type', async () => {
+  const customer = (
+    await json<{ customer: { id: string } }>(
+      await api('/api/finance/customers', post(customerBody, 'doc-type-customer')),
+    )
+  ).customer;
+  const zeroLine = {
+    description: 'Service for a non-resident client',
+    quantity: '2',
+    unitPrice: '100.00',
+    taxRateBps: 0,
+    taxReason: 'Non-resident client',
+  };
+  const mixed = await api(
+    '/api/finance/quotes',
+    post(
+      {
+        ...quoteBody(customer.id),
+        documentType: 'zero_rated',
+        lines: [zeroLine, { ...zeroLine, taxRateBps: 1500, taxReason: '' }],
+      },
+      'zero-mixed',
+    ),
+  );
+  assert.equal(mixed.status, 400);
+  assert.equal(
+    ((await mixed.json()) as { error: { code: string } }).error.code,
+    'ZERO_RATED_LINES_REQUIRED',
+  );
+  assert.equal(
+    (
+      await api(
+        '/api/finance/quotes',
+        post({ ...quoteBody(customer.id), documentType: 'other' }, 'bad-type'),
+      )
+    ).status,
+    400,
+  );
+  const zero = (
+    await json<{
+      quote: { id: string; version: number; documentType: string; taxHalalas: number };
+    }>(
+      await api(
+        '/api/finance/quotes',
+        post(
+          { ...quoteBody(customer.id), documentType: 'zero_rated', lines: [zeroLine] },
+          'zero-ok',
+        ),
+      ),
+    )
+  ).quote;
+  assert.equal(zero.documentType, 'zero_rated');
+  assert.equal(zero.taxHalalas, 0);
+  const mismatch = await api(
+    `/api/finance/quotes/${zero.id}/convert`,
+    post(
+      {
+        version: zero.version,
+        issueDate: '2026-11-14',
+        dueDate: '2026-12-14',
+        invoiceType: 'simplified',
+      },
+      'zero-convert-mismatch',
+    ),
+  );
+  assert.equal(mismatch.status, 409);
+  const invoice = (
+    await json<{ invoice: { invoiceType: string; documentType: string; taxHalalas: number } }>(
+      await api(
+        `/api/finance/quotes/${zero.id}/convert`,
+        post(
+          { version: zero.version, issueDate: '2026-11-14', dueDate: '2026-12-14' },
+          'zero-convert',
+        ),
+      ),
+    )
+  ).invoice;
+  assert.equal(invoice.invoiceType, 'standard');
+  assert.equal(invoice.documentType, 'zero_rated');
+  assert.equal(invoice.taxHalalas, 0);
+  // Quotes created before document types existed read as B2B tax quotes.
+  const legacy = (
+    await json<{ quote: { id: string; documentType: string } }>(
+      await api('/api/finance/quotes', post(quoteBody(customer.id), 'legacy-quote')),
+    )
+  ).quote;
+  assert.equal(legacy.documentType, 'standard');
+});
+
+test('saved catalog items validate tax, keep versions, and archive instead of deleting', async () => {
+  const missingReason = await api(
+    '/api/finance/catalog',
+    post({ description: 'Banner', unitPrice: '100.00', taxRateBps: 0, taxReason: '' }, 'c0'),
+  );
+  assert.equal(missingReason.status, 400);
+  assert.equal(
+    (
+      await api(
+        '/api/finance/catalog',
+        post({ description: 'Banner', unitPrice: '100.00', taxRateBps: 500, taxReason: '' }, 'c1'),
+      )
+    ).status,
+    400,
+  );
+  const createdResponse = await api(
+    '/api/finance/catalog',
+    post({ description: 'Homepage banner', unitPrice: '18500.00', taxRateBps: 1500 }, 'c2'),
+  );
+  assert.equal(createdResponse.status, 201);
+  const created = (
+    await json<{ item: { id: string; version: number; active: boolean; taxReason: string } }>(
+      createdResponse,
+    )
+  ).item;
+  assert.equal(created.active, true);
+  assert.equal(created.taxReason, '');
+  const replay = await api(
+    '/api/finance/catalog',
+    post({ description: 'Homepage banner', unitPrice: '18500.00', taxRateBps: 1500 }, 'c2'),
+  );
+  assert.equal(((await replay.json()) as { item: { id: string } }).item.id, created.id);
+  const patch = (body: unknown, key: string): RequestInit => ({
+    method: 'PATCH',
+    headers: { 'idempotency-key': key },
+    body: JSON.stringify(body),
+  });
+  const archived = (
+    await json<{ item: { version: number; active: boolean; unitPrice: string } }>(
+      await api(
+        `/api/finance/catalog/${created.id}`,
+        patch(
+          {
+            version: created.version,
+            active: false,
+            description: 'Homepage banner',
+            unitPrice: '19000.00',
+            taxRateBps: 1500,
+            taxReason: '',
+          },
+          'c3',
+        ),
+      ),
+    )
+  ).item;
+  assert.equal(archived.active, false);
+  assert.equal(archived.unitPrice, '19000.00');
+  assert.equal(archived.version, 2);
+  const stale = await api(
+    `/api/finance/catalog/${created.id}`,
+    patch(
+      {
+        version: 1,
+        active: true,
+        description: 'Homepage banner',
+        unitPrice: '1.00',
+        taxRateBps: 1500,
+        taxReason: '',
+      },
+      'c4',
+    ),
+  );
+  assert.equal(stale.status, 409);
+  const overview = (await json<{ catalog: { id: string; active: boolean }[] }>(
+    await api('/api/finance'),
+  )) as { catalog: { id: string; active: boolean }[] };
+  assert.deepEqual(
+    overview.catalog.map((item) => [item.id, item.active]),
+    [[created.id, false]],
+  );
+  actor = { id: 'other-hr', role: 'hr' };
+  assert.equal(
+    (
+      await api(
+        '/api/finance/catalog',
+        post({ description: 'x', unitPrice: '1.00', taxRateBps: 1500 }, 'c5'),
+      )
+    ).status,
+    403,
+  );
 });
 
 test('zero-tax invoice sync is blocked before provider calls even when no zero-rate mapping is configured', async () => {
@@ -805,7 +989,7 @@ test(
             'SELECT version FROM schema_migrations ORDER BY version',
           )
         ).map((row) => row.version),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
       );
       assert.equal(
         (await call('/api/finance/settings/api-key', { apiKey: 'pg-fake-secret' })).status,

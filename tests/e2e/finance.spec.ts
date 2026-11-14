@@ -135,7 +135,7 @@ test('private finance customer, quote, invoice, Wafeq readiness, and official ou
   await quoteRow.getByRole('button', { name: 'تحويل إلى مسودة فاتورة' }).click();
   const convertDialog = page.getByRole('dialog');
   await convertDialog.getByLabel('رقم أمر الشراء (اختياري)').fill('PO-SYN-204');
-  await expect(convertDialog.getByRole('option', { name: /مبسطة/ })).toBeDisabled();
+  await expect(convertDialog.getByLabel('نوع الفاتورة')).toHaveValue(/B2B/);
   await convertDialog.getByRole('button', { name: 'إنشاء مسودة الفاتورة', exact: true }).click();
   await expect(page.getByRole('button', { name: 'الفواتير', exact: true })).toHaveAttribute(
     'aria-current',
@@ -174,6 +174,35 @@ test('private finance customer, quote, invoice, Wafeq readiness, and official ou
   expect((await new AxeBuilder({ page }).include('.finance-page').analyze()).violations).toEqual(
     [],
   );
+
+  // Saved items are inserted into a zero-rated quote with the type's tax rule applied.
+  await page.getByRole('button', { name: 'البنود المحفوظة', exact: true }).click();
+  await page.getByRole('button', { name: 'إضافة بند محفوظ', exact: true }).click();
+  const itemDialog = page.getByRole('dialog');
+  const itemName = `استشارة تحريرية ${testInfo.project.name}`;
+  await itemDialog.getByLabel('وصف البند').fill(itemName);
+  await itemDialog.getByLabel('سعر الوحدة (ر.س)').fill('900.00');
+  await itemDialog.getByRole('button', { name: 'حفظ البند', exact: true }).click();
+  await expect(page.getByRole('row', { name: new RegExp(itemName) })).toContainText('15٪');
+  await page.getByRole('button', { name: 'عروض الأسعار', exact: true }).click();
+  await page.getByRole('button', { name: 'عرض سعر جديد', exact: true }).click();
+  const zeroDialog = page.getByRole('dialog');
+  await zeroDialog.getByLabel('نوع الفاتورة').selectOption('zero_rated');
+  await zeroDialog.getByLabel('العميل').selectOption({ label: customerName });
+  await zeroDialog.getByLabel('عنوان العرض').fill(`خدمة دولية ${testInfo.project.name}`);
+  await zeroDialog.getByLabel('صالح حتى').fill('2027-12-31');
+  await zeroDialog.getByLabel('إدراج بند محفوظ').selectOption({ index: 1 });
+  await zeroDialog.getByRole('button', { name: 'إدراج', exact: true }).click();
+  await expect(zeroDialog.getByLabel('وصف البند')).toHaveCount(1);
+  await expect(zeroDialog.getByLabel('وصف البند')).toHaveValue(itemName);
+  await expect(zeroDialog.getByRole('combobox', { name: 'الضريبة' })).toBeDisabled();
+  await expect(zeroDialog.getByLabel('سبب عدم احتساب الضريبة')).not.toHaveValue('');
+  await zeroDialog.getByRole('button', { name: 'حفظ عرض السعر', exact: true }).click();
+  const zeroRow = page.getByRole('row', { name: new RegExp(`خدمة دولية`) }).first();
+  await expect(zeroRow).toContainText('بدون ضريبة');
+  await zeroRow.getByRole('button', { name: 'معاينة' }).click();
+  await expect(page.locator('.fin-quote-paper .fin-paper-reason')).toHaveCount(1);
+  await page.getByRole('button', { name: 'إغلاق' }).last().click();
   await page.setViewportSize({ width, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

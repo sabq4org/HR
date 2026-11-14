@@ -1,6 +1,8 @@
 import type { Express, Request, Response } from 'express';
 import type {
   FinanceAddress,
+  FinanceCatalogItem,
+  FinanceCatalogItemInput,
   FinanceCustomer,
   FinanceCustomerInput,
   FinanceInvoice,
@@ -8,10 +10,12 @@ import type {
   FinanceLineInput,
   FinanceOverview,
   FinanceQuote,
+  FinanceDocumentType,
   FinanceQuoteInput,
   FinanceSeller,
   FinanceSettings,
 } from '../../shared/finance.js';
+import { financeDocumentTypes } from '../../shared/finance.js';
 import type { AsyncDb } from '../database.js';
 import { decryptSensitive, encryptSensitive } from '../administration/security.js';
 import type { Actor } from '../administration/service.js';
@@ -58,6 +62,26 @@ type CustomerRow = {
   sync_status: 'not_synced' | 'synced' | 'error';
   sync_message: string | null;
 };
+type CatalogRow = {
+  id: string;
+  version: number;
+  description: string;
+  unit_price: string;
+  tax_rate_bps: number;
+  tax_reason: string;
+  active: number | boolean;
+  created_at: string;
+};
+const catalogItem = (row: CatalogRow): FinanceCatalogItem => ({
+  id: row.id,
+  version: row.version,
+  description: row.description,
+  unitPrice: row.unit_price,
+  taxRateBps: Number(row.tax_rate_bps),
+  taxReason: row.tax_reason,
+  active: row.active === true || Number(row.active) === 1,
+  createdAt: row.created_at,
+});
 type QuoteRow = {
   id: string;
   owner_id: string;
@@ -279,6 +303,25 @@ function amounts(lines: FinanceLine[]) {
     totalHalalas: Number(total),
   };
 }
+function quoteLines(input: FinanceQuoteInput): FinanceLine[] {
+  const lines = lineItems(input.lines);
+  if (input.documentType === 'zero_rated' && lines.some((line) => line.taxRateBps !== 0))
+    throw fault(
+      400,
+      'ZERO_RATED_LINES_REQUIRED',
+      'المستند بدون ضريبة؛ اجعل كل البنود بنسبة صفر مع ذكر السبب.',
+    );
+  return lines;
+}
+function catalogInput(value: unknown): FinanceCatalogItemInput {
+  const [line] = lineItems([{ ...requireRecord(value), quantity: '1' }]);
+  return {
+    description: line.description,
+    unitPrice: line.unitPrice,
+    taxRateBps: line.taxRateBps,
+    taxReason: line.taxRateBps === 0 ? line.taxReason : '',
+  };
+}
 function quoteInput(value: unknown): FinanceQuoteInput {
   const x = requireRecord(value),
     issueDate = dateValue(x.issueDate),
@@ -286,8 +329,12 @@ function quoteInput(value: unknown): FinanceQuoteInput {
   if (validUntil < issueDate)
     throw fault(400, 'INVALID_DATE_RANGE', 'تاريخ الانتهاء يسبق تاريخ الإصدار.');
   if (!Array.isArray(x.lines)) throw fault(400, 'INVALID_LINES', 'صيغة البنود غير صالحة.');
+  const documentType = x.documentType === undefined ? 'standard' : x.documentType;
+  if (!financeDocumentTypes.includes(documentType as FinanceDocumentType))
+    throw fault(400, 'INVALID_DOCUMENT_TYPE', 'نوع المستند غير صالح.');
   return {
     customerId: text(x.customerId, 80),
+    documentType: documentType as FinanceDocumentType,
     title: text(x.title, 200),
     issueDate,
     validUntil,
@@ -347,7 +394,22 @@ async function readQuote(db: AsyncDb, ownerId: string, id: string): Promise<Fina
     await db.read<QuoteRow>('SELECT * FROM finance_quotes WHERE owner_id=? AND id=?', [ownerId, id])
   )[0];
   if (!row) throw fault(404, 'QUOTE_NOT_FOUND', 'عرض السعر غير موجود.');
-  return safeJson<FinanceQuote>(row.quote_ciphertext, `finance:quote:${row.id}`);
+  const quote = safeJson<FinanceQuote>(row.quote_ciphertext, `finance:quote:${row.id}`);
+  return { ...quote, documentType: quote.documentType ?? 'standard' };
+}
+async function readCatalogItem(
+  db: AsyncDb,
+  ownerId: string,
+  id: string,
+): Promise<FinanceCatalogItem> {
+  const row = (
+    await db.read<CatalogRow>('SELECT * FROM finance_catalog_items WHERE owner_id=? AND id=?', [
+      ownerId,
+      id,
+    ])
+  )[0];
+  if (!row) throw fault(404, 'CATALOG_ITEM_NOT_FOUND', 'البند المحفوظ غير موجود.');
+  return catalogItem(row);
 }
 async function readInvoice(db: AsyncDb, ownerId: string, id: string): Promise<FinanceInvoice> {
   const row = (
@@ -656,7 +718,13 @@ export function registerFinance(
     const quotes = await Promise.all(qRows.map((r) => readQuote(db, ownerId, r.id)));
     const invoices = await Promise.all(iRows.map((r) => readInvoice(db, ownerId, r.id)));
     const settings = await getSettings(db, ownerId, privateMode);
-    const result: FinanceOverview = { customers, quotes, invoices, settings };
+    const catalog = (
+      await db.read<CatalogRow>(
+        'SELECT * FROM finance_catalog_items WHERE owner_id=? ORDER BY created_at DESC',
+        [ownerId],
+      )
+    ).map(catalogItem);
+    const result: FinanceOverview = { customers, catalog, quotes, invoices, settings };
     res.json(result);
   });
   registerRoute(app, 'get', '/api/finance/settings', async (req, res) => {
@@ -968,6 +1036,88 @@ export function registerFinance(
     const customer = await setCustomerSync(db, actor, initial, created.id, 'synced');
     res.json({ customer });
   });
+  registerRoute(app, 'post', '/api/finance/catalog', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    const input = catalogInput(req.body);
+    const item = await idempotent<{ id: string }>(
+      db,
+      actor,
+      'finance.catalog.create',
+      req.get('idempotency-key'),
+      input,
+      async (tx) => {
+        const id = newId(),
+          createdAt = now();
+        await tx.execute(
+          'INSERT INTO finance_catalog_items(id,owner_id,version,description,unit_price,tax_rate_bps,tax_reason,active,created_at,updated_at) VALUES(?,?,1,?,?,?,?,1,?,?)',
+          [
+            id,
+            actor.id,
+            input.description,
+            input.unitPrice,
+            input.taxRateBps,
+            input.taxReason,
+            createdAt,
+            createdAt,
+          ],
+        );
+        await audited(tx, actor, 'finance_catalog_item', id, 'created', 1);
+        return { marker: { type: 'catalog_item', id }, result: { id } };
+      },
+      async (_tx, m) => ({ id: m.id }),
+    );
+    res.status(201).json({ item: await readCatalogItem(db, actor.id, item.id) });
+  });
+  registerRoute(app, 'patch', '/api/finance/catalog/:id', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    const b = requireRecord(req.body),
+      version = versionValue(b.version),
+      input = catalogInput(b);
+    if (typeof b.active !== 'boolean')
+      throw fault(400, 'INVALID_ACTIVE', 'حدد إن كان البند متاحًا للإدراج.');
+    const active = b.active;
+    const saved = await idempotent<{ id: string }>(
+      db,
+      actor,
+      `finance.catalog.update:${routeId(req.params.id)}`,
+      req.get('idempotency-key'),
+      { version, input, active },
+      async (tx) => {
+        const current = await readCatalogItem(tx, actor.id, routeId(req.params.id));
+        if (current.version !== version)
+          throw fault(409, 'VERSION_CONFLICT', 'تغير البند؛ حدّث الصفحة ثم أعد المحاولة.');
+        const next = version + 1;
+        await tx.execute(
+          'UPDATE finance_catalog_items SET version=?,description=?,unit_price=?,tax_rate_bps=?,tax_reason=?,active=?,updated_at=? WHERE owner_id=? AND id=? AND version=?',
+          [
+            next,
+            input.description,
+            input.unitPrice,
+            input.taxRateBps,
+            input.taxReason,
+            active ? 1 : 0,
+            now(),
+            actor.id,
+            current.id,
+            version,
+          ],
+        );
+        await audited(
+          tx,
+          actor,
+          'finance_catalog_item',
+          current.id,
+          current.active && !active ? 'archived' : 'updated',
+          next,
+        );
+        return { marker: { type: 'catalog_item', id: current.id }, result: { id: current.id } };
+      },
+      async (_tx, m) => ({ id: m.id }),
+    );
+    res.json({ item: await readCatalogItem(db, actor.id, saved.id) });
+  });
   registerRoute(app, 'post', '/api/finance/quotes', async (req, res) => {
     const actor = await auth(req);
     requireFinance(actor, access);
@@ -981,13 +1131,14 @@ export function registerFinance(
       async (tx) => {
         const customer = await readCustomer(tx, actor.id, input.customerId);
         const seller = await getSettings(tx, actor.id, privateMode).then((x) => x.seller);
-        const lines = lineItems(input.lines),
+        const lines = quoteLines(input),
           totals = amounts(lines),
           id = newId(),
           createdAt = now(),
           number = await nextNumber(tx, actor.id, 'quotes', 'HR-Q');
         const snapshot: FinanceQuote = {
           ...input,
+          documentType: input.documentType ?? 'standard',
           id,
           number,
           version: 1,
@@ -1046,11 +1197,12 @@ export function registerFinance(
           throw fault(409, 'VERSION_CONFLICT', 'تغير عرض السعر؛ حدّث الصفحة ثم أعد المحاولة.');
         const customer = await readCustomer(tx, actor.id, input.customerId);
         const seller = (await getSettings(tx, actor.id, privateMode)).seller;
-        const lines = lineItems(input.lines),
+        const lines = quoteLines(input),
           totals = amounts(lines),
           next = version + 1;
         const snapshot: FinanceQuote = {
           ...input,
+          documentType: input.documentType ?? 'standard',
           id: row.id,
           number: row.number,
           version: next,
@@ -1089,9 +1241,13 @@ export function registerFinance(
       version = versionValue(b.version),
       issueDate = dateValue(b.issueDate),
       dueDate = dateValue(b.dueDate),
-      invoiceType = b.invoiceType === undefined ? 'standard' : b.invoiceType,
+      requestedType = b.invoiceType,
       purchaseOrder = optionalText(b.purchaseOrder, 120);
-    if (invoiceType !== 'standard' && invoiceType !== 'simplified')
+    if (
+      requestedType !== undefined &&
+      requestedType !== 'standard' &&
+      requestedType !== 'simplified'
+    )
       throw fault(400, 'INVALID_INVOICE_TYPE', 'نوع الفاتورة غير صالح.');
     if (dueDate < issueDate)
       throw fault(400, 'INVALID_DATE_RANGE', 'تاريخ الاستحقاق يسبق تاريخ الإصدار.');
@@ -1100,7 +1256,7 @@ export function registerFinance(
       actor,
       `finance.quote.convert:${routeId(req.params.id)}`,
       req.get('idempotency-key'),
-      { version, issueDate, dueDate, invoiceType, purchaseOrder },
+      { version, issueDate, dueDate, invoiceType: requestedType, purchaseOrder },
       async (tx) => {
         const row = (
           await tx.read<QuoteRow>('SELECT * FROM finance_quotes WHERE owner_id=? AND id=?', [
@@ -1120,7 +1276,15 @@ export function registerFinance(
           throw fault(409, 'QUOTE_IMMUTABLE', 'عرض السعر غير قابل للتحويل مرة أخرى.');
         if (row.version !== version)
           throw fault(409, 'VERSION_CONFLICT', 'تغير عرض السعر؛ حدّث الصفحة ثم أعد المحاولة.');
-        const q = safeJson<FinanceQuote>(row.quote_ciphertext, `finance:quote:${row.id}`);
+        const q = await readQuote(tx, actor.id, row.id);
+        // The invoice type is fixed when the quote is prepared, so its line taxes already match.
+        const invoiceType = q.documentType === 'simplified' ? 'simplified' : 'standard';
+        if (requestedType !== undefined && requestedType !== invoiceType)
+          throw fault(
+            409,
+            'INVOICE_TYPE_MISMATCH',
+            'نوع الفاتورة يُحدد في عرض السعر؛ عدّل العرض لتغييره.',
+          );
         const currentCustomer = await readCustomer(tx, actor.id, q.customerId);
         if (JSON.stringify(customerSnapshot(currentCustomer)) !== JSON.stringify(q.customer))
           throw fault(
@@ -1150,6 +1314,7 @@ export function registerFinance(
           dueDate,
           status: 'draft',
           invoiceType,
+          documentType: q.documentType,
           ...(purchaseOrder ? { purchaseOrder } : {}),
           currency: 'SAR',
           customer: q.customer,

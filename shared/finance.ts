@@ -54,6 +54,17 @@ export interface FinanceSettings {
   standardTaxRateId: string;
   zeroTaxRateId: string;
 }
+/**
+ * Chosen when the quote is created and carried to the invoice:
+ * standard = B2B tax invoice, simplified = B2C simplified tax invoice,
+ * zero_rated = every line at 0% with a stated reason (e.g. services to a non-resident).
+ */
+export type FinanceDocumentType = 'standard' | 'simplified' | 'zero_rated';
+export const financeDocumentTypes: readonly FinanceDocumentType[] = [
+  'standard',
+  'simplified',
+  'zero_rated',
+];
 export interface FinanceLineInput {
   description: string;
   quantity: string;
@@ -68,6 +79,8 @@ export interface FinanceLine extends FinanceLineInput {
 }
 export interface FinanceQuoteInput {
   customerId: string;
+  /** Older quotes without a type are read as 'standard'. */
+  documentType?: FinanceDocumentType;
   title: string;
   issueDate: string;
   validUntil: string;
@@ -75,6 +88,7 @@ export interface FinanceQuoteInput {
   lines: FinanceLineInput[];
 }
 export interface FinanceQuote extends FinanceQuoteInput {
+  documentType: FinanceDocumentType;
   id: string;
   number: string;
   version: number;
@@ -107,6 +121,7 @@ export interface FinanceInvoice {
     | 'rejected'
     | 'reconciliation_required';
   invoiceType?: 'standard' | 'simplified';
+  documentType?: FinanceDocumentType;
   purchaseOrder?: string;
   currency: 'SAR';
   customer: FinanceCustomerInput;
@@ -125,8 +140,22 @@ export interface FinanceInvoice {
   canDownloadXml?: boolean;
   createdAt: string;
 }
+/** A saved line that can be inserted into quotes instead of retyping it. */
+export interface FinanceCatalogItemInput {
+  description: string;
+  unitPrice: string;
+  taxRateBps: number;
+  taxReason: string;
+}
+export interface FinanceCatalogItem extends FinanceCatalogItemInput {
+  id: string;
+  version: number;
+  active: boolean;
+  createdAt: string;
+}
 export interface FinanceOverview {
   customers: FinanceCustomer[];
+  catalog: FinanceCatalogItem[];
   quotes: FinanceQuote[];
   invoices: FinanceInvoice[];
   settings: FinanceSettings;
@@ -140,7 +169,10 @@ export interface FinanceOverview {
 // PATCH /api/finance/customers/:id {version,...FinanceCustomerInput} -> {customer: FinanceCustomer}
 // POST /api/finance/quotes FinanceQuoteInput -> {quote: FinanceQuote}
 // PATCH /api/finance/quotes/:id {version,...FinanceQuoteInput} -> {quote: FinanceQuote}
-// POST /api/finance/quotes/:id/convert {version,issueDate,dueDate,invoiceType?,purchaseOrder?} -> {invoice: FinanceInvoice}
+// POST /api/finance/catalog FinanceCatalogItemInput -> {item: FinanceCatalogItem}
+// PATCH /api/finance/catalog/:id {version,active,...FinanceCatalogItemInput} -> {item: FinanceCatalogItem}
+// POST /api/finance/quotes/:id/convert {version,issueDate,dueDate,invoiceType?,purchaseOrder?}
+//   invoiceType follows the quote's documentType; a conflicting value is rejected. -> {invoice: FinanceInvoice}
 // POST /api/finance/customers/:id/sync {version} -> {customer: FinanceCustomer}
 // POST /api/finance/invoices/:id/sync {version} -> {invoice: FinanceInvoice}
 // POST /api/finance/invoices/:id/refresh {} -> {invoice: FinanceInvoice}

@@ -1056,3 +1056,20 @@
   font-weight: 700;
   text-align: center;
 }
+
+.fin-paper-reason {
+  display: block;
+  margin-top: 1px;
+  color: var(--paper-muted);
+  font-size: 8px;
+}
+.fin-catalog-insert {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.fin-catalog-insert .fin-field {
+  flex: 1;
+  min-width: 0;
+}

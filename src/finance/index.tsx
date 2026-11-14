@@ -12,6 +12,7 @@ import { RiyalSign } from './RiyalSign';
 import {
   Check,
   CircleAlert,
+  ClipboardList,
   FileText,
   LoaderCircle,
   Plus,
@@ -24,6 +25,10 @@ import {
 } from 'lucide-react';
 import type {
   FinanceAddress,
+  FinanceCatalogItem,
+  FinanceCatalogItemInput,
+  FinanceDocumentType,
+  FinanceLineInput,
   FinanceCustomer,
   FinanceCustomerInput,
   FinanceLine,
@@ -38,7 +43,46 @@ import { useSearchParams } from 'react-router-dom';
 import { api, Modal, PageHeading, useApp } from '../lib';
 import './finance.css';
 
-type Tab = 'customers' | 'quotes' | 'invoices' | 'settings';
+type Tab = 'customers' | 'catalog' | 'quotes' | 'invoices' | 'settings';
+const documentTypeText: Record<FinanceDocumentType, { label: string; hint: string }> = {
+  standard: {
+    label: 'فاتورة ضريبية (B2B) · 15٪',
+    hint: 'لمنشأة لها رقم ضريبي. البنود بضريبة 15٪، ويمكن جعل بند بعينه بدون ضريبة مع ذكر السبب.',
+  },
+  simplified: {
+    label: 'فاتورة ضريبية مبسطة (B2C) · 15٪',
+    hint: 'لعميل فرد أو جهة بلا رقم ضريبي. البنود بضريبة 15٪.',
+  },
+  zero_rated: {
+    label: 'بدون ضريبة · 0٪',
+    hint: 'مثل الخدمات لعميل خارج المملكة. كل البنود بنسبة صفر، ويُطبع سبب الإعفاء مع كل بند.',
+  },
+};
+const documentTypeShort: Record<FinanceDocumentType, string> = {
+  standard: 'ضريبية B2B',
+  simplified: 'مبسطة B2C',
+  zero_rated: 'بدون ضريبة',
+};
+// Default wording only; the user can change it per line before saving.
+const defaultZeroReason = 'خدمات لعميل غير مقيم خارج المملكة';
+const blankLine = (type: FinanceDocumentType = 'standard'): FinanceLineInput => ({
+  description: '',
+  quantity: '1',
+  unitPrice: '0.00',
+  taxRateBps: type === 'zero_rated' ? 0 : 1500,
+  taxReason: type === 'zero_rated' ? defaultZeroReason : '',
+});
+const blankCatalogItem = (): FinanceCatalogItemInput => ({
+  description: '',
+  unitPrice: '0.00',
+  taxRateBps: 1500,
+  taxReason: '',
+});
+// A B2B tax invoice needs a business customer; individuals go through the simplified type.
+const blockedConversion = (quote: FinanceQuote) =>
+  quote.customer.type === 'individual' && (quote.documentType ?? 'standard') === 'standard';
+const isBlankLine = (line: FinanceLineInput) =>
+  !line.description.trim() && (Number(line.unitPrice) || 0) === 0;
 const blankAddress = (): FinanceAddress => ({ line: '', city: '', postalCode: '', country: 'SA' });
 const blankCustomer = (): FinanceCustomerInput => ({
   name: '',
@@ -117,23 +161,26 @@ export function FinancePage() {
   );
   const [loadError, setLoadError] = useState('');
   const [busy, setBusy] = useState('');
-  const [dialog, setDialog] = useState<'customer' | 'quote' | 'convert' | null>(null);
+  const [dialog, setDialog] = useState<'customer' | 'catalog' | 'quote' | 'convert' | null>(null);
+  const [selectedItem, setSelectedItem] = useState<FinanceCatalogItem | null>(null);
+  const [catalogForm, setCatalogForm] = useState<FinanceCatalogItemInput>(blankCatalogItem());
+  const [catalogPick, setCatalogPick] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<FinanceCustomer | null>(null);
   const [selectedQuote, setSelectedQuote] = useState<FinanceQuote | null>(null);
   const [preview, setPreview] = useState<FinanceQuote | null>(null);
   const [customerForm, setCustomerForm] = useState<FinanceCustomerInput>(blankCustomer());
   const [quoteForm, setQuoteForm] = useState<FinanceQuoteInput>(() => ({
     customerId: '',
+    documentType: 'standard',
     title: '',
     issueDate: today(),
     validUntil: '',
     notes: '',
-    lines: [{ description: '', quantity: '1', unitPrice: '0.00', taxRateBps: 1500, taxReason: '' }],
+    lines: [blankLine()],
   }));
   const [settingsForm, setSettingsForm] = useState<FinanceSettings | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [convertDates, setConvertDates] = useState({ issueDate: today(), dueDate: '' });
-  const [invoiceType, setInvoiceType] = useState<'standard' | 'simplified'>('standard');
   const [purchaseOrder, setPurchaseOrder] = useState('');
   const [finalInvoice, setFinalInvoice] = useState<FinanceInvoice | null>(null);
   const keys = useRef<Record<string, string>>({});
@@ -186,6 +233,7 @@ export function FinancePage() {
       quote
         ? {
             customerId: quote.customerId,
+            documentType: quote.documentType ?? 'standard',
             title: quote.title,
             issueDate: quote.issueDate,
             validUntil: quote.validUntil,
@@ -202,22 +250,100 @@ export function FinancePage() {
           }
         : {
             customerId: overview?.customers[0]?.id ?? '',
+            documentType: 'standard',
             title: '',
             issueDate: today(),
             validUntil: '',
             notes: '',
-            lines: [
-              {
-                description: '',
-                quantity: '1',
-                unitPrice: '0.00',
-                taxRateBps: 1500,
-                taxReason: '',
-              },
-            ],
+            lines: [blankLine()],
           },
     );
+    setCatalogPick('');
     setDialog('quote');
+  };
+  const quoteType = quoteForm.documentType ?? 'standard';
+  // Switching the document type re-applies its tax rule to every line.
+  const changeDocumentType = (type: FinanceDocumentType) =>
+    setQuoteForm((form) => ({
+      ...form,
+      documentType: type,
+      lines: form.lines.map((line) =>
+        type === 'zero_rated'
+          ? { ...line, taxRateBps: 0, taxReason: line.taxReason || defaultZeroReason }
+          : (form.documentType ?? 'standard') === 'zero_rated'
+            ? { ...line, taxRateBps: 1500, taxReason: '' }
+            : line,
+      ),
+    }));
+  const insertCatalogItem = () => {
+    const item = overview?.catalog.find((x) => x.id === catalogPick);
+    if (!item) return;
+    const line: FinanceLineInput =
+      quoteType === 'zero_rated'
+        ? {
+            description: item.description,
+            quantity: '1',
+            unitPrice: item.unitPrice,
+            taxRateBps: 0,
+            taxReason: item.taxReason || defaultZeroReason,
+          }
+        : {
+            description: item.description,
+            quantity: '1',
+            unitPrice: item.unitPrice,
+            taxRateBps: item.taxRateBps,
+            taxReason: item.taxReason,
+          };
+    setQuoteForm((form) => {
+      const lines = form.lines.filter((x, n) => !(n === form.lines.length - 1 && isBlankLine(x)));
+      return { ...form, lines: [...lines, line] };
+    });
+    setCatalogPick('');
+  };
+  const beginCatalogItem = (item?: FinanceCatalogItem) => {
+    setSelectedItem(item ?? null);
+    setCatalogForm(
+      item
+        ? {
+            description: item.description,
+            unitPrice: item.unitPrice,
+            taxRateBps: item.taxRateBps,
+            taxReason: item.taxReason,
+          }
+        : blankCatalogItem(),
+    );
+    setDialog('catalog');
+  };
+  const saveCatalogItem = async (item: FinanceCatalogItem | null, active: boolean) => {
+    const path = item ? `/finance/catalog/${item.id}` : '/finance/catalog';
+    const body = item
+      ? { ...(dialog === 'catalog' ? catalogForm : item), version: item.version, active }
+      : catalogForm;
+    setBusy(item ? `catalog:${item.id}` : 'catalog');
+    setLoadError('');
+    try {
+      const result = await mutate<{ item: FinanceCatalogItem }>(
+        path,
+        item ? 'PATCH' : 'POST',
+        body,
+      );
+      setOverview((o) =>
+        o
+          ? {
+              ...o,
+              catalog: item
+                ? o.catalog.map((x) => (x.id === item.id ? result.item : x))
+                : [result.item, ...o.catalog],
+            }
+          : o,
+      );
+      if (dialog === 'catalog') closeDialog();
+      notify(active ? 'تم حفظ البند.' : 'أُخفي البند من قائمة الإدراج.');
+    } catch (e) {
+      setLoadError(errorText(e));
+    } finally {
+      setBusy('');
+    }
   };
   const closeDialog = () => setDialog(null);
   const onCustomerSave = async (event: FormEvent) => {
@@ -313,7 +439,6 @@ export function FinancePage() {
       const result = await mutate<{ invoice: FinanceInvoice }>(path, 'POST', {
         version: selectedQuote.version,
         ...convertDates,
-        invoiceType,
         purchaseOrder,
       });
       setOverview((o) =>
@@ -503,6 +628,7 @@ export function FinancePage() {
             {(
               [
                 ['customers', 'العملاء', Users],
+                ['catalog', 'البنود المحفوظة', ClipboardList],
                 ['quotes', 'عروض الأسعار', FileText],
                 ['invoices', 'الفواتير', WalletCards],
                 ['settings', 'إعدادات وافق', Settings2],
@@ -598,6 +724,70 @@ export function FinancePage() {
               )}
             </section>
           )}
+          {tab === 'catalog' && (
+            <section className="fin-section">
+              <div className="fin-section-head">
+                <div>
+                  <h2>البنود المحفوظة</h2>
+                  <p>احفظ الخدمات المتكررة بسعرها وضريبتها، ثم أدرجها في عرض السعر بضغطة.</p>
+                </div>
+                <button className="button primary" onClick={() => beginCatalogItem()}>
+                  <Plus size={17} />
+                  إضافة بند محفوظ
+                </button>
+              </div>
+              {overview.catalog.length ? (
+                <div className="fin-table-wrap">
+                  <table className="fin-table">
+                    <thead>
+                      <tr>
+                        <th>الوصف</th>
+                        <th>سعر الوحدة</th>
+                        <th>الضريبة</th>
+                        <th>الحالة</th>
+                        <th>إجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {overview.catalog.map((item) => (
+                        <tr key={item.id}>
+                          <td>
+                            <b>{item.description}</b>
+                            {item.taxRateBps === 0 && <small>{item.taxReason}</small>}
+                          </td>
+                          <td className="num">{money(Math.round(Number(item.unitPrice) * 100))}</td>
+                          <td>{item.taxRateBps === 0 ? 'بدون ضريبة' : '15٪'}</td>
+                          <td>
+                            <Status
+                              text={item.active ? 'متاح للإدراج' : 'مخفي'}
+                              kind={item.active ? 'good' : 'neutral'}
+                            />
+                          </td>
+                          <td className="fin-actions">
+                            <button className="text-button" onClick={() => beginCatalogItem(item)}>
+                              تعديل
+                            </button>
+                            <button
+                              className="text-button"
+                              disabled={busy === `catalog:${item.id}`}
+                              onClick={() => void saveCatalogItem(item, !item.active)}
+                            >
+                              {item.active ? 'إخفاء' : 'إظهار'}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <Empty
+                  title="لا توجد بنود محفوظة بعد"
+                  detail="أضف الخدمات التي تتكرر في عروضك لتدرجها مباشرة."
+                />
+              )}
+            </section>
+          )}
           {tab === 'quotes' && (
             <section className="fin-section">
               <div className="fin-section-head">
@@ -621,6 +811,7 @@ export function FinancePage() {
                       <tr>
                         <th>رقم العرض</th>
                         <th>العميل</th>
+                        <th>النوع</th>
                         <th>العنوان</th>
                         <th>الإجمالي</th>
                         <th>الحالة</th>
@@ -634,6 +825,7 @@ export function FinancePage() {
                             <b>{q.number}</b>
                           </td>
                           <td>{q.customer.name}</td>
+                          <td>{documentTypeShort[q.documentType ?? 'standard']}</td>
                           <td>{q.title}</td>
                           <td className="num">{money(q.totalHalalas)}</td>
                           <td>
@@ -1138,10 +1330,88 @@ export function FinancePage() {
           </form>
         </Modal>
       )}
+      {dialog === 'catalog' && (
+        <Modal title={selectedItem ? 'تعديل بند محفوظ' : 'بند محفوظ جديد'} close={closeDialog}>
+          <form
+            className="fin-dialog-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveCatalogItem(selectedItem, selectedItem?.active ?? true);
+            }}
+          >
+            <div className="fin-grid">
+              <Field label="وصف البند">
+                <input
+                  required
+                  value={catalogForm.description}
+                  onChange={(e) => setCatalogForm({ ...catalogForm, description: e.target.value })}
+                />
+              </Field>
+              <Field label="سعر الوحدة (ر.س)">
+                <input
+                  required
+                  inputMode="decimal"
+                  value={catalogForm.unitPrice}
+                  onChange={(e) => setCatalogForm({ ...catalogForm, unitPrice: e.target.value })}
+                />
+              </Field>
+              <Field label="الضريبة">
+                <select
+                  value={catalogForm.taxRateBps}
+                  onChange={(e) =>
+                    setCatalogForm({
+                      ...catalogForm,
+                      taxRateBps: Number(e.target.value),
+                      taxReason: Number(e.target.value) === 0 ? catalogForm.taxReason : '',
+                    })
+                  }
+                >
+                  <option value={1500}>15٪</option>
+                  <option value={0}>بدون ضريبة</option>
+                </select>
+              </Field>
+              {catalogForm.taxRateBps === 0 && (
+                <Field label="سبب عدم احتساب الضريبة">
+                  <input
+                    required
+                    value={catalogForm.taxReason}
+                    onChange={(e) => setCatalogForm({ ...catalogForm, taxReason: e.target.value })}
+                  />
+                </Field>
+              )}
+            </div>
+            {loadError && <Alert>{loadError}</Alert>}
+            <div className="fin-form-actions">
+              <button type="button" className="button secondary" onClick={closeDialog}>
+                إلغاء
+              </button>
+              <button
+                className="button primary"
+                disabled={busy === 'catalog' || busy === `catalog:${selectedItem?.id}`}
+              >
+                حفظ البند
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
       {dialog === 'quote' && (
         <Modal title={selectedQuote ? 'تعديل عرض السعر' : 'عرض سعر جديد'} close={closeDialog} wide>
           <form className="fin-dialog-form" onSubmit={onQuoteSave}>
             <div className="fin-grid">
+              <Field label="نوع الفاتورة">
+                <select
+                  value={quoteType}
+                  onChange={(e) => changeDocumentType(e.target.value as FinanceDocumentType)}
+                >
+                  {(Object.keys(documentTypeText) as FinanceDocumentType[]).map((type) => (
+                    <option key={type} value={type}>
+                      {documentTypeText[type].label}
+                    </option>
+                  ))}
+                </select>
+                <small>{documentTypeText[quoteType].hint}</small>
+              </Field>
               <Field label="العميل">
                 <select
                   required
@@ -1181,6 +1451,31 @@ export function FinancePage() {
               </Field>
             </div>
             <h3 className="fin-subheading">بنود العرض</h3>
+            {(overview?.catalog ?? []).some((item) => item.active) && (
+              <div className="fin-catalog-insert">
+                <Field label="إدراج بند محفوظ">
+                  <select value={catalogPick} onChange={(e) => setCatalogPick(e.target.value)}>
+                    <option value="">اختر بندًا</option>
+                    {(overview?.catalog ?? [])
+                      .filter((item) => item.active)
+                      .map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.description} · {money(Math.round(Number(item.unitPrice) * 100))}
+                        </option>
+                      ))}
+                  </select>
+                </Field>
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={!catalogPick}
+                  onClick={insertCatalogItem}
+                >
+                  <Plus size={16} />
+                  إدراج
+                </button>
+              </div>
+            )}
             {quoteForm.lines.map((line, index) => (
               <div className="fin-line" key={index}>
                 <Field label="وصف البند">
@@ -1230,6 +1525,7 @@ export function FinancePage() {
                 <Field label="الضريبة">
                   <select
                     value={line.taxRateBps}
+                    disabled={quoteType === 'zero_rated'}
                     onChange={(e) =>
                       setQuoteForm({
                         ...quoteForm,
@@ -1246,11 +1542,11 @@ export function FinancePage() {
                     }
                   >
                     <option value={1500}>15٪</option>
-                    <option value={0}>صفرية</option>
+                    <option value={0}>بدون ضريبة</option>
                   </select>
                 </Field>
                 {line.taxRateBps === 0 && (
-                  <Field label="سبب الضريبة الصفرية">
+                  <Field label="سبب عدم احتساب الضريبة">
                     <input
                       required
                       value={line.taxReason}
@@ -1287,16 +1583,7 @@ export function FinancePage() {
               onClick={() =>
                 setQuoteForm({
                   ...quoteForm,
-                  lines: [
-                    ...quoteForm.lines,
-                    {
-                      description: '',
-                      quantity: '1',
-                      unitPrice: '0.00',
-                      taxRateBps: 1500,
-                      taxReason: '',
-                    },
-                  ],
+                  lines: [...quoteForm.lines, blankLine(quoteType)],
                 })
               }
             >
@@ -1339,22 +1626,19 @@ export function FinancePage() {
             <p className="fin-convert-note">
               سيُنشأ سجل فاتورة بحالة <b>مسودة</b> مرتبط بالعرض {selectedQuote.number}. لن تُصدر
               الفاتورة أو تُرسل إلى وافق في هذه الخطوة.{' '}
-              {selectedQuote.customer.type === 'individual'
-                ? 'هذا العميل فردي؛ مزامنة الفواتير الفردية غير مدعومة في الربط الحالي.'
-                : ''}
+              {blockedConversion(selectedQuote)
+                ? 'هذا العميل فرد؛ اختر «فاتورة ضريبية مبسطة (B2C)» في عرض السعر قبل تحويله.'
+                : (selectedQuote.documentType ?? 'standard') !== 'standard'
+                  ? 'يمكن تجهيز المسودة، لكن إرسال هذا النوع إلى وافق غير مدعوم في الربط الحالي.'
+                  : ''}
             </p>
             <div className="fin-grid">
               <Field label="نوع الفاتورة">
-                <select
-                  value={invoiceType}
-                  onChange={(e) => setInvoiceType(e.target.value as 'standard' | 'simplified')}
-                >
-                  <option value="standard">ضريبية (B2B)</option>
-                  <option value="simplified" disabled>
-                    مبسطة (B2C) · غير مدعومة في الربط الحالي
-                  </option>
-                </select>
-                <small>إصدار الفواتير المبسطة غير متاح في إعداد وافق الحالي.</small>
+                <input
+                  readOnly
+                  value={documentTypeText[selectedQuote.documentType ?? 'standard'].label}
+                />
+                <small>يُحدد النوع في عرض السعر؛ عدّل العرض لتغييره.</small>
               </Field>
               <Field label="رقم أمر الشراء (اختياري)">
                 <input value={purchaseOrder} onChange={(e) => setPurchaseOrder(e.target.value)} />
@@ -1383,11 +1667,11 @@ export function FinancePage() {
               </button>
               <button
                 className="button primary"
-                disabled={busy === 'convert' || selectedQuote.customer.type === 'individual'}
+                disabled={busy === 'convert' || blockedConversion(selectedQuote)}
               >
                 {busy === 'convert'
                   ? 'جارٍ التحويل…'
-                  : selectedQuote.customer.type === 'individual'
+                  : blockedConversion(selectedQuote)
                     ? 'التحويل غير متاح لهذا العميل'
                     : 'إنشاء مسودة الفاتورة'}
               </button>
@@ -1420,6 +1704,7 @@ export function FinancePage() {
                 issueDate={preview.issueDate}
                 validUntil={preview.validUntil}
                 status="مسودة عرض سعر"
+                documentType={preview.documentType ?? 'standard'}
               />
             </div>
             <LineItemsTable lines={preview.lines} />
@@ -1476,6 +1761,9 @@ export function FinancePage() {
               title={
                 finalInvoice.invoiceType === 'simplified' ? 'فاتورة ضريبية مبسطة' : 'فاتورة ضريبية'
               }
+              subtitle={
+                finalInvoice.invoiceType === 'simplified' ? 'Simplified Tax Invoice' : 'Tax Invoice'
+              }
               number={finalInvoice.number}
               status={statusText[finalInvoice.status]}
             />
@@ -1498,6 +1786,7 @@ export function FinancePage() {
                 validUntilLabel="تاريخ الاستحقاق / Due Date"
                 status={statusText[finalInvoice.status]}
                 purchaseOrder={finalInvoice.purchaseOrder}
+                documentType={finalInvoice.documentType}
               />
             </div>
             <h2 className="fin-document-title">{finalInvoice.title}</h2>
@@ -1554,12 +1843,14 @@ function DocumentHeader({
   title,
   number,
   status,
+  subtitle,
 }: {
   seller: FinanceSeller;
   kind: 'quote' | 'invoice';
   title: string;
   number: string;
   status: string;
+  subtitle?: string;
 }) {
   return (
     <header className="fin-doc-head">
@@ -1578,7 +1869,7 @@ function DocumentHeader({
       </div>
       <aside className="fin-doc-heading">
         <h1>{title}</h1>
-        <span>{kind === 'quote' ? 'Price Quotation' : 'Tax Invoice'}</span>
+        <span>{subtitle ?? (kind === 'quote' ? 'Price Quotation' : 'Tax Invoice')}</span>
         <Status
           text={status}
           kind={kind === 'quote' || status.includes('مسودة') ? 'waiting' : 'good'}
@@ -1647,6 +1938,7 @@ function DocumentDetails({
   validUntilLabel,
   status,
   purchaseOrder,
+  documentType,
 }: {
   kind: 'quote' | 'invoice';
   number: string;
@@ -1655,6 +1947,7 @@ function DocumentDetails({
   validUntilLabel?: string;
   status: string;
   purchaseOrder?: string;
+  documentType?: FinanceDocumentType;
 }) {
   return (
     <section className="fin-detail-card fin-detail-rows">
@@ -1675,6 +1968,12 @@ function DocumentDetails({
           <div>
             <dt>{validUntilLabel ?? 'صالح حتى / Valid Until'}</dt>
             <dd dir="ltr">{validUntil}</dd>
+          </div>
+        )}
+        {documentType && (
+          <div>
+            <dt>نوع الفاتورة / Invoice Type</dt>
+            <dd>{documentTypeShort[documentType]}</dd>
           </div>
         )}
         {purchaseOrder && (
@@ -1726,7 +2025,14 @@ function LineItemsTable({ lines }: { lines: FinanceLine[] }) {
               <td className="fin-paper-number" dir="ltr">
                 {index + 1}
               </td>
-              <td className="fin-paper-description">{line.description}</td>
+              <td className="fin-paper-description">
+                {line.description}
+                {line.taxRateBps === 0 && line.taxReason && (
+                  <small className="fin-paper-reason">
+                    سبب عدم احتساب الضريبة / VAT exemption reason: {line.taxReason}
+                  </small>
+                )}
+              </td>
               <td dir="ltr">{line.quantity}</td>
               <td dir="ltr">{amount(Math.round(Number(line.unitPrice) * 100))}</td>
               <td dir="ltr">{percent(line.taxRateBps)}%</td>
