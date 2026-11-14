@@ -190,6 +190,14 @@ export interface FinanceInvoice {
   canDownloadXml?: boolean;
   createdAt: string;
 }
+/** Tax-accepted statuses coming back from Wafeq / ZATCA. Drafts and pending invoices are not posted. */
+export const taxAcceptedInvoiceStatuses: ReadonlyArray<FinanceInvoice['status']> = [
+  'cleared',
+  'reported',
+];
+export function isTaxAcceptedInvoice(status: string): status is 'cleared' | 'reported' {
+  return status === 'cleared' || status === 'reported';
+}
 /** A saved line that can be inserted into quotes instead of retyping it. */
 export interface FinanceCatalogItemInput {
   description: string;

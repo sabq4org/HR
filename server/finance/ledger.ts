@@ -2,7 +2,7 @@
  * Double-entry ledger core. postEntry is the only writer of journal rows: it enforces
  * balance, open periods and postable accounts inside the caller's transaction.
  */
-import type { FinanceInvoice } from '../../shared/finance.js';
+import { isTaxAcceptedInvoice, type FinanceInvoice } from '../../shared/finance.js';
 import {
   defaultChart,
   purchaseTaxCodes,
@@ -808,16 +808,25 @@ export async function invoiceStates(
     };
   });
 }
-/** Books an issued invoice: receivable against revenue and output VAT, dated on its issue date. */
+/** Books a tax-accepted invoice: receivable against revenue and output VAT, dated on its issue date. */
 export async function postInvoice(
   tx: AsyncDb,
   actor: Actor,
   invoice: FinanceInvoice,
   revenueAccountCode: string,
   zeroLinesTaxCode?: TaxCode,
+  source: 'approved' | 'auto' = 'approved',
 ): Promise<string> {
   if (invoice.status === 'rejected')
     throw fault(409, 'INVOICE_REJECTED', 'الفاتورة مرفوضة من الهيئة ولا تُرحّل.');
+  if (!isTaxAcceptedInvoice(invoice.status))
+    throw fault(
+      409,
+      'INVOICE_NOT_ISSUED',
+      invoice.status === 'draft'
+        ? 'الفاتورة ما زالت مسودة ولا تُرحَّل إلى الدفاتر.'
+        : 'لا تُرحَّل الفاتورة إلا بعد قبولها ضريبيًا من وافق أو الهيئة.',
+    );
   const prior = await tx.read<{ id: string }>(
     "SELECT id FROM finance_vouchers WHERE owner_id=? AND kind='invoice' AND related_id=? AND status='posted'",
     [actor.id, invoice.id],
@@ -846,7 +855,7 @@ export async function postInvoice(
   }
   const receivable = await systemAccount(tx, actor.id, 'receivable'),
     output = await systemAccount(tx, actor.id, 'vat_output');
-  return createVoucher(tx, actor, {
+  const id = await createVoucher(tx, actor, {
     kind: 'invoice',
     date: invoice.issueDate,
     accountCode: revenueAccountCode,
@@ -886,6 +895,15 @@ export async function postInvoice(
       },
     ],
   });
+  await audited(
+    tx,
+    actor,
+    'finance_invoice',
+    invoice.id,
+    source === 'auto' ? 'auto_posted' : 'approved_and_posted',
+    invoice.version,
+  );
+  return id;
 }
 /** Best-effort posting when the provider confirms an invoice; never blocks the sync itself. */
 export async function autoPostInvoice(db: AsyncDb, actor: Actor, invoice: FinanceInvoice) {
@@ -902,7 +920,9 @@ export async function autoPostInvoice(db: AsyncDb, actor: Actor, invoice: Financ
       documentType !== 'out_of_scope'
     )
       return;
-    await db.transaction((tx) => postInvoice(tx, actor, invoice, settings.defaultRevenueAccount));
+    await db.transaction((tx) =>
+      postInvoice(tx, actor, invoice, settings.defaultRevenueAccount, undefined, 'auto'),
+    );
   } catch {
     // The invoice stays in the "awaiting posting" list for a manual decision.
   }

@@ -1,12 +1,13 @@
 /** HTTP surface of the accounting ledger. Every route re-checks the granted finance account. */
 import type { Express, Request } from 'express';
 import type { FinanceInvoice } from '../../shared/finance.js';
-import type {
-  JournalTax,
-  LedgerOverview,
-  LedgerVendorInput,
-  TaxCode,
-  VoucherKind,
+import {
+  canApproveAndPost,
+  type JournalTax,
+  type LedgerOverview,
+  type LedgerVendorInput,
+  type TaxCode,
+  type VoucherKind,
 } from '../../shared/ledger.js';
 import { todayInRiyadh, type AsyncDb } from '../database.js';
 import { encryptSensitive } from '../administration/security.js';
@@ -97,7 +98,7 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
     const initialized = await ledger.isInitialized(db, actor.id);
     const unposted = initialized
       ? (await ledger.invoiceStates(db, actor.id, invoiceFromRow)).filter(
-          (item) => !item.voucher && item.status !== 'rejected',
+          (item) => !item.voucher && (item.status === 'cleared' || item.status === 'reported'),
         ).length
       : 0;
     return {
@@ -401,6 +402,8 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
     };
     if (payload.zeroLinesTaxCode !== null && !ledger.isSalesCode(payload.zeroLinesTaxCode))
       throw fault(400, 'INVALID_TAX_CODE', 'الرمز الضريبي غير صالح.');
+    if (!canApproveAndPost(actor.role))
+      throw fault(403, 'FORBIDDEN', 'اعتماد الفاتورة وترحيلها إلى الدفاتر متاح لمسؤول النظام فقط.');
     const id = await mutation(
       req,
       actor,
