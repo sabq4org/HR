@@ -63,6 +63,34 @@ async function fixture() {
   };
 }
 
+test('synthetic seed keeps the profile-component policy available for payroll runs', async () => {
+  const f = await fixture();
+  try {
+    const policies = await f.db.read<{ id: string; state: string }>(
+      "SELECT id,state FROM administrative_policies WHERE id LIKE 'payroll-policy-demo-v%' ORDER BY id",
+    );
+    assert.deepEqual(
+      policies.map((policy) => ({ id: policy.id, state: policy.state })),
+      [
+        { id: 'payroll-policy-demo-v1', state: 'synthetic_approved' },
+        { id: 'payroll-policy-demo-v2', state: 'synthetic_approved' },
+      ],
+    );
+    const created = await f.api<{ run: any }>(
+      'hr',
+      '',
+      'POST',
+      { period: '2026-07', policyId: 'payroll-policy-demo-v2', reason: 'اختبار سياسة المعاينة' },
+      'profile-policy-seed',
+    );
+    assert.equal(created.status, 200);
+    assert.equal(created.body.run.policyId, 'payroll-policy-demo-v2');
+    assert.ok(created.body.run.lines.length > 0);
+  } finally {
+    await f.close();
+  }
+});
+
 test('payroll API enforces staged roles, approval independence, employee scope, immutable close and replay', async () => {
   const f = await fixture();
   try {

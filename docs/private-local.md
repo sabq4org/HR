@@ -6,18 +6,18 @@
 
 لا تغيّر خدمة المعاينة العامة الحالية. أنشئ خدمة جديدة في المشروع نفسه:
 
-1. **New → GitHub Repo → sabq4org/HR.** اختر الفرع `claude/project-thread-e4jmmy` إلى أن يُدمج.
-2. في **Settings → Config-as-code**، اجعل مسار الملف `railway.private.json`.
+1. أنشئ خدمة فارغة مستقلة، ثم اربطها بالمستودع `sabq4org/HR` والفرع `claude/project-thread-e4jmmy` بعد ضبط الإعدادات والمتغيرات أدناه.
+2. اضبط الإعدادات التالية مباشرة في **Settings**: البناء `npm run build` باستخدام Railpack، والبدء `HR_MODE=private-hosted npm start`، وفحص الصحة `/api/health`، ونسخة تشغيل واحدة. هذه قيم `railway.private.json`؛ الملف مرجع للإعدادات فقط، لأن Railway أوقف اعتماد Config as Code للخدمات الجديدة. [توثيق Railway](https://docs.railway.com/config-as-code).
 3. في **Settings → Networking**، أنشئ نطاقًا للخدمة.
 4. في **Variables** أضف:
-   - `DATABASE_URL`: رابط Neon، أو مرجع متغيره المربوط بالمشروع.
+   - `DATABASE_URL`: رابط Neon المجمّع (pooled) للتشغيل. استخدم الرابط المباشر للاستيراد المحلي والترحيلات.
    - `HR_PUBLIC_ORIGIN`: النطاق الذي أنشأته، مثل `https://hr-private-xxxx.up.railway.app`.
    - `HR_ACCESS_PASSWORD`: كلمة مرور قوية، 16 حرفًا أو أكثر.
    - `HR_DATA_KEY`: مفتاح التشفير. ولّده مرة واحدة واحفظه في مدير كلمات المرور، فبدونه لا تُقرأ البيانات:
      ```bash
      node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
      ```
-5. انشر الخدمة، ثم استورد من جهازك إلى Neon بنفس المفتاح:
+5. اربط المستودع وانشر الخدمة. تأكد أن فحص الصحة يعيد الوضع `private-hosted` وأن `/api/session` يرفض الوصول دون كلمة المرور. استورد من جهازك إلى Neon بنفس المفتاح:
 
 ```bash
 export HR_PRIVATE_DATABASE_URL='رابط Neon'
@@ -29,7 +29,7 @@ npm run private:access -- grant your.email@sabq.org hr
 
 6. افتح نطاق الخدمة، وأدخل كلمة المرور، ثم اختر حسابك.
 
-**تنبيه:** من يعرف كلمة المرور يستطيع الدخول بأي حساب ممنوح، فلا تشاركها قبل الدخول المؤسسي.
+**تنبيه:** من يعرف كلمة المرور يستطيع الدخول بأي حساب ممنوح، فلا تشاركها قبل الدخول المؤسسي. عند استخدام `--include-incomplete` يكون تاريخ التعيين البديل قيمة مؤقتة، لا تاريخ خدمة مثبتًا؛ أكمل الحقول من المصدر قبل أي احتساب لاستحقاقات. تهيئة القاعدة الخاصة لا تضيف سياسات أو أشخاصًا تجريبيين.
 
 ## ثانيًا: على جهازك فقط
 

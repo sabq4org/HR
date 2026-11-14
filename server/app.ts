@@ -320,7 +320,16 @@ export function createApp(
   });
   app.use((req, res, next) => {
     const host = req.get('host')?.toLowerCase();
-    if (pinnedOrigin ? host !== pinnedOrigin.host.toLowerCase() : !safeHost(host))
+    const railwayHealthcheck =
+      privateData &&
+      pinnedOrigin &&
+      host === 'healthcheck.railway.app' &&
+      req.path === '/api/health' &&
+      (req.method === 'GET' || req.method === 'HEAD');
+    if (
+      !railwayHealthcheck &&
+      (pinnedOrigin ? host !== pinnedOrigin.host.toLowerCase() : !safeHost(host))
+    )
       return jsonError(
         res,
         fault(403, 'LOCAL_HOST_REQUIRED', 'يُسمح بالوصول عبر المضيف المحدد فقط.'),

@@ -223,6 +223,27 @@ test('a private database refuses synthetic data and a public origin needs a pass
     await (await createDatabase(path)).close();
     await assert.rejects(createDatabase(path, { seed: false }), /synthetic demo database/);
     const db = await createDatabase(':memory:', { seed: false });
+    assert.deepEqual(
+      await db.read<{ id: string }>('SELECT id FROM administrative_policies'),
+      [],
+      'private migrations must not insert synthetic payroll policies',
+    );
+    for (const table of [
+      'employees',
+      'policy_versions',
+      'work_schedules',
+      'employment_periods',
+      'leave_requests',
+      'leave_ledger',
+      'administrative_requests',
+      'payroll_runs',
+    ]) {
+      assert.equal(
+        (await db.read<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`))[0].n,
+        0,
+        `private schema should have no synthetic rows in ${table}`,
+      );
+    }
     assert.throws(
       () => createApp(db, { dataMode: 'private', publicOrigin: 'https://example.test' }),
       /requires an access password/,

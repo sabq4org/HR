@@ -129,6 +129,36 @@ test(
   },
 );
 
+test(
+  'PostgreSQL private seed=false migrations add no synthetic policies or fixtures',
+  { skip: !pgUrl },
+  async () => {
+    const schema = `hr_preview_private_seed_test_${randomBytes(16).toString('hex')}`;
+    const db = await createPostgresDatabase(pgUrl!, schema, { seed: false });
+    try {
+      for (const table of [
+        'employees',
+        'policy_versions',
+        'work_schedules',
+        'employment_periods',
+        'leave_requests',
+        'leave_ledger',
+        'administrative_requests',
+        'payroll_runs',
+        'administrative_policies',
+      ]) {
+        assert.equal(
+          (await db.read<{ n: string }>(`SELECT COUNT(*)::text AS n FROM ${table}`))[0].n,
+          '0',
+          `private schema should have no synthetic rows in ${table}`,
+        );
+      }
+    } finally {
+      await db.close();
+    }
+  },
+);
+
 test('policy migration preserves the old flat calculator and creates a distinct profile-component version', async () => {
   const { mkdtempSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');

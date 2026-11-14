@@ -425,6 +425,7 @@ export async function createDatabase(
     }
     await seed(db);
     await seedAdministrationProfiles(db);
+    await seedSyntheticPayrollPolicies(db);
     return db;
   } catch (error) {
     await db.close();
@@ -468,11 +469,55 @@ export async function createPostgresDatabase(
     }
     await seed(db);
     await seedAdministrationProfiles(db);
+    await seedSyntheticPayrollPolicies(db);
     return db;
   } catch (error) {
     await db.close();
     throw error;
   }
+}
+
+/** Payroll policy examples belong to synthetic workspaces, never to private schemas. */
+async function seedSyntheticPayrollPolicies(db: Db): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(
+      `INSERT INTO administrative_policies(id,policy_key,version,name,effective_from,source,state,values_json,created_by,approved_by,created_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+      [
+        'payroll-policy-demo-v1',
+        'payroll-demo',
+        1,
+        'قواعد رواتب تجريبية',
+        '2026-01-01',
+        'قيم تجريبية للعرض فقط؛ لا تمثل نظام العمل أو التأمينات أو مدد.',
+        'synthetic_approved',
+        '{"currency":"SAR","calculation":"synthetic-profile-components"}',
+        'emp-noura',
+        'emp-abdullah',
+        '2026-01-01T00:00:00.000Z',
+      ],
+    );
+    await tx.execute(
+      `INSERT INTO administrative_policies(id,policy_key,version,name,effective_from,source,state,values_json,created_by,approved_by,created_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+      [
+        'payroll-policy-demo-v2',
+        'payroll-demo',
+        2,
+        'قواعد رواتب تجريبية من مكونات الملف',
+        '2026-01-01',
+        'مكونات ملف اصطناعي فقط؛ لا نسب نظامية أو تأمينات أو تحويل مصرفي.',
+        'synthetic_approved',
+        '{"currency":"SAR","calculation":"synthetic-profile-components"}',
+        'emp-noura',
+        'emp-abdullah',
+        '2026-11-14T00:00:00.000Z',
+      ],
+    );
+    await tx.execute(
+      "UPDATE administrative_policies SET state='retired' WHERE id='payroll-policy-demo-v1' AND values_json LIKE '%synthetic-flat-demo%'",
+    );
+  });
 }
 
 async function seed(db: Db): Promise<void> {
