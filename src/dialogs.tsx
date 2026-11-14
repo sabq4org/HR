@@ -16,13 +16,13 @@ import {
   X,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import type { LeaveRequest } from '../shared/contracts';
+import type { LeaveChangeKind, LeaveRequest } from '../shared/contracts';
+import { annualLeaveDays } from '../shared/leave';
 import {
   addDays,
   api,
   Avatar,
   canDecide,
-  countDays,
   dateLabel,
   Empty,
   isPending,
@@ -46,7 +46,7 @@ export function NewLeaveDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const key = useRef({ signature: '', key: crypto.randomUUID() });
-  const days = countDays(start, end, data.policy.workingDays);
+  const days = annualLeaveDays(start, end, data.policy.workingDays, data.policy.holidayDates ?? []);
   const enough = days <= data.balance.available;
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -170,7 +170,8 @@ export function NewLeaveDialog({
                 </span>
               </div>
               <p className="field-hint">
-                يُستبعد الجمعة والسبت وفق جدول التجربة. يُراجع الاحتساب في الخادم عند الإرسال.
+                يُحتسب وفق جدول ونسخة سياسة الإجازة المعروضة، مع استبعاد أيام العطل المسجلة. يعتمد
+                الخادم الاحتساب النهائي.
               </p>
               <label className="form-field">
                 ملاحظة للطلب <span className="optional">اختياري</span>
@@ -263,9 +264,98 @@ export function LeaveDetailDialog({ leave, close }: { leave: LeaveRequest; close
   const [rejecting, setRejecting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [reason, setReason] = useState('');
+  const [changeKind, setChangeKind] = useState<LeaveChangeKind>('extend');
+  const [changeStart, setChangeStart] = useState(leave.startDate);
+  const [changeEnd, setChangeEnd] = useState(leave.endDate);
+  const [changing, setChanging] = useState(false);
+  const [rejectingChange, setRejectingChange] = useState('');
   const keys = useRef<Record<string, string>>({});
   const mayDecide = canDecide(data.me, leave, data.employees);
   const mayCancel = leave.employeeId === data.me.id && isPending(leave);
+  const mayRequestChange =
+    leave.employeeId === data.me.id && leave.status === 'approved' && leave.current !== false;
+  const mayDecideChange = (change: NonNullable<LeaveRequest['changeHistory']>[number]) =>
+    change.status === 'pending_manager'
+      ? data.me.role === 'manager' &&
+        data.employees.some((e) => e.id === change.employeeId && e.managerId === data.me.id)
+      : change.status === 'pending_hr' && data.me.role === 'hr' && data.me.id !== change.employeeId;
+  const mutateChange = async (
+    changeId: string,
+    decision: 'approve' | 'reject',
+    version: number,
+    decisionReason = '',
+  ) => {
+    setError('');
+    setBusy(true);
+    const payload = { decision, version, reason: decision === 'reject' ? decisionReason : '' };
+    const signature = `change:${changeId}:${JSON.stringify(payload)}`;
+    keys.current[signature] ??= crypto.randomUUID();
+    try {
+      await api(`/leave-changes/${changeId}/decision`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': keys.current[signature] },
+        body: JSON.stringify(payload),
+      });
+      await refresh();
+      notify(
+        decision === 'approve' ? 'حُفظ قرار مراجعة التغيير.' : 'رُفض التغيير وأُعيد الحجز الإضافي.',
+      );
+      close();
+    } catch (e) {
+      setError((e as Error).message);
+      await refresh().catch(() => {});
+    } finally {
+      setBusy(false);
+    }
+  };
+  const cancelChange = async (changeId: string, version: number) => {
+    setError('');
+    setBusy(true);
+    const payload = { version };
+    const signature = `cancel-change:${changeId}:${version}`;
+    keys.current[signature] ??= crypto.randomUUID();
+    try {
+      await api(`/leave-changes/${changeId}/cancel`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': keys.current[signature] },
+        body: JSON.stringify(payload),
+      });
+      await refresh();
+      notify('سُحب طلب التغيير وأُعيد الحجز الإضافي.');
+      close();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const submitChange = async () => {
+    setError('');
+    setBusy(true);
+    const payload = {
+      kind: changeKind,
+      version: leave.version,
+      startDate: changeKind === 'amend' ? changeStart : leave.startDate,
+      endDate: changeKind === 'cancel' ? leave.endDate : changeEnd,
+      reason: reason.trim(),
+    };
+    const signature = `request-change:${JSON.stringify(payload)}`;
+    keys.current[signature] ??= crypto.randomUUID();
+    try {
+      await api(`/leaves/${leave.id}/changes`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': keys.current[signature] },
+        body: JSON.stringify(payload),
+      });
+      await refresh();
+      notify('أُرسل طلب التغيير إلى المدير، وتبقى الإجازة الأصلية كما اعتُمدت.');
+      close();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const mutate = async (action: 'approve' | 'reject' | 'cancel') => {
     setError('');
     setBusy(true);
@@ -444,6 +534,196 @@ export function LeaveDetailDialog({ leave, close }: { leave: LeaveRequest; close
             <h4>سبب القرار</h4>
             <p>{leave.decisionReason}</p>
           </div>
+        )}
+        {leave.changeHistory?.length ? (
+          <section className="leave-change-history" aria-label="سجل تغييرات الإجازة">
+            <h4>سجل التغييرات المرتبطة</h4>
+            {leave.changeHistory.map((change) => (
+              <article key={change.id} className="leave-change-item">
+                <strong>
+                  {change.kind === 'cancel'
+                    ? 'إلغاء'
+                    : change.kind === 'extend'
+                      ? 'تمديد'
+                      : change.kind === 'early_return'
+                        ? 'عودة مبكرة'
+                        : 'تعديل'}{' '}
+                  ·{' '}
+                  {change.status === 'pending_manager'
+                    ? 'بانتظار المدير'
+                    : change.status === 'pending_hr'
+                      ? 'بانتظار HR'
+                      : change.status === 'approved'
+                        ? 'معتمد'
+                        : change.status === 'rejected'
+                          ? 'مرفوض'
+                          : 'مسحوب'}
+                </strong>
+                <small>
+                  الأصل: {dateLabel(change.original.startDate)} —{' '}
+                  {dateLabel(change.original.endDate)} ({change.original.days} أيام)
+                </small>
+                <small>
+                  المقترح: {dateLabel(change.proposed.startDate)} —{' '}
+                  {dateLabel(change.proposed.endDate)} ({change.proposed.days} أيام)
+                </small>
+                <p>{change.reason}</p>
+                {change.managerDecisionAt && (
+                  <small>
+                    مراجعة المدير:{' '}
+                    {dateLabel(change.managerDecisionAt, {
+                      day: 'numeric',
+                      month: 'long',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </small>
+                )}
+                {change.hrDecisionAt && (
+                  <small>
+                    قرار HR:{' '}
+                    {dateLabel(change.hrDecisionAt, {
+                      day: 'numeric',
+                      month: 'long',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </small>
+                )}
+                {change.decisionReason && <small>سبب القرار: {change.decisionReason}</small>}
+                {data.me.id === change.employeeId &&
+                  ['pending_manager', 'pending_hr'].includes(change.status) && (
+                    <button
+                      className="button quiet danger-text"
+                      disabled={busy}
+                      onClick={() => cancelChange(change.id, change.version)}
+                    >
+                      سحب طلب التغيير
+                    </button>
+                  )}
+                {mayDecideChange(change) && (
+                  <div className="footer-actions">
+                    <button
+                      className="button primary"
+                      disabled={busy}
+                      onClick={() => mutateChange(change.id, 'approve', change.version)}
+                    >
+                      موافقة
+                    </button>
+                    <button
+                      className="button quiet danger-text"
+                      disabled={busy}
+                      onClick={() => setRejectingChange(change.id)}
+                    >
+                      رفض
+                    </button>
+                  </div>
+                )}
+                {rejectingChange === change.id && (
+                  <div>
+                    <label className="form-field">
+                      سبب رفض التغيير
+                      <textarea
+                        rows={2}
+                        maxLength={1000}
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                      />
+                    </label>
+                    <button
+                      className="button danger"
+                      disabled={busy || !reason.trim()}
+                      onClick={() =>
+                        mutateChange(change.id, 'reject', change.version, reason.trim())
+                      }
+                    >
+                      تأكيد الرفض
+                    </button>
+                  </div>
+                )}
+              </article>
+            ))}
+          </section>
+        ) : null}
+        {mayRequestChange && !changing && (
+          <button
+            className="button quiet"
+            onClick={() => {
+              setChanging(true);
+              setReason('');
+            }}
+          >
+            طلب إلغاء أو تعديل الإجازة
+          </button>
+        )}
+        {changing && (
+          <section className="leave-change-form">
+            <h4>طلب تغيير مرتبط بالإجازة المعتمدة</h4>
+            <p className="field-hint">
+              لن تتغير الإجازة الأصلية إلا بعد موافقة المدير ثم HR. يظل كل إصدار محفوظًا في السجل.
+            </p>
+            <label className="form-field">
+              نوع الطلب
+              <select
+                value={changeKind}
+                onChange={(e) => setChangeKind(e.target.value as LeaveChangeKind)}
+              >
+                <option value="extend">تمديد</option>
+                <option value="early_return">عودة مبكرة</option>
+                <option value="amend">تعديل الفترة</option>
+                <option value="cancel">إلغاء</option>
+              </select>
+            </label>
+            {changeKind === 'amend' && (
+              <label className="form-field">
+                تاريخ البداية المقترح
+                <input
+                  type="date"
+                  min={data.today}
+                  value={changeStart}
+                  onChange={(e) => setChangeStart(e.target.value)}
+                />
+              </label>
+            )}
+            {changeKind !== 'cancel' && (
+              <label className="form-field">
+                تاريخ النهاية المقترح
+                <input
+                  type="date"
+                  min={leave.startDate}
+                  max={changeKind === 'early_return' ? leave.endDate : undefined}
+                  value={changeEnd}
+                  onChange={(e) => setChangeEnd(e.target.value)}
+                />
+              </label>
+            )}
+            <label className="form-field">
+              سبب الطلب
+              <textarea
+                rows={2}
+                maxLength={1000}
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              />
+            </label>
+            {error && (
+              <div className="form-error" role="alert">
+                {error}
+              </div>
+            )}
+            <div className="footer-actions">
+              <button
+                className="button primary"
+                disabled={busy || !reason.trim()}
+                onClick={submitChange}
+              >
+                إرسال للمراجعة
+              </button>
+              <button className="button quiet" disabled={busy} onClick={() => setChanging(false)}>
+                رجوع
+              </button>
+            </div>
+          </section>
         )}
         {rejecting && (
           <label className="form-field">

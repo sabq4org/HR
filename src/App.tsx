@@ -73,6 +73,9 @@ import {
 } from './administration';
 import { PayrollPage } from './payroll';
 import { EmployeeImportPage } from './imports';
+import { AccountLogin, AccountActivationPage, AccountsPage } from './access';
+import { LeavePoliciesPage } from './leave';
+import { OperationsPage } from './operations';
 import { FinancePortal } from './finance/portal';
 
 function EmployeeFileRoute() {
@@ -277,6 +280,7 @@ export default function App() {
   const [personas, setPersonas] = useState<DemoPersona[]>([]);
   const [loading, setLoading] = useState(true);
   const [hosted, setHosted] = useState(false);
+  const [accountMode, setAccountMode] = useState(false);
   const [privateData, setPrivateData] = useState(false);
   const [privateHosted, setPrivateHosted] = useState(false);
   const [needsAccess, setNeedsAccess] = useState(false);
@@ -317,11 +321,17 @@ export default function App() {
       const session = await api<{
         me: Employee | null;
         personas: DemoPersona[];
-        mode?: 'synthetic-local' | 'synthetic-hosted' | 'private-local' | 'private-hosted';
+        mode?:
+          | 'synthetic-local'
+          | 'synthetic-hosted'
+          | 'private-local'
+          | 'private-hosted'
+          | 'operational';
       }>('/session');
       setNeedsAccess(false);
       setPersonas(session.personas);
       setHosted(session.mode === 'synthetic-hosted');
+      setAccountMode(session.mode === 'operational');
       setPrivateData(session.mode === 'private-local' || session.mode === 'private-hosted');
       setPrivateHosted(session.mode === 'private-hosted');
       setData(null);
@@ -417,6 +427,9 @@ export default function App() {
       '/settings/policies': 'القواعد والسياسات',
       '/audit': 'سجل التدقيق',
       '/employees/import': 'استيراد ملفات الموظفين',
+      '/settings/accounts': 'الحسابات والوصول',
+      '/settings/leave': 'سياسات الإجازات',
+      '/settings/operations': 'حالة التشغيل',
     };
     document.title = `${titles[location.pathname] || 'الملف الوظيفي'} | مساحة فريق سبق`;
   }, [location.pathname]);
@@ -428,7 +441,25 @@ export default function App() {
         <p>نجهّز مساحتك…</p>
       </main>
     );
+  if (accountMode && location.pathname === '/activate')
+    return (
+      <AccountActivationPage
+        onComplete={() => {
+          navigate('/');
+          void initialize();
+        }}
+      />
+    );
   if (!data) {
+    if (accountMode && !error)
+      return (
+        <AccountLogin
+          onAuthenticated={async () => {
+            await initialize();
+            navigate('/');
+          }}
+        />
+      );
     if (error && !personas.length && !needsAccess)
       return (
         <main className="boot-state">
@@ -454,14 +485,29 @@ export default function App() {
       />
     );
   }
-  const actionable = data.leaves.filter(
-    (l) =>
-      l.employeeId !== data.me.id &&
-      ((data.me.role === 'hr' && l.status === 'pending_hr') ||
-        (data.me.role === 'manager' &&
-          l.status === 'pending_manager' &&
-          data.employees.find((e) => e.id === l.employeeId)?.managerId === data.me.id)),
-  ).length;
+  const actionable =
+    data.leaves.filter(
+      (l) =>
+        l.employeeId !== data.me.id &&
+        ((data.me.role === 'hr' && l.status === 'pending_hr') ||
+          (data.me.role === 'manager' &&
+            l.status === 'pending_manager' &&
+            data.employees.find((e) => e.id === l.employeeId)?.managerId === data.me.id)),
+    ).length +
+    data.leaves.reduce(
+      (count, leave) =>
+        count +
+        (leave.changeHistory ?? []).filter(
+          (change) =>
+            change.employeeId !== data.me.id &&
+            ((data.me.role === 'hr' && change.status === 'pending_hr') ||
+              (data.me.role === 'manager' &&
+                change.status === 'pending_manager' &&
+                data.employees.find((employee) => employee.id === change.employeeId)?.managerId ===
+                  data.me.id)),
+        ).length,
+      0,
+    );
   const navItems = [
     { to: '/', label: 'لوحة العمل', Icon: LayoutGrid },
     { to: '/profile', label: 'ملفي الوظيفي', Icon: UserRound },
@@ -477,17 +523,32 @@ export default function App() {
       : []),
     { to: '/calendar', label: 'تقويم الفريق', Icon: CalendarDays },
     { to: '/documents', label: 'المستندات', Icon: Files },
+    ...(!accountMode
+      ? [
+          {
+            to: '/payroll',
+            label: ['employee', 'manager'].includes(data.me.role) ? 'قسائم راتبي' : 'الرواتب',
+            Icon: WalletCards,
+          },
+        ]
+      : []),
     ...(data.financeAccess ? [{ to: '/finance', label: 'النظام المالي', Icon: ReceiptText }] : []),
-    {
-      to: '/payroll',
-      label: ['employee', 'manager'].includes(data.me.role) ? 'قسائم راتبي' : 'الرواتب',
-      Icon: WalletCards,
-    },
     ...(['hr', 'finance', 'auditor'].includes(data.me.role)
       ? [{ to: '/reports', label: 'التقارير', Icon: ChartNoAxesCombined }]
       : []),
     ...(['hr', 'approver', 'auditor'].includes(data.me.role)
-      ? [{ to: '/settings/policies', label: 'القواعد والسياسات', Icon: Settings2 }]
+      ? [
+          ...(!accountMode
+            ? [{ to: '/settings/policies', label: 'القواعد والسياسات', Icon: Settings2 }]
+            : []),
+          { to: '/settings/leave', label: 'سياسات الإجازات', Icon: CalendarDays },
+        ]
+      : []),
+    ...(accountMode
+      ? [{ to: '/settings/accounts', label: 'الحسابات والوصول', Icon: ShieldCheck }]
+      : []),
+    ...(accountMode && ['hr', 'auditor'].includes(data.me.role)
+      ? [{ to: '/settings/operations', label: 'حالة التشغيل', Icon: History }]
       : []),
     ...(['hr', 'auditor'].includes(data.me.role)
       ? [{ to: '/audit', label: 'سجل التدقيق', Icon: History }]
@@ -557,7 +618,8 @@ export default function App() {
               className="switch-persona"
               onClick={() => {
                 setError('');
-                setDialog('personas');
+                if (accountMode) navigate('/settings/accounts');
+                else setDialog('personas');
               }}
             >
               <Avatar person={data.me} size="sm" />
@@ -565,15 +627,17 @@ export default function App() {
                 <strong>{data.me.name}</strong>
                 <small>{roleLabel[data.me.role]}</small>
               </span>
-              <ChevronsUpDown size={16} />
+              {accountMode ? <ShieldCheck size={16} /> : <ChevronsUpDown size={16} />}
             </button>
             <div className="demo-caption">
               <i />
-              {privateHosted
-                ? 'بيانات خاصة · دخول محمي'
-                : privateData
-                  ? 'بيانات خاصة · هذا الجهاز فقط'
-                  : 'بيئة تجريبية · بيانات وهمية'}
+              {accountMode
+                ? 'تجربة تشغيل محدودة · بيانات اصطناعية'
+                : privateHosted
+                  ? 'بيانات خاصة · دخول محمي'
+                  : privateData
+                    ? 'بيانات خاصة · هذا الجهاز فقط'
+                    : 'بيئة تجريبية · بيانات وهمية'}
             </div>
           </div>
         </aside>
@@ -665,7 +729,19 @@ export default function App() {
               <Route path="/finance" element={<FinancePortal />} />
               <Route path="/payroll" element={<PayrollPage actor={data.me} />} />
               <Route path="/reports" element={<ReportsPage />} />
-              <Route path="/settings/policies" element={<PoliciesPage />} />
+              <Route
+                path="/settings/policies"
+                element={accountMode ? <Navigate replace to="/settings/leave" /> : <PoliciesPage />}
+              />
+              <Route path="/settings/leave" element={<LeavePoliciesPage />} />
+              <Route
+                path="/settings/accounts"
+                element={accountMode ? <AccountsPage /> : <Navigate replace to="/" />}
+              />
+              <Route
+                path="/settings/operations"
+                element={accountMode ? <OperationsPage /> : <Navigate replace to="/" />}
+              />
               <Route path="/audit" element={<AuditPage />} />
               <Route path="*" element={<Navigate replace to="/" />} />
             </Routes>
@@ -673,13 +749,15 @@ export default function App() {
           <footer className="app-footer">
             <span>سبق · مساحة الفريق</span>
             <span>
-              {privateHosted
-                ? 'بيانات خاصة · دخول محمي بكلمة مرور'
-                : privateData
-                  ? 'بيانات خاصة · على هذا الجهاز فقط'
-                  : hosted
-                    ? 'تجربتك مستقلة · بيانات وهمية وتغييرات مؤقتة'
-                    : 'بيانات تجريبية فقط'}
+              {accountMode
+                ? 'تجربة تشغيل محدودة · حسابات خاصة وحفظ دائم'
+                : privateHosted
+                  ? 'بيانات خاصة · دخول محمي بكلمة مرور'
+                  : privateData
+                    ? 'بيانات خاصة · على هذا الجهاز فقط'
+                    : hosted
+                      ? 'تجربتك مستقلة · بيانات وهمية وتغييرات مؤقتة'
+                      : 'بيانات تجريبية فقط'}
             </span>
           </footer>
         </div>
@@ -698,14 +776,17 @@ export default function App() {
               <CircleHelp size={18} />
               دليل الاستخدام
             </button>
-            <button className="button quiet" onClick={() => setDialog('personas')}>
+            <button
+              className="button quiet"
+              onClick={() => (accountMode ? void signOut() : setDialog('personas'))}
+            >
               <Users size={18} />
-              تبديل حساب التجربة
+              {accountMode ? 'تسجيل الخروج' : 'تبديل حساب التجربة'}
             </button>
           </div>
         </Modal>
       )}
-      {dialog === 'personas' && (
+      {dialog === 'personas' && !accountMode && (
         <Modal
           title="تبديل حساب التجربة"
           close={() => {

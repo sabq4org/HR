@@ -1011,7 +1011,11 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         'SELECT id FROM leave_ledger WHERE employee_id=? LIMIT 1',
         [row.employee_id],
       );
-      if (existingOpening.length || anyLedgerMovement.length)
+      const approvedPolicyOpening = await tx.read(
+        "SELECT id FROM leave_policy_assignments WHERE employee_id=? AND approval_status='approved' LIMIT 1",
+        [row.employee_id],
+      );
+      if (existingOpening.length || anyLedgerMovement.length || approvedPolicyOpening.length)
         throw fault(
           409,
           'OPENING_BALANCE_ALREADY_EXISTS',

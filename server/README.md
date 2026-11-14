@@ -1,19 +1,22 @@
-# Server operations — synthetic HR preview 0.2.0
+# Server operations — HR account pilot 0.3.0
 
 One Express application serves the API and built React UI. SQLite and PostgreSQL implement the same asynchronous `read`, `execute`, `transaction`, and `close` contract. Always use the transaction's `tx`; never call the outer database from within it. SQLite serializes operations; PostgreSQL uses one client and a schema-scoped advisory lock per transaction. Queries on that client are serialized. SQL values are parameterized.
 
 ## Modes and keys
 
+The merge preserves `HR_MODE=private-hosted` (dedicated `hr_private`, shared password gate) and `HR_DATA_MODE=private` (local-only `.data/hr-private.sqlite`) exactly as opt-in modes alongside the new account mode. A merge does not switch an existing private deployment to individual accounts.
+
 - Local default: loopback on port 4317, SQLite `.data/hr-local.sqlite`. `HR_DB_PATH` overrides the local file. `npm run preview` opts into the same synthetic local mode with a built UI.
 - Local PostgreSQL: `HR_DB_DRIVER=postgres`, dedicated `DATABASE_URL`, fixed `HR_DATA_KEY`; schema `hr_development`. Actual credentials belong in ignored environment configuration.
 - Hosted preview: `HR_MODE=hosted-demo` plus explicit HTTPS `HR_PUBLIC_ORIGIN`. Forbids `HR_DB_PATH`; binds `0.0.0.0:$PORT`. Default is one ephemeral in-memory database per visitor. A Secure/HttpOnly/SameSite cookie identifies the workspace; persona switching stays inside it. Workspaces expire, are capped, and never use the developer's SQLite file.
 - Optional hosted PostgreSQL creates `hr_preview_<random>` schemas and drops them at normal expiry/close. Crash-orphan cleanup is not implemented; leave `DATABASE_URL` unset for the present public preview. Do not mistake this option for durable user accounts or production tenancy.
+- Account pilot: `HR_MODE=operational`, a fixed 32-byte base64url `HR_DATA_KEY`, and no synthetic seed by default. Local SQLite uses `.data/hr-operational.sqlite`; PostgreSQL uses `hr_operational`. Public hosting requires dedicated PostgreSQL and an explicit HTTPS `HR_PUBLIC_ORIGIN`; public fixture seeding and in-memory databases are rejected. Initial HR and approver accounts are explicitly nominated through the offline `accounts:bootstrap` command. Demo login is unavailable. See [account guide](../docs/account-pilot-guide.md).
 
 Sensitive profile values, medical/request fields, file contents, history values/reasons and issued letters use AES-256-GCM with record-bound authenticated context. Local key file is owner-readable only; cloud connections require an explicit fixed key outside disposable hosted mode. Public memory workspaces use an ephemeral process key. This is application field encryption, not whole-disk encryption or a production key-management system.
 
 ## Schema upgrades
 
-Nine numbered migrations exist for each database dialect. Versions are recorded in `schema_migrations`; each migration and its version entry commit together. SQLite uses `BEGIN IMMEDIATE`, PostgreSQL uses transactions and an advisory lock.
+Fourteen numbered migrations (001–008 and 010–015) exist for each database dialect. Versions are recorded in `schema_migrations`; each migration and its version entry commit together. SQLite uses `BEGIN IMMEDIATE`, PostgreSQL uses transactions and an advisory lock.
 
 1. Core employees, leave requests, decisions, append-only ledger and audit.
 2. Synthetic policy versions, schedules and employment periods.
@@ -24,11 +27,16 @@ Nine numbered migrations exist for each database dialect. Versions are recorded 
 
 7. Pin new payroll runs to profile-components policy version 2; retain and retire only the intermediate local flat-salary version 1 without rewriting its values. Reject a policy whose calculator does not match the implemented synthetic engine.
 
-8. Append-only approved leave opening balances, including explicit zero, and exact ledger links for new balance corrections. Unique employee/request constraints prevent repeated opening allocations.
+8. Append-only approved leave opening balances, including zero, and ledger links for corrections.
 
-9. Private finance settings and encrypted provider credentials, customers, versioned document snapshots, document counters, idempotency records, leased provider operations, private artifacts and audit. Unique source-quote and document-number constraints prevent duplicate conversion and numbering. No HR records or synthetic finance customers are created by this migration.
+9. Private finance settings, customers, document snapshots, provider operations and private artifacts.
+10. Private finance catalog.
+11. Double-entry finance ledger and reporting tables.
+12. Internal accounts, hashed sessions and recovery codes, encrypted TOTP secrets, persistent throttling and independently approved role changes.
+13. Annual-leave policy/calendar snapshots, independent policy assignments, linked amendment requests, immutable approval history and compensating ledger references.
+14. Scheduled maintenance runs and deduplicated internal reminders.
 
-Seeds insert missing reference profiles/personas only; reopening never resets existing requests, ledgers, profiles, decisions or audit. All fixture values are fictional. Private deployments bypass synthetic seeding. Use the separate private operation guides for authorized real-data import; never seed synthetic policies or balances into the private database.
+Demo seeds insert missing reference profiles/personas only; reopening never resets existing requests, ledgers, profiles, decisions or audit. Operational mode skips them unless explicitly opted into a local synthetic test. All delivery fixtures are fictional. This account pilot does not import or change real employee data; existing private deployment modes and their grants remain available. Existing leave records without a calculation snapshot are not assigned invented historic rules: approval/amendment is blocked pending a separately reviewed migration; pending records may be rejected.
 
 Before upgrading a persistent local preview, run `npm run db:backup`. For intermediate development databases that already contain payroll runs, check duplicate primary periods first:
 
@@ -49,7 +57,7 @@ The database file is not wholly encrypted; sensitive field payloads remain encry
 
 For recovery, stop the process, preserve the whole current `.data` directory, create a clean one, restore the verified database to `.data/hr-local.sqlite`, restore its matching key to `.data/hr-data.key` with mode 600 (or configure the original external key), then start a compatible version. Do not restore over an active database or retain old WAL files. Use forward repair migrations rather than destructive down migrations.
 
-`npm run test:recovery` creates a temporary employee profile and private attachment, backs up/restores SQLite, and verifies decryption and bytes. With `HR_TEST_DATABASE_URL` targeting localhost plus PostgreSQL binaries, it also tests pg_dump/pg_restore into an isolated temporary database and verifies the same encrypted content. Generated recovery resources are removed. It deliberately refuses remote PostgreSQL recovery targets. Production backup cadence, RPO/RTO and restore access remain unapproved.
+`npm run test:recovery` creates a temporary employee profile, private attachment, maintenance run and activated synthetic account. It restores SQLite and verifies decryption, bytes and login with a one-use recovery code, including rejection of reuse. Full verification then requires a localhost `HR_TEST_DATABASE_URL` plus `pg_dump`/`pg_restore` to restore into an isolated temporary database; the command fails if that configuration is missing. It reads ignored `.env.pg-test` when present. Generated recovery resources are removed; remote PostgreSQL targets are refused. Production backup cadence, RPO/RTO and restore access remain unapproved. See [operations runbook](../docs/operations-runbook.md) for schedules, key handling and rollback. The SQLite backup command refuses PostgreSQL mode rather than backing up the wrong file.
 
 ## Permissions and financial boundaries
 
@@ -59,4 +67,6 @@ The server resolves current role/status, checks ownership or team scope, and hid
 
 Payroll uses explicit synthetic salary components in profiles and integer halalas. Missing salary profiles are excluded and counted. Approved rewards/overtime have canonical reviewed amounts and may be consumed only once. Advances need a separately approved repayment plan before automatic deduction; no statutory GOSI/EOS formula or banking transfer is implemented. Future employee changes remain pending until their effective date; no scheduler applies them early.
 
-Private uploads accept bounded PDF/PNG/JPEG with file-signature checks and authenticated attachment delivery. They have no public static URL. There is no antivirus engine; do not use real confidential documents in the preview. Internal notifications use the transactional outbox; no external mail/SMS worker is enabled.
+All payroll API routes are blocked in operational account mode until the financial phase is approved. Annual leave needs an approved dated policy assignment and opening balance. Requests spanning policy boundaries are rejected for HR review, not silently calculated from one policy. Future assignments cannot be approved early. Approved annual-leave changes preserve the original record and apply counter-entries atomically. Role changes revoke existing sessions; reset/privileged provisioning and approvals require fresh MFA where specified in the account guide.
+
+Private uploads accept bounded PDF/PNG/JPEG with file-signature checks and authenticated attachment delivery. They have no public static URL. There is no antivirus engine; do not use real confidential documents in the preview. Internal notifications use the transactional outbox; operational mode checks expiry/overdue reminders on startup and hourly by default, with durable deduplication. No external mail/SMS worker is enabled.

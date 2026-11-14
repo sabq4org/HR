@@ -931,8 +931,9 @@ export async function getEmployeeFile(
     created_at: string;
     leave_id: string | null;
     actor_id: string | null;
+    operation_ref: string | null;
   }>(
-    'SELECT id,kind,days,created_at,leave_id,actor_id FROM leave_ledger WHERE employee_id=? ORDER BY created_at,id',
+    'SELECT id,kind,days,created_at,leave_id,actor_id,operation_ref FROM leave_ledger WHERE employee_id=? ORDER BY created_at,id',
     [employeeId],
   );
   const adjustmentRows = await db.read<{
@@ -972,12 +973,37 @@ export async function getEmployeeFile(
   const consumed = ledger
     .filter((row) => row.kind === 'consume')
     .reduce((sum, row) => sum + Number(row.days), 0);
-  const policyRows = await db.read<{ approval_status: string }>(
-    "SELECT approval_status FROM policy_versions WHERE policy_key='annual-leave' AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) ORDER BY effective_from DESC LIMIT 1",
-    [todayInRiyadh(), todayInRiyadh()],
+  const approvedAssignments = await db.read<{
+    id: string;
+    opening_balance: number;
+    effective_from: string;
+    effective_to: string | null;
+    approved_at: string;
+    policy_from: string;
+    policy_to: string | null;
+    policy_status: string;
+  }>(
+    `SELECT a.id,a.opening_balance,a.effective_from,a.effective_to,a.approved_at,
+      p.effective_from AS policy_from,p.effective_to AS policy_to,p.approval_status AS policy_status
+     FROM leave_policy_assignments a JOIN policy_versions p ON p.id=a.policy_version_id
+     WHERE a.employee_id=? AND a.approval_status='approved' ORDER BY a.approved_at,a.id`,
+    [employeeId],
   );
-  const policyApproved = policyRows[0]?.approval_status === 'approved';
-  const balanceKnown = allocations !== 0 || ledger.some((row) => row.kind === 'allocation');
+  const today = todayInRiyadh();
+  const policyApproved = approvedAssignments.some(
+    (row) =>
+      row.policy_status === 'approved' &&
+      row.effective_from <= today &&
+      (!row.effective_to || row.effective_to >= today) &&
+      row.policy_from <= today &&
+      (!row.policy_to || row.policy_to >= today),
+  );
+  const assignmentOpening = approvedAssignments[0];
+  const assignmentByLedgerReference = new Map(
+    approvedAssignments.map((row) => [`policy-assignment:${row.id}:allocation`, row]),
+  );
+  const balanceKnown =
+    !!assignmentOpening || allocations !== 0 || ledger.some((row) => row.kind === 'allocation');
   const setReadiness = (
     name: string,
     keys: string[],
@@ -1153,7 +1179,9 @@ export async function getEmployeeFile(
     ? Number(openingRow.days)
     : legacyOpening > 0
       ? legacyOpening
-      : null;
+      : assignmentOpening
+        ? Number(assignmentOpening.opening_balance)
+        : null;
   let openingSource = 'رصيد افتتاحي معتمد';
   if (openingRow && (actor.id === employeeId || actor.role === 'hr')) {
     try {
@@ -1167,16 +1195,19 @@ export async function getEmployeeFile(
   }
   const leaveMovements = ledger.map((row) => {
     const adjustment = adjustmentByLedger.get(Number(row.id));
+    const assignment = assignmentByLedgerReference.get(row.operation_ref ?? '');
     let movementSource =
       row.id === openingRow?.ledger_id
         ? openingSource
-        : adjustment
-          ? 'تسوية رصيد معتمدة'
-          : row.leave_id
-            ? `طلب ${row.leave_id}`
-            : row.actor_id
-              ? 'تسجيل إداري'
-              : 'سجل الرصيد';
+        : assignment
+          ? 'رصيد افتتاحي باعتماد إسناد السياسة'
+          : adjustment
+            ? 'تسوية رصيد معتمدة'
+            : row.leave_id
+              ? `طلب ${row.leave_id}`
+              : row.actor_id
+                ? 'تسجيل إداري'
+                : 'سجل الرصيد';
     if (adjustment?.source_ciphertext && (actor.id === employeeId || actor.role === 'hr')) {
       try {
         movementSource = decryptSensitive(
@@ -1195,7 +1226,7 @@ export async function getEmployeeFile(
       effectiveAt:
         row.id === openingRow?.ledger_id
           ? openingRow.effective_at
-          : (adjustment?.effective_at ?? row.created_at.slice(0, 10)),
+          : (assignment?.effective_from ?? adjustment?.effective_at ?? row.created_at.slice(0, 10)),
       source: movementSource,
     };
   });
@@ -1207,6 +1238,20 @@ export async function getEmployeeFile(
       createdAt: openingRow.created_at,
       effectiveAt: openingRow.effective_at,
       source: openingSource,
+    });
+  if (
+    !openingRow &&
+    !legacyOpening &&
+    assignmentOpening &&
+    Number(assignmentOpening.opening_balance) === 0
+  )
+    leaveMovements.push({
+      id: `policy-opening:${assignmentOpening.id}`,
+      kind: 'opening',
+      days: 0,
+      createdAt: assignmentOpening.approved_at,
+      effectiveAt: assignmentOpening.effective_from,
+      source: 'رصيد افتتاحي صفري باعتماد إسناد السياسة',
     });
   const closedRows =
     actor.id === employeeId || ['hr', 'finance', 'approver', 'auditor'].includes(actor.role)

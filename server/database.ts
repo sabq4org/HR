@@ -237,7 +237,8 @@ class PgTx implements AsyncDb {
   }
 }
 
-const SCHEMA_RE = /^hr_(?:development|private|test_[a-z0-9_]+|preview_[a-f0-9]{16,64})$/;
+const SCHEMA_RE =
+  /^hr_(?:development|operational|private|test_[a-z0-9_]+|preview_[a-f0-9]{16,64})$/;
 function quoteSchema(schema: string): string {
   if (!SCHEMA_RE.test(schema) || schema === 'hr_public')
     throw new Error('Refusing an unsafe or public PostgreSQL schema name.');
@@ -349,9 +350,15 @@ async function applySqliteMigrations(connection: DatabaseSync): Promise<void> {
   );
   for (const migration of migrationsIn(new URL('./migrations/', import.meta.url))) {
     const already = connection
-      .prepare('SELECT 1 AS found FROM schema_migrations WHERE version=?')
-      .get(migration.version);
-    if (already) continue;
+      .prepare('SELECT name FROM schema_migrations WHERE version=?')
+      .get(migration.version) as { name: string } | undefined;
+    if (already) {
+      if (already.name !== migration.name)
+        throw new Error(
+          `Migration version ${migration.version} is recorded as ${already.name}; current migration is ${migration.name}. Refusing to continue.`,
+        );
+      continue;
+    }
     const sql = omitDuplicateSqliteAlters(
       connection,
       readFileSync(fileURLToPath(migration.url), 'utf8'),
@@ -389,11 +396,18 @@ async function applyPostgresMigrations(pool: Pool, schema: string): Promise<void
       pool,
       schema,
       async (client) => {
-        const already = await client.query(
-          'SELECT 1 AS found FROM schema_migrations WHERE version=$1',
+        const already = await client.query<{ name: string }>(
+          'SELECT name FROM schema_migrations WHERE version=$1',
           [migration.version],
         );
-        if (already.rowCount) return;
+        if (already.rowCount) {
+          const previousName = already.rows[0]!.name;
+          if (previousName !== migration.name)
+            throw new Error(
+              `Migration version ${migration.version} is recorded as ${previousName}; current migration is ${migration.name}. Refusing to continue.`,
+            );
+          return;
+        }
         await client.query(sql);
         await client.query(
           'INSERT INTO schema_migrations(version,name,applied_at) VALUES($1,$2,$3)',
@@ -405,13 +419,20 @@ async function applyPostgresMigrations(pool: Pool, schema: string): Promise<void
   }
 }
 
+export type DatabaseOptions = { seed?: boolean };
+
 export async function createDatabase(
   path = ':memory:',
-  options: { seed?: boolean } = {},
+  options: DatabaseOptions = {},
 ): Promise<Db> {
   const connection = new DatabaseSync(path);
   connection.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;');
-  await applySqliteMigrations(connection);
+  try {
+    await applySqliteMigrations(connection);
+  } catch (error) {
+    connection.close();
+    throw error;
+  }
   const db = new SqliteAdapter(connection);
   try {
     // Private (real-data) databases never receive synthetic personas or fixtures.
@@ -436,7 +457,7 @@ export async function createDatabase(
 export async function createPostgresDatabase(
   url: string,
   schema = 'hr_development',
-  options: { seed?: boolean } = {},
+  options: DatabaseOptions = {},
 ): Promise<Db> {
   if (!url) throw new Error('A PostgreSQL connection string is required.');
   const quoted = quoteSchema(schema);
