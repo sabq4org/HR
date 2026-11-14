@@ -463,12 +463,14 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
                             >
                               إشعار دائن
                             </button>
-                            <button
-                              className="text-button"
-                              onClick={() => open({ kind: 'reverse', voucher })}
-                            >
-                              عكس الترحيل
-                            </button>
+                            {mayApprove && (
+                              <button
+                                className="text-button"
+                                onClick={() => open({ kind: 'reverse', voucher })}
+                              >
+                                عكس الترحيل
+                              </button>
+                            )}
                           </>
                         )}
                       </td>
@@ -539,14 +541,14 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
                     <td className="fin-actions">
                       {voucher.status === 'reversed' ? (
                         <Status text="معكوس" kind="bad" />
-                      ) : (
+                      ) : mayApprove ? (
                         <button
                           className="text-button"
                           onClick={() => open({ kind: 'reverse', voucher })}
                         >
                           عكس
                         </button>
-                      )}
+                      ) : null}
                     </td>
                   </tr>
                 ))}

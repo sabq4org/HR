@@ -802,6 +802,104 @@ test('ledger: draft posting is rejected, only an admin may approve and post, and
   }
 });
 
+async function reverseAdminOnlyScenario(db: AsyncDb) {
+  process.env.HR_DATA_KEY ??= Buffer.alloc(32, 7).toString('base64url');
+  const h = await harness(db);
+  try {
+    await h.send('/api/finance/ledger/setup', {});
+    const entry = await h.send<{ entry: JournalEntry } & Fail>('/api/finance/ledger/entries', {
+      date: '2026-07-01',
+      description: 'قيد اختبار صلاحية العكس',
+      lines: [
+        { accountCode: '1102', debit: '100.00', credit: '0' },
+        { accountCode: '3101', debit: '0', credit: '100.00' },
+      ],
+    });
+    assert.equal(entry.status, 201);
+
+    const invoiceId = await invoice(h);
+    await accept(h, invoiceId);
+    const posted = await h.send<{ voucher: LedgerVoucher }>(
+      `/api/finance/ledger/invoices/${invoiceId}/post`,
+      { revenueAccountCode: '4101' },
+    );
+    assert.equal(posted.status, 201);
+
+    h.actor.current = { id: 'finance-owner', role: 'employee' };
+    const deniedEntry = await h.send<Fail>(
+      `/api/finance/ledger/entries/${entry.body.entry.id}/reverse`,
+      { date: '2026-07-02', reason: 'محاولة موظف' },
+    );
+    assert.equal(deniedEntry.status, 403);
+    assert.equal(deniedEntry.body.error.code, 'FORBIDDEN');
+
+    const deniedVoucher = await h.send<Fail>(
+      `/api/finance/ledger/vouchers/${posted.body.voucher.id}/reverse`,
+      {
+        version: posted.body.voucher.version,
+        date: '2026-07-11',
+        reason: 'محاولة موظف',
+      },
+    );
+    assert.equal(deniedVoucher.status, 403);
+    assert.equal(deniedVoucher.body.error.code, 'FORBIDDEN');
+
+    // The posted voucher must remain posted after the employee was refused.
+    const unchanged = (
+      await h.get<{ vouchers: LedgerVoucher[] }>('/api/finance/ledger/vouchers?kind=invoice')
+    ).body.vouchers.find((item) => item.id === posted.body.voucher.id);
+    assert.ok(unchanged);
+    assert.equal(unchanged.status, 'posted');
+    const stillEntry = (
+      await h.get<{ entries: JournalEntry[] }>('/api/finance/ledger/entries')
+    ).body.entries.find((item) => item.id === entry.body.entry.id);
+    assert.ok(stillEntry);
+    assert.equal(stillEntry.reversedBy, null);
+
+    h.actor.current = { id: 'finance-owner', role: 'hr' };
+    const reversed = await h.send<{ voucher: LedgerVoucher }>(
+      `/api/finance/ledger/vouchers/${posted.body.voucher.id}/reverse`,
+      {
+        version: posted.body.voucher.version,
+        date: '2026-07-11',
+        reason: 'حساب إيراد خاطئ',
+      },
+    );
+    assert.equal(reversed.status, 200);
+    assert.equal(reversed.body.voucher.status, 'reversed');
+    const events = await h.db.read<{ action: string }>(
+      "SELECT action FROM administration_events WHERE resource_type='finance_voucher' AND resource_id=? AND action='reversed'",
+      [posted.body.voucher.id],
+    );
+    assert.equal(events.length, 1);
+
+    const reversedEntry = await h.send<{ entry: JournalEntry }>(
+      `/api/finance/ledger/entries/${entry.body.entry.id}/reverse`,
+      { date: '2026-07-02', reason: 'قيد خاطئ' },
+    );
+    assert.equal(reversedEntry.status, 201);
+    assert.equal(reversedEntry.body.entry.reversalOf, entry.body.entry.id);
+  } finally {
+    await h.close();
+  }
+}
+test('ledger: only an admin may reverse a voucher or a journal entry', async () => {
+  await reverseAdminOnlyScenario(await createDatabase());
+});
+test(
+  'ledger: only an admin may reverse a voucher or a journal entry on PostgreSQL',
+  { skip: !process.env.HR_TEST_DATABASE_URL },
+  async () => {
+    await reverseAdminOnlyScenario(
+      await createPostgresDatabase(
+        process.env.HR_TEST_DATABASE_URL!,
+        `hr_preview_${randomUUID().replaceAll('-', '')}`,
+        { seed: false },
+      ),
+    );
+  },
+);
+
 test('VAT periods: quarterly and monthly boundaries with a fixed due date', () => {
   assert.deepEqual(vatPeriod('2026-11-14', 'quarterly'), {
     periodStart: '2026-10-01',

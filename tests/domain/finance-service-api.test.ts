@@ -268,6 +268,37 @@ test('an accountant key runs the whole finance cycle and is refused everywhere e
       201,
     );
 
+    // The accountant key is an employee, so it cannot reverse a voucher or a journal entry.
+    const revenues = await app.call(key, 'GET', '/api/finance/ledger/vouchers?kind=revenue');
+    assert.equal(revenues.status, 200);
+    const revenueVoucher = revenues.body.vouchers[0];
+    assert.ok(revenueVoucher);
+    const deniedVoucher = await app.call(
+      key,
+      'POST',
+      `/api/finance/ledger/vouchers/${revenueVoucher.id}/reverse`,
+      { version: revenueVoucher.version, date: '2026-07-13', reason: 'محاولة مفتاح المحاسب' },
+    );
+    assert.equal(deniedVoucher.status, 403);
+    assert.equal(deniedVoucher.body.error.code, 'FORBIDDEN');
+    const manual = await app.call(key, 'POST', '/api/finance/ledger/entries', {
+      date: '2026-07-16',
+      description: 'قيد يدوي اصطناعي',
+      lines: [
+        { accountCode: '1102', debit: '50.00', credit: '0' },
+        { accountCode: '3101', debit: '0', credit: '50.00' },
+      ],
+    });
+    assert.equal(manual.status, 201);
+    const deniedEntry = await app.call(
+      key,
+      'POST',
+      `/api/finance/ledger/entries/${manual.body.entry.id}/reverse`,
+      { date: '2026-07-17', reason: 'محاولة مفتاح المحاسب' },
+    );
+    assert.equal(deniedEntry.status, 403);
+    assert.equal(deniedEntry.body.error.code, 'FORBIDDEN');
+
     // Reports
     const journal = await app.call(key, 'GET', '/api/finance/ledger/entries');
     assert.equal(journal.status, 200);

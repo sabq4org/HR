@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import type { JournalEntry, JournalKind, JournalTax } from '../../../shared/ledger';
+import {
+  canApproveAndPost,
+  type JournalEntry,
+  type JournalKind,
+  type JournalTax,
+} from '../../../shared/ledger';
+import { useApp } from '../../lib';
 import { Alert, Empty, Field, Status } from '../index';
 import {
   AccountSelect,
@@ -291,6 +297,8 @@ function ReverseEntryForm({
 }
 
 export function Journal({ overview, reload, action, go, notify }: ViewProps) {
+  const { data: session } = useApp();
+  const mayReverse = canApproveAndPost(session.me.role);
   const [from, setFrom] = useState(yearStart());
   const [to, setTo] = useState(today());
   const [account, setAccount] = useState('');
@@ -398,7 +406,7 @@ export function Journal({ overview, reload, action, go, notify }: ViewProps) {
                 <p>{entry.description}</p>
                 {entry.reversedBy ? (
                   <Status text="معكوس" kind="bad" />
-                ) : entry.kind === 'manual' || entry.kind === 'opening' ? (
+                ) : mayReverse && (entry.kind === 'manual' || entry.kind === 'opening') ? (
                   <button className="text-button" onClick={() => setForm(entry)}>
                     عكس القيد
                   </button>
