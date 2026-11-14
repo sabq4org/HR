@@ -7,7 +7,10 @@
  * - PATCH /employees/:id               hr.employees.write  (saveProfileValues, record_version lock)
  * - POST  /payroll                     hr.payroll.write    (draft, same calculator as HR)
  * - POST  /payroll/:id/actions submit  hr.payroll.submit   (own draft -> pending_finance)
+ * - POST  /policies                    hr.policy.draft     (payroll rule version, draft only)
+ * - GET   /policies and /policies/:id  hr.policy.draft
  * Review, reject and approve (which closes a run) answer 403 for the key whatever its scopes.
+ * Approving, activating or retiring a policy version is likewise 403 POLICY_ACTION_FORBIDDEN.
  *
  * Each route checks its own scope. Sensitive values are returned only with the matching scope:
  * - financial fields (salary, allowances, IBAN, account, insurance): hr.compensation.read
@@ -37,6 +40,12 @@ import {
 import { fault } from '../administration/validation.js';
 import { saveProfileValues } from '../administration/service.js';
 import { createPayrollCommands } from '../payroll/index.js';
+import {
+  createPolicyDraft,
+  getPolicy,
+  listPolicies,
+  PAYROLL_POLICY_KEYS,
+} from '../administration/policies.js';
 import { SERVICE_ACCOUNT, serviceMayRunPayrollAction, type HrScope } from './keys.js';
 import { ensureServiceAccountRow } from './service-account.js';
 import { registerHrServiceExports } from './exports.js';
@@ -503,6 +512,91 @@ export function registerHrServiceApi(
         run: { id: string; period: string; state: string; version: number };
       };
       res.json({ run: await payrollResponse(context, result.run) });
+    }),
+  );
+
+  const policyPublic = (policy: Awaited<ReturnType<typeof getPolicy>>) => ({
+    id: policy.id,
+    key: policy.key,
+    name: policy.name,
+    version: policy.version,
+    effectiveFrom: policy.effectiveFrom,
+    effectiveTo: policy.effectiveTo,
+    source: policy.source,
+    state: policy.state,
+    values: policy.values,
+    createdBy: policy.createdBy,
+    approvedBy: policy.approvedBy,
+  });
+
+  app.get(
+    '/api/service/hr/policies',
+    route(async (req, res) => {
+      requireScope(contextFor(req), 'hr.policy.draft');
+      const policies = await listPolicies(db, PAYROLL_POLICY_KEYS);
+      res.json({ policies: policies.map(policyPublic) });
+    }),
+  );
+
+  app.get(
+    '/api/service/hr/policies/:id',
+    route(async (req, res) => {
+      requireScope(contextFor(req), 'hr.policy.draft');
+      const policy = await getPolicy(db, String(req.params.id));
+      if (!PAYROLL_POLICY_KEYS.includes(policy.key as (typeof PAYROLL_POLICY_KEYS)[number]))
+        throw fault(404, 'POLICY_NOT_FOUND', 'القاعدة غير موجودة.');
+      res.json({ policy: policyPublic(policy) });
+    }),
+  );
+
+  app.post(
+    '/api/service/hr/policies',
+    route(async (req, res) => {
+      const context = requireScope(contextFor(req), 'hr.policy.draft');
+      const body = requireRecord(req.body);
+      const key = String(body.key ?? '');
+      if (key !== 'payroll')
+        throw fault(
+          400,
+          'INVALID_POLICY',
+          'المفتاح يعد مسودة إصدار قواعد الرواتب فقط (key: payroll).',
+        );
+      await ensureServiceAccountRow(db);
+      const policy = await createPolicyDraft(
+        db,
+        serviceActor,
+        {
+          key,
+          name: String(body.name ?? ''),
+          effectiveFrom: String(body.effectiveFrom ?? ''),
+          effectiveTo: typeof body.effectiveTo === 'string' ? body.effectiveTo : null,
+          source: String(body.source ?? ''),
+          values: requireRecord(body.values),
+        },
+        {
+          privateMode: privateData,
+          idempotencyKey: req.get('Idempotency-Key') ?? undefined,
+          auditAction: 'service_policy_draft_created',
+          auditDetails: {
+            ...serviceAudit(context),
+            effectiveFrom: String(body.effectiveFrom ?? ''),
+            effectiveTo: typeof body.effectiveTo === 'string' ? body.effectiveTo : null,
+          },
+        },
+      );
+      res.status(201).json({ policy: policyPublic(policy) });
+    }),
+  );
+
+  app.post(
+    '/api/service/hr/policies/:id/actions',
+    route(async (req, res) => {
+      requireKey(contextFor(req));
+      throw fault(
+        403,
+        'POLICY_ACTION_FORBIDDEN',
+        'اعتماد القواعد وإيقافها للبشر فقط؛ المفتاح ينشئ المسودة فقط.',
+      );
     }),
   );
 
