@@ -21,7 +21,7 @@ import {
   HR_SERVICE_KEY_PREFIX,
   inHrServiceScope,
   matchHrServiceKey,
-  type HrReadScope,
+  type HrScope,
 } from './service-api/keys.js';
 import { registerHrServiceApi, type HrServiceContext } from './service-api/routes.js';
 
@@ -311,8 +311,8 @@ export function createApp(
     financeApiKeyHashes?: readonly string[];
     /** «محاسب سبق» HR service key digests (HR_SERVICE_API_KEY_HASHES). Private modes only. */
     hrServiceKeyHashes?: readonly string[];
-    /** Read scopes granted to the HR service key (HR_SERVICE_API_KEY_SCOPES). */
-    hrServiceScopes?: readonly HrReadScope[];
+    /** Scopes granted to the HR service key (HR_SERVICE_API_KEY_SCOPES). */
+    hrServiceScopes?: readonly HrScope[];
   } = {},
 ) {
   const db = database;
@@ -378,7 +378,7 @@ export function createApp(
   });
   // Accountant service keys (Authorization: Bearer sabqfin_...). Finance scope only.
   const serviceRequests = new WeakSet<Request>();
-  // HR service key requests (Authorization: Bearer sabqhr_...). Read-only HR service API only.
+  // HR service key requests (Authorization: Bearer sabqhr_...). HR service API only.
   const hrServiceRequests = new WeakMap<Request, HrServiceContext>();
   const failedKeyAttempts: number[] = [];
   app.use((req, res, next) => {
@@ -408,7 +408,7 @@ export function createApp(
       if (!inHrServiceScope(req.method, req.path))
         return jsonError(
           res,
-          fault(403, 'API_KEY_SCOPE', 'مفتاح محاسب سبق مقصور على قراءة واجهة الموارد البشرية.'),
+          fault(403, 'API_KEY_SCOPE', 'مفتاح محاسب سبق مقصور على واجهة خدمة الموارد البشرية.'),
         );
       hrServiceRequests.set(req, { scopes: hrScopes, keyId: keyId.slice(0, 12) });
       return next();
@@ -429,8 +429,13 @@ export function createApp(
     next();
   });
   app.use((req, res, next) => {
-    // HR service keys are GET/HEAD only (enforced above), so they never reach this check.
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !serviceRequests.has(req)) {
+    // Service keys (finance and HR) are not browser requests: no Origin. Their own JSON check
+    // runs below; HR keys reach only the allowlisted /api/service/hr write routes.
+    if (
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) &&
+      !serviceRequests.has(req) &&
+      !hrServiceRequests.has(req)
+    ) {
       const origin = req.get('origin');
       if (!origin)
         return jsonError(res, fault(403, 'ORIGIN_REQUIRED', 'يلزم طلب من المصدر المحلي نفسه.'));
@@ -462,7 +467,10 @@ export function createApp(
   );
   app.use('/api/admin/imports/employees/commit', express.json({ limit: '512kb' }));
   app.use((req, res, next) => {
-    if (!serviceRequests.has(req) || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method))
+    if (
+      !(serviceRequests.has(req) || hrServiceRequests.has(req)) ||
+      !['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)
+    )
       return next();
     const hasBody =
       Number(req.get('content-length') ?? 0) > 0 || Boolean(req.get('transfer-encoding'));

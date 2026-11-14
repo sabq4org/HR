@@ -2,6 +2,15 @@
 
 يسجّل كل تغيير مؤثر في السلوك أو الأمان، مع رابط القرار والاختبار، حتى يتتبعه أي مطور أو وكيل لاحق. الأحدث أولًا.
 
+## 2026-11-14 — مفتاح خدمة «محاسب سبق»، المرحلة الثانية: تعديل الملف ومسودة المسير (فرع `grok/hr-service-key-write`)
+
+- **النطاقات:** فُعّلت `hr.employees.write` و`hr.payroll.write` و`hr.payroll.submit`. `hr.leave.write` ما زال يُرفض عند الإقلاع، و`hr.payroll.approve` و`hr.payroll.close` لا تُمنح أبدًا.
+- **المسارات:** `PATCH /api/service/hr/employees/:id` (حقول الملف ومنها مكونات الراتب، بسبب وتاريخ سريان ورقم نسخة و`Idempotency-Key`)، `POST /api/service/hr/payroll` (مسودة المسير الأساسي)، `POST /api/service/hr/payroll/:id/actions` (`submit` فقط). `approve` و`close` و`review` و`reject` بالمفتاح: `403 PAYROLL_ACTION_FORBIDDEN` دائمًا.
+- **بلا تجاوز:** تعديل الملف عبر `saveProfileValues` نفسها، والمسير عبر أوامر `createPayrollCommands` المستخرجة من مسارات المسير دون تغيير منطقها؛ الدور `service` يُقبل في الإنشاء والإرسال فقط.
+- **حساب الخدمة:** صف `svc-sabq-accountant` معطّل بلا دور ولا دخول يُنشأ عند أول كتابة لتلبية قيود `employees(id)`، والترحيل `016` يخفيه من `employee_access`. لا حذف لقيود ولا إعادة بناء جداول.
+- **التدقيق:** كل كتابة تكتب أحداثها في `administration_events` (وفي `payroll_events` للمسير) باسم «محاسب سبق»، بلا قيم.
+- **الاختبارات:** `tests/domain/hr-service-write.test.ts` على SQLite وPostgreSQL. اختبارات قائمة الترحيلات حُدّثت إلى 16.
+
 ## 2026-11-14 — تدقيق قراءة قائمة المسيرات في واجهة خدمة الموارد البشرية (فرع `grok/hr-service-audit-payroll-list`)
 
 - **الثغرة:** `GET /api/service/hr/payroll?month=` كان يعيد إجماليات الرواتب (`earningsMinor` و`deductionsMinor` و`netMinor`) عند وجود نطاق `hr.compensation.read` دون كتابة حدث في `administration_events`، بينما تفاصيل المسير كانت تُسجَّل. ملاحظة علي على [مراجعة #22](https://github.com/sabq4org/HR/pull/22#discussion_r4574874749).

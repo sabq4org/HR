@@ -1,5 +1,13 @@
 /**
- * Read-only HR service API for the «محاسب سبق» key (phase 1). Mounted under /api/service/hr.
+ * HR service API for the «محاسب سبق» key. Mounted under /api/service/hr.
+ *
+ * Phase 1: reads. Phase 2: three writes, each through the same domain code as the session
+ * routes (no bypass), with Idempotency-Key, a reason, and an administration event attributed to
+ * the service account:
+ * - PATCH /employees/:id               hr.employees.write  (saveProfileValues, record_version lock)
+ * - POST  /payroll                     hr.payroll.write    (draft, same calculator as HR)
+ * - POST  /payroll/:id/actions submit  hr.payroll.submit   (own draft -> pending_finance)
+ * Review, reject and approve (which closes a run) answer 403 for the key whatever its scopes.
  *
  * Each route checks its own scope. Sensitive values are returned only with the matching scope:
  * - financial fields (salary, allowances, IBAN, account, insurance): hr.compensation.read
@@ -19,11 +27,20 @@ import {
   type Actor,
   type EmployeeRow,
 } from '../administration/service.js';
-import { route } from '../administration/common.js';
+import {
+  idempotent,
+  requireRecord,
+  requiredString,
+  route,
+  versionValue,
+} from '../administration/common.js';
 import { fault } from '../administration/validation.js';
-import { SERVICE_ACCOUNT, type HrReadScope } from './keys.js';
+import { saveProfileValues } from '../administration/service.js';
+import { createPayrollCommands } from '../payroll/index.js';
+import { SERVICE_ACCOUNT, serviceMayRunPayrollAction, type HrScope } from './keys.js';
+import { ensureServiceAccountRow } from './service-account.js';
 
-export type HrServiceContext = { scopes: readonly HrReadScope[]; keyId: string };
+export type HrServiceContext = { scopes: readonly HrScope[]; keyId: string };
 type Options = { db: AsyncDb; contextFor: (req: Request) => HrServiceContext | undefined };
 type Row = Record<string, any>;
 
@@ -49,8 +66,13 @@ export function normalizeArabic(value: string): string {
     .trim();
 }
 
-function requireScope(context: HrServiceContext | undefined, scope: HrReadScope): HrServiceContext {
+function requireKey(context: HrServiceContext | undefined): HrServiceContext {
   if (!context) throw fault(401, 'API_KEY_REQUIRED', 'هذا المسار لمفتاح خدمة الموارد البشرية فقط.');
+  return context;
+}
+
+function requireScope(context: HrServiceContext | undefined, scope: HrScope): HrServiceContext {
+  context = requireKey(context);
   if (!context.scopes.includes(scope))
     throw fault(403, 'API_KEY_SCOPE', `المفتاح لا يملك صلاحية ${scope}.`);
   return context;
@@ -101,7 +123,41 @@ async function auditRead(
   });
 }
 
+const isAction = (value: unknown): value is { action: unknown } =>
+  typeof value === 'object' && value !== null && 'action' in value;
 const param = (req: Request, name: string) => String(req.params[name] ?? '');
+
+/**
+ * Profile fields the key never edits directly, even with hr.employees.write: they belong to a
+ * workflow (work status, separation), decide who approves (manager), identify the file
+ * (employee number), or are a human attestation (verification status).
+ */
+export const SERVICE_DENIED_FIELDS: ReadonlySet<string> = new Set([
+  'employeeNumber',
+  'managerId',
+  'employmentStatus',
+  'separationDate',
+  'separationReason',
+  'bankVerificationStatus',
+  'bankVerificationSource',
+  'bankVerifiedAt',
+  'insuranceVerificationStatus',
+  'annualLeaveVerificationStatus',
+]);
+const SALARY_COMPONENTS = [
+  'basicSalary',
+  'housingAllowance',
+  'transportAllowance',
+  'otherAllowance',
+];
+export const SERVICE_SALARY_SOURCE = 'محاسب سبق (مفتاح خدمة) بتوجيه مسجل في سبب التعديل';
+const serviceAudit = (context: HrServiceContext) => ({
+  actorName: SERVICE_ACCOUNT.name,
+  actorKind: 'service_key',
+  keyId: context.keyId,
+});
+// The payroll domain's own actor shape; 'service' is accepted only for draft and submit.
+const payrollServiceActor = { id: SERVICE_ACCOUNT.id, role: 'service' as const };
 
 export function registerHrServiceApi(app: Express, { db, contextFor }: Options) {
   app.get(
@@ -285,6 +341,156 @@ export function registerHrServiceApi(app: Express, { db, contextFor }: Options) 
           ...(withAmounts ? { amountMinor: Number(l.amount_minor) } : {}),
         })),
       });
+    }),
+  );
+
+  // ---- Phase 2: writes -------------------------------------------------------------------
+
+  app.patch(
+    '/api/service/hr/employees/:id',
+    route(async (req, res) => {
+      const context = requireScope(contextFor(req), 'hr.employees.write');
+      const employeeId = param(req, 'id');
+      const body = requireRecord(req.body);
+      const version = versionValue(body.version);
+      const reason = requiredString(body.reason, 'REASON_REQUIRED', 'أدخل سبب التعديل ومن وجّه به.');
+      if (reason.trim().length < 3)
+        throw fault(400, 'REASON_REQUIRED', 'أدخل سبب التعديل ومن وجّه به.');
+      const effectiveAt = requiredString(
+        body.effectiveAt,
+        'EFFECTIVE_DATE_REQUIRED',
+        'أرسل تاريخ السريان بصيغة YYYY-MM-DD.',
+        40,
+      );
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveAt))
+        throw fault(400, 'EFFECTIVE_DATE_REQUIRED', 'أرسل تاريخ السريان بصيغة YYYY-MM-DD.');
+      const raw = requireRecord(body.values, 'أرسل الحقول المطلوب تعديلها.');
+      const keys = Object.keys(raw);
+      if (!keys.length || keys.length > 40)
+        throw fault(400, 'INVALID_VALUES', 'أرسل من حقل إلى 40 حقلًا للتعديل.');
+      const denied = keys.filter((key) => SERVICE_DENIED_FIELDS.has(key)).sort();
+      if (denied.length)
+        throw fault(
+          403,
+          'FIELD_NOT_ALLOWED_FOR_SERVICE',
+          `هذه الحقول تعدل من مسارها البشري فقط: ${denied.join(', ')}`,
+        );
+      const values = { ...raw } as FormValues;
+      // A salary change always carries its effective date and source, never a silent null.
+      if (SALARY_COMPONENTS.some((key) => key in values)) {
+        if (!('salaryEffectiveDate' in values)) values.salaryEffectiveDate = effectiveAt;
+        if (!('salarySource' in values)) values.salarySource = SERVICE_SALARY_SOURCE;
+      }
+      const fields = Object.keys(values).sort();
+      const result = await idempotent(
+        db,
+        serviceActor,
+        `service:employee:update:${employeeId}`,
+        req.get('Idempotency-Key') ?? undefined,
+        { version, values, reason, effectiveAt },
+        async (tx) => {
+          const current = await employeeOr404(tx, employeeId);
+          return {
+            employee: summary(current),
+            version: current.record_version,
+            fields,
+            replayed: true,
+          };
+        },
+        async (tx) => {
+          // employee_profile_history.actor_id and employee_profile_data.updated_by reference
+          // employees(id): the key's hidden, non-login row must exist in this transaction.
+          await ensureServiceAccountRow(tx);
+          // approvedWorkflow=true replaces the session "HR manages this file" check, which the
+          // scope check above stands in for; validation, version lock, field history,
+          // verification resets and per-field audit all run unchanged.
+          const next = await saveProfileValues(
+            tx,
+            serviceActor,
+            employeeId,
+            values,
+            reason,
+            effectiveAt,
+            version,
+            true,
+          );
+          await appendEvent(
+            tx,
+            serviceActor,
+            'employee',
+            employeeId,
+            'profile_updated',
+            reason,
+            { ...serviceAudit(context), fields, effectiveAt },
+            next,
+          );
+          const after = await employeeOr404(tx, employeeId);
+          return {
+            marker: { type: 'employee', id: employeeId },
+            result: { employee: summary(after), version: next, fields, replayed: false },
+          };
+        },
+      );
+      res.json(result);
+    }),
+  );
+
+  const payroll = createPayrollCommands(db);
+  const payrollResponse = async (
+    context: HrServiceContext,
+    run: { id: string; period: string; state: string; version: number },
+  ) => {
+    const row = (await db.read<Row>('SELECT * FROM payroll_runs WHERE id=?', [run.id]))[0];
+    const { employeeCount, totals } = await runTotals(run.id);
+    return {
+      ...runSummary(row ?? run),
+      preparedBy: row?.prepared_by ?? null,
+      employeeCount,
+      ...(context.scopes.includes('hr.compensation.read') ? { totals } : {}),
+    };
+  };
+
+  app.post(
+    '/api/service/hr/payroll',
+    route(async (req, res) => {
+      const context = requireScope(contextFor(req), 'hr.payroll.write');
+      const body = requireRecord(req.body);
+      if (body.correctionOf !== undefined && body.correctionOf !== null)
+        throw fault(
+          400,
+          'SERVICE_CORRECTION_UNSUPPORTED',
+          'مسير التصحيح يعده موظف الموارد البشرية؛ المفتاح يعد مسودة المسير الأساسي فقط.',
+        );
+      const result = (await payroll.createRun(req, payrollServiceActor, serviceAudit(context))) as {
+        run: { id: string; period: string; state: string; version: number };
+        excludedCount?: number;
+      };
+      res.status(201).json({
+        run: await payrollResponse(context, result.run),
+        excludedCount: result.excludedCount ?? 0,
+      });
+    }),
+  );
+
+  app.post(
+    '/api/service/hr/payroll/:id/actions',
+    route(async (req, res) => {
+      const context = requireKey(contextFor(req));
+      const action = isAction(req.body) ? req.body.action : undefined;
+      // Approve, close, review and reject are never available to a key, whatever its scopes.
+      if (action !== 'submit')
+        throw fault(
+          403,
+          'PAYROLL_ACTION_FORBIDDEN',
+          'اعتماد المسير وإغلاقه ومراجعته ورفضه للبشر فقط؛ المفتاح يرسل مسودته للمراجعة فقط.',
+        );
+      requireScope(context, 'hr.payroll.submit');
+      if (!serviceMayRunPayrollAction(action, context.scopes))
+        throw fault(403, 'API_KEY_SCOPE', 'المفتاح لا يملك صلاحية hr.payroll.submit.');
+      const result = (await payroll.runAction(req, payrollServiceActor, serviceAudit(context))) as {
+        run: { id: string; period: string; state: string; version: number };
+      };
+      res.json({ run: await payrollResponse(context, result.run) });
     }),
   );
 

@@ -918,7 +918,7 @@ export async function getEmployeeFile(
             effectiveAt: entry.effective_at,
             reason,
             actorId: entry.actor_id,
-            actorName: actorRow?.name ?? 'مستخدم',
+            actorName: actorRow?.name ?? serviceActorName(entry.actor_id),
             createdAt: entry.created_at,
           };
         })(),

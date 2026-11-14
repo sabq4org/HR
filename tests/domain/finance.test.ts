@@ -1023,7 +1023,7 @@ test(
             'SELECT version FROM schema_migrations ORDER BY version',
           )
         ).map((row) => row.version),
-        [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15],
+        [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16],
       );
       assert.equal(
         (await call('/api/finance/settings/api-key', { apiKey: 'pg-fake-secret' })).status,

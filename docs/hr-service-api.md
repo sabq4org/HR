@@ -1,6 +1,6 @@
-# واجهة الموارد البشرية لبوت «محاسب سبق» (المرحلة الأولى: قراءة فقط)
+# واجهة الموارد البشرية لبوت «محاسب سبق» (قراءة، وكتابة محددة في المرحلة الثانية)
 
-مفتاح خدمة مستقل يتيح لبوت «محاسب سبق» قراءة ملفات الموظفين والرواتب والإجازات والمسيرات عبر HTTP دون جلسة متصفح. كل الأمثلة هنا ببيانات وهمية، والمفتاح فيها `$SABQ_HR_SERVICE_TOKEN` (لا تكتب المفتاح الحقيقي في أي أمر يُحفظ في السجل).
+مفتاح خدمة مستقل يتيح لبوت «محاسب سبق» قراءة ملفات الموظفين والرواتب والإجازات والمسيرات عبر HTTP دون جلسة متصفح، وفي المرحلة الثانية: تعديل الملف بتوجيه علي، وإعداد مسودة المسير وإرسالها للمراجعة. كل الأمثلة هنا ببيانات وهمية، والمفتاح فيها `$SABQ_HR_SERVICE_TOKEN` (لا تكتب المفتاح الحقيقي في أي أمر يُحفظ في السجل).
 
 ## الأمان
 
@@ -9,22 +9,27 @@
 - الخادم يحفظ بصمة SHA-256 فقط في `HR_SERVICE_API_KEY_HASHES` (أكثر من بصمة مفصولة بفواصل للتدوير)، وتُقارن بزمن ثابت.
 - النطاقات في `HR_SERVICE_API_KEY_SCOPES`. بدونها يتعطل المفتاح (`401 API_KEY_DISABLED`)، ويرفض الخادم الإقلاع إذا وُجدت البصمات بلا نطاقات أو خارج الأوضاع الخاصة.
 - المفتاح يعمل بصفة **حساب خدمة ثابت** اسمه «محاسب سبق» (`svc-sabq-accountant`، الدور `service`)، لا بصفة موظف. لا يقبله أي مسار من مسارات المتصفح (`/api/bootstrap` و`/api/admin/*` و`/api/session` …)، كلها `403 API_KEY_SCOPE`.
-- المرحلة الأولى `GET` و`HEAD` فقط على `/api/health` و`/api/service/hr/*`. أي `POST/PATCH/PUT/DELETE` يُرفض بـ `403 API_KEY_SCOPE`.
+- `GET` و`HEAD` على `/api/health` و`/api/service/hr/*`، وثلاثة مسارات كتابة فقط: `PATCH /api/service/hr/employees/:id` و`POST /api/service/hr/payroll` و`POST /api/service/hr/payroll/:id/actions`. أي طريقة أو مسار غيرها يُرفض بـ `403 API_KEY_SCOPE`.
+- الكتابة بصيغة JSON (`Content-Type: application/json`، وإلا `415 JSON_REQUIRED`) ومعها `Idempotency-Key` إلزاميًا. لا تحتاج `Origin` لأنها ليست طلب متصفح.
 - 20 محاولة مفتاح خاطئة خلال 15 دقيقة (مشتركة مع مفتاح المالية) تعطي `429 API_KEY_LOCKED`.
 
 ## النطاقات
 
-| النطاق | يفتح |
-| --- | --- |
-| `hr.employees.read` | البحث بالاسم، والملف بالحقول غير الحساسة |
-| `hr.sensitive.read` | الحقول الشخصية والطبية في الملف (الهوية، الجواز، الميلاد، التأمين الطبي…)، واستحقاق الإجازة المسجَّل |
-| `hr.compensation.read` | الراتب والبدلات والآيبان والحساب والتأمينات، ومبالغ أسطر المسير ومجاميعه |
-| `hr.leave.read` | رصيد الإجازة وحركاته وطلبات الإجازة |
-| `hr.payroll.read` | قائمة المسيرات وتفاصيلها (بدون مبالغ إلا مع `hr.compensation.read`) |
+| النطاق                 | يفتح                                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| `hr.employees.read`    | البحث بالاسم، والملف بالحقول غير الحساسة                                                           |
+| `hr.sensitive.read`    | الحقول الشخصية والطبية في الملف (الهوية، الجواز، الميلاد، التأمين الطبي…)، واستحقاق الإجازة المسجَّل |
+| `hr.compensation.read` | الراتب والبدلات والآيبان والحساب والتأمينات، ومبالغ أسطر المسير ومجاميعه                           |
+| `hr.leave.read`        | رصيد الإجازة وحركاته وطلبات الإجازة                                                                |
+| `hr.payroll.read`      | قائمة المسيرات وتفاصيلها (بدون مبالغ إلا مع `hr.compensation.read`)                                |
 
-نطاقات الكتابة معرّفة للمرحلة الثانية ولا تعمل الآن، ويرفض الخادم الإقلاع إن ضُبطت: `hr.employees.write`، `hr.leave.write`، `hr.payroll.write`، `hr.payroll.submit`.
+| `hr.employees.write` | تعديل حقول الملف (ومنها مكونات الراتب) بسبب وتاريخ سريان ورقم نسخة — المرحلة الثانية |
+| `hr.payroll.write` | إنشاء مسودة المسير الأساسي لشهر — المرحلة الثانية |
+| `hr.payroll.submit` | إرسال مسودة أعدّها المفتاح نفسه للمراجعة (`draft` ← `pending_finance`) — المرحلة الثانية |
 
-**لا يُمنح أبدًا لمفتاح:** `hr.payroll.approve` و`hr.payroll.close`. اعتماد المسير وإغلاقه يبقى لعلي (المعتمد البشري)، والخادم يرفض الإقلاع إن ضُبط أحدهما، والدالة `serviceMayRunPayrollAction` ترفض `approve` و`close` مهما كانت النطاقات.
+`hr.leave.write` معرّف ولم يُفعّل بعد؛ يرفض الخادم الإقلاع إن ضُبط.
+
+**لا يُمنح أبدًا لمفتاح:** `hr.payroll.approve` و`hr.payroll.close`. اعتماد المسير وإغلاقه يبقى لعلي (المعتمد البشري)، والخادم يرفض الإقلاع إن ضُبط أحدهما. مسار الإجراءات يرد `403 PAYROLL_ACTION_FORBIDDEN` على `approve` و`close` و`review` و`reject` مهما كانت النطاقات، وطبقة المسير نفسها ترفض أي إجراء غير `submit` للدور `service`.
 
 ## التدقيق
 
@@ -37,6 +42,11 @@
 - `service_read_payroll_amounts` — قراءة مبالغ أسطر مسير
 
 القراءات غير الحساسة (البحث، الملف العام، الرصيد، المسير بلا مبالغ، وقائمة المسيرات بلا نطاق التعويض) لا تكتب حدثًا.
+
+كل كتابة تُسجَّل في المعاملة نفسها، بالممثل `svc-sabq-accountant` والدور `service`:
+
+- تعديل الملف: حدث `field_updated` لكل حقل تغيّر (اسم الحقل وهل هو حساس، بلا قيمة)، وحدث `profile_updated` فيه `actorName` و`actorKind` و`keyId` وأسماء الحقول وتاريخ السريان، والسبب مشفّرًا. وسجل الحقل في `employee_profile_history` (القيمة القديمة والجديدة والسبب مشفّرة) باسم «محاسب سبق».
+- المسير: `service_payroll_draft_created` و`service_payroll_submitted` (`resource_type = payroll_run`)، إضافة إلى `payroll_events` (`created` و`submit`) الذي يظهر في الخط الزمني للمسير باسم «محاسب سبق».
 
 ## المسارات
 
@@ -54,7 +64,19 @@ curl -s -H "$AUTH" "$BASE/api/service/hr/employees?q=$(printf 'ساره القح
 يتجاهل التشكيل والتطويل، ويساوي أ/إ/آ/ا وى/ي وة/ه وؤ/و وئ/ي والأرقام العربية. يبحث في الاسم والرقم الوظيفي، وكل كلمات البحث يجب أن تطابق. حرفان على الأقل وإلا `400 QUERY_REQUIRED`. حتى 20 نتيجة:
 
 ```json
-{ "employees": [{ "id": "emp-example", "employeeNumber": "S-000", "name": "موظف وهمي", "title": "…", "department": "…", "status": "active" }], "total": 1 }
+{
+  "employees": [
+    {
+      "id": "emp-example",
+      "employeeNumber": "S-000",
+      "name": "موظف وهمي",
+      "title": "…",
+      "department": "…",
+      "status": "active"
+    }
+  ],
+  "total": 1
+}
 ```
 
 ### ملف موظف — `hr.employees.read` (+ `hr.sensitive.read`)
@@ -90,20 +112,72 @@ curl -s -H "$AUTH" "$BASE/api/service/hr/payroll/RUN_ID"
 
 القائمة اختياريًا لشهر `YYYY-MM` (وإلا `400 INVALID_MONTH`). كل مسير: `id` و`period` و`state` و`version` و`employeeCount`، و`totals` بالهللة مع نطاق التعويض. التفصيل يضيف `lines` (الموظف والبند والنوع، و`amountMinor` مع نطاق التعويض).
 
+### تعديل ملف موظف — `hr.employees.write`
+
+```bash
+curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' -H "Idempotency-Key: $(uuidgen)" \
+  "$BASE/api/service/hr/employees/emp-example" \
+  -d '{"version":7,"reason":"بتوجيه علي في 2026-11-14: تسجيل الراتب","effectiveAt":"2026-11-01",
+       "values":{"basicSalary":10000,"housingAllowance":2500,"transportAllowance":1000,"otherAllowance":0}}'
+```
+
+- `version` هو `record_version` الحالي للملف (يرجع في رد التعديل السابق). إن تغيّر الملف منذ قراءته: `409 STALE_VERSION` ولا يتغير شيء.
+- `reason` إلزامي (من 3 أحرف): اكتب من وجّه بالتعديل ومتى. يُحفظ مشفّرًا.
+- `effectiveAt` إلزامي بصيغة `YYYY-MM-DD`، ولا يقبل تاريخًا مستقبليًا (`409 FUTURE_EFFECTIVE_DATE`) كما في واجهة الموارد البشرية؛ سجّل التعديل في يوم سريانه.
+- عند تغيير أي مكون راتب (`basicSalary` و`housingAllowance` و`transportAllowance` و`otherAllowance`) يُضبط `salaryEffectiveDate` على `effectiveAt` و`salarySource` على «محاسب سبق (مفتاح خدمة) بتوجيه مسجل في سبب التعديل» ما لم يُرسلا. لا يُترك تاريخ السريان فارغًا.
+- التحقق نفسه الذي في الواجهة (`saveProfileValues`): أنواع الحقول، الحقول غير المعروفة (`400 UNKNOWN_FIELDS`)، إعادة حالة التحقق البنكي والتأميني وإجازة الاستحقاق إلى «غير متحقق» عند تغيير قيمها، وسجل الحقل.
+- حقول لا يعدّلها المفتاح ولو بالنطاق (`403 FIELD_NOT_ALLOWED_FOR_SERVICE`): `employeeNumber` و`managerId` و`employmentStatus` و`separationDate` و`separationReason`، وحالات التحقق `bankVerificationStatus` و`bankVerificationSource` و`bankVerifiedAt` و`insuranceVerificationStatus` و`annualLeaveVerificationStatus`. هذه لها مسار بشري (الحالة الوظيفية وإنهاء الخدمة، خط الاعتماد، شهادة تحقق).
+- الرد بلا قيم: `{ "employee": {…}, "version": 8, "fields": [...], "replayed": false }`. إعادة الطلب بالمفتاح نفسه ونفس المحتوى ترد `replayed: true` دون أثر جديد؛ بمحتوى مختلف `409 IDEMPOTENCY_CONFLICT`.
+
+### مسودة المسير — `hr.payroll.write`
+
+```bash
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "Idempotency-Key: $(uuidgen)" \
+  "$BASE/api/service/hr/payroll" -d '{"period":"2026-11","reason":"مسودة نوفمبر بتوجيه علي"}'
+```
+
+ينفّذ أمر الإنشاء نفسه الذي تستخدمه الموارد البشرية (`createPayrollCommands`): السياسة المعتمدة للفترة، مسير أساسي واحد لكل شهر (`409 period_already_exists`)، أسطر من مكونات الملف للموظفين النشطين، واستبعاد الملفات الناقصة (`excludedCount`). المسير المعدّ باسم `svc-sabq-accountant`. مسير التصحيح لا يُعد بالمفتاح (`400 SERVICE_CORRECTION_UNSUPPORTED`). الرد `201` بملخص المسير (`id` و`period` و`state` و`version` و`preparedBy` و`employeeCount`، و`totals` مع `hr.compensation.read`) دون أسطر؛ الأسطر من `GET /payroll/:id`.
+
+إذا لم تكن في القاعدة سياسة رواتب معتمدة للفترة يرد `400 policy_unavailable` — هذا هو الحال في البيانات الخاصة حاليًا، والمفتاح لا يتجاوزه.
+
+### إرسال المسودة للمراجعة — `hr.payroll.submit`
+
+```bash
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "Idempotency-Key: $(uuidgen)" \
+  "$BASE/api/service/hr/payroll/RUN_ID/actions" -d '{"action":"submit","version":1}'
+```
+
+`draft` ← `pending_finance`، لمسودة أعدّها المفتاح نفسه فقط (`403 transition_forbidden` لمسودة أعدّها شخص). `version` غير مطابق: `409 version_conflict`. بعدها المراجعة للمالية والاعتماد (الذي يغلق المسير) للمعتمد، من الواجهة. `approve` و`close` و`review` و`reject` بالمفتاح: `403 PAYROLL_ACTION_FORBIDDEN` دائمًا.
+
 ## الأخطاء
 
-| الرمز | المعنى |
-| --- | --- |
-| `401 API_KEY_DISABLED` | المفتاح غير مفعّل في هذه النسخة (لا بصمات أو لا نطاقات أو وضع غير خاص) |
-| `401 INVALID_API_KEY` | مفتاح خاطئ |
-| `403 API_KEY_SCOPE` | المسار أو الطريقة خارج نطاق المفتاح، أو النطاق المطلوب غير ممنوح |
-| `404 EMPLOYEE_NOT_FOUND` / `PAYROLL_NOT_FOUND` | المعرّف غير موجود |
-| `429 API_KEY_LOCKED` | محاولات خاطئة كثيرة |
+| الرمز                                                       | المعنى                                                                |
+| ----------------------------------------------------------- | --------------------------------------------------------------------- |
+| `401 API_KEY_DISABLED`                                      | المفتاح غير مفعّل في هذه النسخة (لا بصمات أو لا نطاقات أو وضع غير خاص) |
+| `401 INVALID_API_KEY`                                       | مفتاح خاطئ                                                            |
+| `403 API_KEY_SCOPE`                                         | المسار أو الطريقة خارج نطاق المفتاح، أو النطاق المطلوب غير ممنوح      |
+| `404 EMPLOYEE_NOT_FOUND` / `PAYROLL_NOT_FOUND`              | المعرّف غير موجود                                                      |
+| `400 IDEMPOTENCY_KEY_REQUIRED` / `idempotency_key_required` | كتابة بلا `Idempotency-Key`                                           |
+| `403 FIELD_NOT_ALLOWED_FOR_SERVICE`                         | حقل له مسار بشري فقط                                                  |
+| `403 PAYROLL_ACTION_FORBIDDEN`                              | اعتماد أو إغلاق أو مراجعة أو رفض مسير بالمفتاح                        |
+| `409 STALE_VERSION` / `version_conflict`                    | الملف أو المسير تغيّر منذ قراءته                                       |
+| `429 API_KEY_LOCKED`                                        | محاولات خاطئة كثيرة                                                   |
 
 ## حدود معروفة
 
 - السياسة السنوية والمسير في البيانات الخاصة ما زالا على محرك المعاينة (`payroll-policy-demo-v2`). الرصيد والمسير المقروءان ليسا نظاميين حتى تُعتمد سياسة حقيقية.
-- لا كتابة في هذه المرحلة. المرحلة الثانية (بقرار علي): تعديل الملف مباشرة مع تسجيله باسم «محاسب سبق»، وإنشاء مسودة المسير وإرسالها للمراجعة. الاعتماد والإغلاق لعلي فقط. ملاحظة للمرحلة الثانية: `payroll_runs.prepared_by` مرتبط بجدول الموظفين، فيلزم صف حساب خدمة أو تعديل المخطط.
+- لا يوجد في البيانات الخاصة حتى الآن سياسة رواتب معتمدة، فمسودة المسير بالمفتاح ترد `400 policy_unavailable` إلى أن تُعتمد سياسة.
+- المسير يستبعد أصحاب الدور `finance` و`approver` (كما في واجهة الموارد البشرية).
+- `hr.leave.write` لم يُفعّل.
+
+## حساب الخدمة في قاعدة البيانات (المرحلة الثانية)
+
+سجل الحقل (`employee_profile_history.actor_id`) وبيانات الملف (`updated_by`) ومُعدّ المسير (`payroll_runs.prepared_by`) مرتبطة بجدول `employees`. اخترنا الأقل خطرًا: صف واحد ثابت للمفتاح بدل حذف القيود أو إعادة بناء الجداول.
+
+- المعرّف `svc-sabq-accountant` والرقم `SVC-SABQ-ACCOUNTANT` والاسم «محاسب سبق»، الحالة `suspended`، بلا `access_role`، وبلا حساب دخول في `employee_accounts`.
+- يُنشأ **عند أول كتابة** بالمفتاح، داخل معاملة تلك الكتابة (`server/service-api/service-account.ts`)، لا في الترحيل. قاعدة لم يكتب فيها المفتاح لا يتغير فيها شيء.
+- الترحيل `016_service_account_view` يعيد تعريف العرض `employee_access` بالأعمدة نفسها وبترتيبها مع استثناء هذا المعرّف. كل الدليل والبحث والمسير والإجازات وإدارة الحسابات والتصدير تقرأ من هذا العرض، فلا يظهر فيها ولا يُضاف لمسير ولا يُسند له عمل. ولا يستطيع المفتاح تعديل صفه (`404`).
+- التراجع: إعادة تعريف العرض بلا شرط (ترحيل جديد)؛ الصف إن وُجد يبقى معطّلًا ولا يضر.
 
 ## إنشاء المفتاح وتفعيله (بعد الدمج)
 
@@ -117,5 +191,13 @@ npm run hr:key -- --out /secure/path/hr-service.key --env-out /secure/path/hr-se
 HR_SERVICE_API_KEY_HASHES=sha256:<البصمة المطبوعة>
 HR_SERVICE_API_KEY_SCOPES=hr.employees.read,hr.compensation.read,hr.sensitive.read,hr.leave.read,hr.payroll.read
 ```
+
+لتفعيل المرحلة الثانية (بعد الدمج وبموافقة علي) أضف نطاقات الكتابة إلى القيمة نفسها، دون تغيير البصمة أو المفتاح:
+
+```
+HR_SERVICE_API_KEY_SCOPES=hr.employees.read,hr.compensation.read,hr.sensitive.read,hr.leave.read,hr.payroll.read,hr.employees.write,hr.payroll.write,hr.payroll.submit
+```
+
+لسحب الكتابة فقط: أعد القيمة إلى نطاقات القراءة وأعد النشر.
 
 للتدوير: أضف البصمة الجديدة بفاصلة، وسلّم المفتاح الجديد، ثم احذف القديمة. للإيقاف الفوري: احذف المتغيرين وأعد النشر.
