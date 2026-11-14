@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import {
+  canApproveAndPost,
   purchaseTaxCodes,
   purchaseTaxHint,
   taxCodeLabel,
@@ -8,6 +9,7 @@ import {
   type LedgerVoucher,
   type TaxCode,
 } from '../../../shared/ledger';
+import { useApp } from '../../lib';
 import { Alert, Empty, Field, Status } from '../index';
 import {
   AccountSelect,
@@ -31,6 +33,8 @@ type Form =
   | { kind: 'reverse'; voucher: LedgerVoucher };
 
 export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
+  const { data: session } = useApp();
+  const mayReverse = canApproveAndPost(session.me.role);
   const mutate = useMutate();
   const load = useCallback(
     async () =>
@@ -489,12 +493,14 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
                                 سداد
                               </button>
                             )}
-                            <button
-                              className="text-button"
-                              onClick={() => open({ kind: 'reverse', voucher })}
-                            >
-                              عكس
-                            </button>
+                            {mayReverse && (
+                              <button
+                                className="text-button"
+                                onClick={() => open({ kind: 'reverse', voucher })}
+                              >
+                                عكس
+                              </button>
+                            )}
                           </>
                         )}
                       </td>
