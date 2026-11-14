@@ -11,6 +11,7 @@ import type {
   FinanceQuote,
   FinanceSeller,
 } from '../../shared/finance';
+import { formatIban } from '../../shared/finance';
 import { RiyalSign } from './RiyalSign';
 import { SellerBlock } from './SellerBlock';
 
@@ -37,6 +38,10 @@ export const statusText: Record<FinanceInvoice['status'], string> = {
   rejected: 'مرفوضة',
   reconciliation_required: 'تحتاج إلى مطابقة الحالة',
 };
+export const quoteStatusText: Record<FinanceQuote['status'], string> = {
+  draft: 'مسودة عرض سعر',
+  converted: 'تم التحويل إلى فاتورة',
+};
 
 export function Status({
   text,
@@ -62,7 +67,7 @@ export function QuotePaper({ quote, seller }: { quote: FinanceQuote; seller: Fin
         kind="quote"
         title="عرض سعر"
         number={quote.number}
-        status="مسودة عرض سعر"
+        status={quoteStatusText[quote.status]}
       />
       <div className="fin-document-rule" />
       <div className="fin-document-cards">
@@ -72,7 +77,7 @@ export function QuotePaper({ quote, seller }: { quote: FinanceQuote; seller: Fin
           number={quote.number}
           issueDate={quote.issueDate}
           validUntil={quote.validUntil}
-          status="مسودة عرض سعر"
+          status={quoteStatusText[quote.status]}
           documentType={quote.documentType ?? 'standard'}
         />
       </div>
@@ -189,10 +194,7 @@ function DocumentHeader({
       <aside className="fin-doc-heading">
         <h1>{title}</h1>
         <span>{subtitle ?? (kind === 'quote' ? 'Price Quotation' : 'Tax Invoice')}</span>
-        <Status
-          text={status}
-          kind={kind === 'quote' || status.includes('مسودة') ? 'waiting' : 'good'}
-        />
+        <Status text={status} kind={status.includes('مسودة') ? 'waiting' : 'good'} />
         <b className="fin-doc-number" dir="ltr">
           {number}
         </b>
@@ -443,13 +445,17 @@ function BankAccountDetails({ seller }: { seller: FinanceSeller }) {
         {bank.accountNumber && (
           <div>
             <dt>رقم الحساب / Account No</dt>
-            <dd dir="ltr">{bank.accountNumber}</dd>
+            <dd className="fin-bank-value" dir="ltr">
+              {bank.accountNumber}
+            </dd>
           </div>
         )}
         {bank.iban && (
           <div>
             <dt>الآيبان / IBAN</dt>
-            <dd dir="ltr">{bank.iban}</dd>
+            <dd className="fin-bank-value" dir="ltr">
+              {formatIban(bank.iban)}
+            </dd>
           </div>
         )}
       </dl>

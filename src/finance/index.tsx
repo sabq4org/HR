@@ -40,7 +40,14 @@ import type {
 import { useSearchParams } from 'react-router-dom';
 import { api, Modal, PageHeading, useApp } from '../lib';
 import { CustomerStatementModal } from './Statement';
-import { InvoicePaper, QuotePaper, Status, documentTypeShort, statusText } from './paper';
+import {
+  InvoicePaper,
+  QuotePaper,
+  Status,
+  documentTypeShort,
+  quoteStatusText,
+  statusText,
+} from './paper';
 import { completeSeller } from '../../shared/finance';
 import './finance.css';
 
@@ -871,9 +878,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                           <td className="num">{money(q.totalHalalas)}</td>
                           <td>
                             <Status
-                              text={
-                                q.status === 'draft' ? 'مسودة عرض سعر' : 'تم التحويل إلى فاتورة'
-                              }
+                              text={quoteStatusText[q.status]}
                               kind={q.status === 'draft' ? 'waiting' : 'good'}
                             />
                           </td>

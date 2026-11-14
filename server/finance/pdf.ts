@@ -19,6 +19,8 @@ import type {
   FinanceSeller,
   FinanceCustomerInput,
 } from '../../shared/finance.js';
+import { formatIban } from '../../shared/finance.js';
+import { quoteStatusText } from '../../src/finance/paper.js';
 
 const bidi = bidiFactory();
 const ARABIC = /[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
@@ -321,10 +323,15 @@ function render(p: Printable): Promise<Buffer> {
   const extras: string[] = [];
   if (p.notes.trim()) extras.push(`ملاحظات: ${p.notes.trim()}`);
   const bank = p.seller.bankAccount;
-  if (bank?.iban)
-    extras.push(
-      `التحويل البنكي: ${bank.bankName} — ${bank.beneficiaryName} — ${ltr(`IBAN ${bank.iban}`)}`,
-    );
+  if (bank && Object.values(bank).some((value) => value.trim())) {
+    const parts = [
+      bank.beneficiaryName && `المستفيد: ${bank.beneficiaryName}`,
+      bank.bankName && `البنك: ${bank.bankName}`,
+      bank.accountNumber && `رقم الحساب: ${ltr(bank.accountNumber)}`,
+      bank.iban && `الآيبان: ${ltr(formatIban(bank.iban))}`,
+    ].filter(Boolean);
+    extras.push(`التحويل البنكي: ${parts.join(' — ')}`);
+  }
   y += 8;
   for (const text of extras)
     for (const row of wrap(doc, text, width, 9.5)) {
@@ -350,6 +357,7 @@ export function quotePdf(quote: FinanceQuote): Promise<Buffer> {
       ['العنوان', quote.title],
       ['تاريخ العرض', ltr(quote.issueDate)],
       ['صالح حتى', ltr(quote.validUntil)],
+      ['الحالة', quoteStatusText[quote.status]],
       ['نوع المستند عند الفوترة', typeLabel[quote.documentType ?? 'standard']],
     ],
     seller: quote.seller,

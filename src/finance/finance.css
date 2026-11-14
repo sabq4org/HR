@@ -737,7 +737,10 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
-.fin-bank-card dd[dir='ltr'] {
+.fin-bank-card dd.fin-bank-value {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: right;
   font-weight: 600;
   overflow-wrap: normal;
   white-space: nowrap;
