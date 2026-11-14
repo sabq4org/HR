@@ -403,10 +403,14 @@ async function buildAdministrativeOverview(
 
 export function registerAdministration(
   app: Express,
-  { db, requireActor }: { db: AsyncDb; requireActor: RequireActor },
+  {
+    db,
+    requireActor,
+    privateMode = false,
+  }: { db: AsyncDb; requireActor: RequireActor; privateMode?: boolean },
 ) {
   registerPayroll(app, { db, requireActor });
-  registerEmployeeImports(app, { db, requireActor });
+  registerEmployeeImports(app, { db, requireActor, privateMode });
 
   routeWithActor(app, 'get', '/api/admin/overview', requireActor, async (_req, res, actor) => {
     res.json({ overview: await buildAdministrativeOverview(db, actor) });
@@ -426,7 +430,12 @@ export function registerAdministration(
       body,
       (tx, m) => getEmployeeFile(tx, actor, m.id),
       async (tx) => {
-        const file = await createEmployee(tx, actor, body.values);
+        const file = await createEmployee(tx, actor, body.values, {
+          mode: privateMode ? 'private' : 'synthetic',
+          employmentSource: privateMode
+            ? 'Private HR-created employee record; employment terms require review.'
+            : undefined,
+        });
         return { marker: { type: 'employee', id: file.employee.id }, result: file };
       },
     );
@@ -528,8 +537,18 @@ export function registerAdministration(
             );
           const now = at();
           await tx.execute(
-            "INSERT INTO employment_periods(id,employee_id,start_date,relationship_type,source,status,created_at) VALUES(?,?,?,?,?,'synthetic-demo-only',?)",
-            [newId(), e.id, startDate, type, 'User-created synthetic rehire.', now],
+            'INSERT INTO employment_periods(id,employee_id,start_date,relationship_type,source,status,created_at) VALUES(?,?,?,?,?,?,?)',
+            [
+              newId(),
+              e.id,
+              startDate,
+              type,
+              privateMode
+                ? 'Private approved rehire; verify source documents.'
+                : 'User-created synthetic rehire.',
+              privateMode ? 'pending-review' : 'synthetic-demo-only',
+              now,
+            ],
           );
           await tx.execute(
             "UPDATE employees SET employment_status='active',record_version=record_version+1 WHERE id=? AND record_version=?",

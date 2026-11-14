@@ -405,6 +405,12 @@ export async function createEmployee(
   tx: AsyncDb,
   actor: Actor,
   input: unknown,
+  options: {
+    mode?: 'synthetic' | 'private';
+    employmentSource?: string;
+    employmentStartDate?: string | null;
+    employmentEndDate?: string | null;
+  } = {},
 ): Promise<EmployeeFile> {
   if (actor.role !== 'hr')
     throw fault(403, 'FORBIDDEN', 'تتطلب إضافة ملف جديد صلاحية الشؤون الإدارية.');
@@ -472,12 +478,50 @@ export async function createEmployee(
     VALUES(?,?,?,?,?,?)`,
     [id, JSON.stringify(parts.publicValues), encrypted, 1, now, actor.id],
   );
-  await tx.execute(
-    `INSERT INTO employment_periods(id,employee_id,start_date,relationship_type,source,status,created_at)
-    VALUES(?,?,?,'fictional-demo-record','Synthetic demo fixture; user-created synthetic record.','synthetic-demo-only',?)`,
-    [`period-${randomUUID()}`, id, values.joinDate, now],
-  );
-  if (status === 'active') {
+  const privateMode = options.mode === 'private';
+  if (!privateMode) {
+    await tx.execute(
+      `INSERT INTO employment_periods(id,employee_id,start_date,relationship_type,source,status,created_at)
+      VALUES(?,?,?,'fictional-demo-record','Synthetic demo fixture; user-created synthetic record.','synthetic-demo-only',?)`,
+      [`period-${randomUUID()}`, id, values.joinDate, now],
+    );
+  } else {
+    const employmentStartDate =
+      options.employmentStartDate === undefined
+        ? String(values.joinDate)
+        : options.employmentStartDate;
+    const employmentEndDate =
+      options.employmentEndDate === undefined
+        ? status === 'terminated' && typeof values.separationDate === 'string'
+          ? values.separationDate
+          : null
+        : options.employmentEndDate;
+    const hasVerifiableEmploymentDates =
+      employmentStartDate !== null && !(status === 'terminated' && employmentEndDate === null);
+    if (hasVerifiableEmploymentDates) {
+      if (!validIsoDate(employmentStartDate))
+        throw fault(400, 'INVALID_DATE', 'تاريخ بداية فترة العمل غير صالح.');
+      if (employmentEndDate !== null && !validIsoDate(employmentEndDate))
+        throw fault(400, 'INVALID_DATE', 'تاريخ نهاية فترة العمل غير صالح.');
+      if (employmentEndDate !== null && employmentEndDate < employmentStartDate)
+        throw fault(400, 'INVALID_EMPLOYMENT_PERIOD', 'نهاية فترة العمل تسبق بدايتها.');
+      await tx.execute(
+        `INSERT INTO employment_periods(id,employee_id,start_date,end_date,relationship_type,source,status,created_at)
+        VALUES(?,?,?,?,?,?,?,?)`,
+        [
+          `period-${randomUUID()}`,
+          id,
+          employmentStartDate,
+          employmentEndDate,
+          typeof values.contractType === 'string' ? values.contractType : 'غير محددة',
+          options.employmentSource ?? 'Private employee file; employment terms require review.',
+          'pending-review',
+          now,
+        ],
+      );
+    }
+  }
+  if (!privateMode && status === 'active') {
     await tx.execute(
       `INSERT INTO work_schedules(id,employee_id,version,timezone,working_days_json,source,created_at)
       VALUES(?,?,'demo-1','Asia/Riyadh','[0,1,2,3,4]','Synthetic demo schedule; confirm before use.',?) ON CONFLICT(employee_id,version) DO NOTHING`,

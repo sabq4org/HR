@@ -990,7 +990,7 @@ export function createApp(
       jsonError(res, e as ApiFault);
     }
   });
-  registerAdministration(app, { db, requireActor });
+  registerAdministration(app, { db, requireActor, privateMode: privateData });
   app.use((req, res, next) => {
     if (req.path === '/api' || req.path.startsWith('/api/'))
       return jsonError(res, fault(404, 'NOT_FOUND', 'المسار غير موجود.'));

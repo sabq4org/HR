@@ -11,7 +11,11 @@ const fault = (status: number, code: string, message: string) =>
   Object.assign(new Error(message), { status, code });
 export function registerEmployeeImports(
   app: Express,
-  { db, requireActor }: { db: Db; requireActor: RequireActor },
+  {
+    db,
+    requireActor,
+    privateMode = false,
+  }: { db: Db; requireActor: RequireActor; privateMode?: boolean },
 ) {
   registerRoute(app, 'get', '/api/admin/imports/employees/template', async (req, res) => {
     const actor = await requireActor(req);
@@ -89,7 +93,12 @@ export function registerEmployeeImports(
       }
       const createdIds: string[] = [];
       for (const values of rows) {
-        const file = await createEmployee(tx, actor, values);
+        const file = await createEmployee(tx, actor, values, {
+          mode: privateMode ? 'private' : 'synthetic',
+          employmentSource: privateMode
+            ? 'Private XLSX import; employment terms require review.'
+            : undefined,
+        });
         createdIds.push(file.employee.id);
       }
       const reply = { count: createdIds.length, createdIds };

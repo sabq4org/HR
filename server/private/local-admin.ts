@@ -103,12 +103,24 @@ export async function importMappedWorkbook(
             );
         if (exists.length) throw Object.assign(new Error('duplicate'), { code: 'EMAIL_EXISTS' });
         const employeeNumber = await nextEmployeeNumber(tx);
-        const file = await createEmployee(tx, LOCAL_ADMIN, {
-          ...row.values,
-          email: row.values.email ?? `${employeeNumber.toLowerCase()}@${PLACEHOLDER_EMAIL_DOMAIN}`,
-          joinDate: row.values.joinDate ?? today,
-          employeeNumber,
-        });
+        const file = await createEmployee(
+          tx,
+          LOCAL_ADMIN,
+          {
+            ...row.values,
+            email:
+              row.values.email ?? `${employeeNumber.toLowerCase()}@${PLACEHOLDER_EMAIL_DOMAIN}`,
+            joinDate: row.values.joinDate ?? today,
+            employeeNumber,
+          },
+          {
+            mode: 'private',
+            employmentSource:
+              'Private workbook import; employment terms require documentary review.',
+            employmentStartDate: row.values.joinDate ? String(row.values.joinDate) : null,
+            employmentEndDate: row.values.separationDate ? String(row.values.separationDate) : null,
+          },
+        );
         if (placeholders.length)
           await appendEvent(
             tx,
