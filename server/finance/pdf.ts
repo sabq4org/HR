@@ -20,7 +20,7 @@ import type {
   FinanceCustomerInput,
 } from '../../shared/finance.js';
 import { formatIban } from '../../shared/finance.js';
-import { quoteStatusText } from '../../src/finance/paper.js';
+import { INTERNAL_COPY_LABEL, quoteFooterText, quoteStatusText } from '../../src/finance/paper.js';
 
 const bidi = bidiFactory();
 const ARABIC = /[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
@@ -367,7 +367,7 @@ export function quotePdf(quote: FinanceQuote): Promise<Buffer> {
     taxHalalas: quote.taxHalalas,
     totalHalalas: quote.totalHalalas,
     notes: quote.notes,
-    footer: `عرض سعر صادر من النظام المالي لمساحة الفريق، صالح حتى ${ltr(quote.validUntil)}. لا يُعد فاتورة ولا مطالبة بالدفع.`,
+    footer: `${quoteFooterText[quote.status]} صالح حتى ${ltr(quote.validUntil)}.`,
   });
 }
 
@@ -393,7 +393,6 @@ export function invoicePdf(invoice: FinanceInvoice): Promise<Buffer> {
     taxHalalas: invoice.taxHalalas,
     totalHalalas: invoice.totalHalalas,
     notes: invoice.notes,
-    footer:
-      'نسخة داخلية للمراجعة من مساحة الفريق، وليست فاتورة ضريبية معتمدة: لا تحمل رمز QR ولا ختم الهيئة. الفاتورة الضريبية الرسمية تصدر عبر المزود المعتمد.',
+    footer: `${INTERNAL_COPY_LABEL}. الفاتورة الضريبية الرسمية تصدر عبر المزود المعتمد على /api/finance/invoices/:id/pdf.`,
   });
 }

@@ -24,7 +24,9 @@ import {
   quoteHtml,
   statementHtml,
 } from '../../server/finance/document-html.js';
+import { invoiceQrSrc } from '../../server/finance/qr-image.js';
 import { completeSeller, formatIban, type FinanceSeller } from '../../shared/finance.js';
+import { INTERNAL_COPY_LABEL, quoteFooterText } from '../../src/finance/paper.js';
 
 process.env.HR_DATA_KEY ??= randomBytes(32).toString('base64url');
 const OWNER = 'emp-finance-pdf-owner';
@@ -239,6 +241,64 @@ test('quote HTML follows the real status, groups the IBAN and right-aligns bank 
     );
     assert.match(css, /\.fin-bank-card dd\.fin-bank-value\s*\{[^}]*unicode-bidi:\s*isolate/);
     assert.match(css, /\.fin-bank-card dd\.fin-bank-value\s*\{[^}]*direction:\s*ltr/);
+  } finally {
+    await app.close();
+  }
+});
+
+test('converted quote footer follows the real status', async () => {
+  const app = await serve();
+  try {
+    const full = completeSeller(app.quote.seller, seller);
+    const draft = quoteHtml(app.quote, full);
+    assert.ok(draft.includes(quoteFooterText.draft));
+    assert.ok(!draft.includes(quoteFooterText.converted));
+    const converted = quoteHtml({ ...app.quote, status: 'converted' }, full);
+    assert.ok(converted.includes(quoteFooterText.converted));
+    assert.ok(!converted.includes('عرض سعر محفوظ كمسودة'));
+  } finally {
+    await app.close();
+  }
+});
+
+test('cleared invoice HTML shows the stored QR and an internal-copy label', async () => {
+  const app = await serve();
+  try {
+    const full = completeSeller(app.invoice.seller, seller);
+    const payload = 'SA-TEST-QR-PAYLOAD-001';
+    const cleared = invoiceHtml(
+      { ...app.invoice, status: 'cleared', zatcaStatus: 'cleared', qrCode: payload },
+      full,
+    );
+    const qrSrc = invoiceQrSrc(payload);
+    assert.ok(qrSrc, 'QR data URL');
+    assert.ok(cleared.includes('class="fin-qr"'), 'QR image is present');
+    assert.ok(cleared.includes(qrSrc), 'QR encodes the stored payload');
+    assert.ok(cleared.includes(INTERNAL_COPY_LABEL));
+    assert.ok(cleared.includes('نسخة داخلية – ليست الفاتورة الضريبية الرسمية'));
+    assert.ok(
+      !cleared.includes('فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'),
+      'API copy must not claim ZATCA compliance',
+    );
+    assert.ok(!cleared.includes('/api/finance/invoices/') && !cleared.includes('"/qr"'));
+
+    const draft = invoiceHtml(app.invoice, full);
+    assert.equal(app.invoice.status, 'draft');
+    assert.ok(draft.includes('هذه معاينة داخلية للمسودة وليست فاتورة صادرة أو مستندًا ضريبيًا.'));
+    assert.ok(draft.includes(INTERNAL_COPY_LABEL));
+    assert.ok(draft.includes('مسودة فاتورة · للمعاينة الداخلية فقط'));
+    assert.ok(!draft.includes('class="fin-qr"'));
+    assert.ok(!draft.includes('فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'));
+
+    const acceptedNoQr = invoiceHtml(
+      { ...app.invoice, status: 'cleared', zatcaStatus: 'cleared', qrCode: null },
+      full,
+    );
+    assert.ok(acceptedNoQr.includes(INTERNAL_COPY_LABEL));
+    assert.ok(!acceptedNoQr.includes('class="fin-qr"'));
+    assert.ok(
+      !acceptedNoQr.includes('فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'),
+    );
   } finally {
     await app.close();
   }

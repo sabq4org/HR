@@ -42,6 +42,13 @@ export const quoteStatusText: Record<FinanceQuote['status'], string> = {
   draft: 'مسودة عرض سعر',
   converted: 'تم التحويل إلى فاتورة',
 };
+export const quoteFooterText: Record<FinanceQuote['status'], string> = {
+  draft: 'عرض سعر محفوظ كمسودة. لم يُرسل إلى العميل، ولا يمثل فاتورة ضريبية.',
+  converted: 'تم تحويل عرض السعر إلى فاتورة. لا يمثل فاتورة ضريبية.',
+};
+/** Always shown on API document.pdf copies; the official tax invoice is /api/finance/invoices/:id/pdf. */
+export const INTERNAL_COPY_LABEL =
+  'نسخة داخلية – ليست الفاتورة الضريبية الرسمية / Internal copy – not the official tax invoice';
 
 export function Status({
   text,
@@ -92,7 +99,7 @@ export function QuotePaper({ quote, seller }: { quote: FinanceQuote; seller: Fin
         />
         <BankAccountDetails seller={seller} />
         {quote.notes && <NotesBox notes={quote.notes} />}
-        <PaperFooter>عرض سعر محفوظ كمسودة. لم يُرسل إلى العميل، ولا يمثل فاتورة ضريبية.</PaperFooter>
+        <PaperFooter>{quoteFooterText[quote.status]}</PaperFooter>
       </div>
     </article>
   );
@@ -103,11 +110,16 @@ export function InvoicePaper({
   invoice,
   seller,
   qrSrc,
+  internalCopy = false,
 }: {
   invoice: FinanceInvoice;
   seller: FinanceSeller;
   qrSrc?: string;
+  /** API document.pdf copies; never the official tax invoice from the provider. */
+  internalCopy?: boolean;
 }) {
+  const accepted = ['cleared', 'reported'].includes(invoice.status);
+  const qrShown = Boolean(accepted && invoice.qrCode && qrSrc);
   return (
     <article className="fin-document-paper fin-invoice-paper" dir="rtl" lang="ar">
       <DocumentHeader
@@ -119,7 +131,13 @@ export function InvoicePaper({
         status={statusText[invoice.status]}
       />
       <div className="fin-document-rule" />
-      {['cleared', 'reported'].includes(invoice.status) ? (
+      {internalCopy && (
+        <div className="fin-internal-copy-banner">
+          نسخة داخلية – ليست الفاتورة الضريبية الرسمية
+          <span lang="en">Internal copy – not the official tax invoice</span>
+        </div>
+      )}
+      {accepted ? (
         <div className="fin-final-banner">
           <Check size={17} />
           {statusText[invoice.status]} · حالة مصدرها وافق والهيئة
@@ -150,27 +168,43 @@ export function InvoicePaper({
           totalLabel="الإجمالي المستحق / Total Due"
           noVat={invoice.documentType === 'out_of_scope'}
           aside={
-            ['cleared', 'reported'].includes(invoice.status) && invoice.qrCode && qrSrc ? (
+            qrShown ? (
               <div className="fin-qr-wrap" dir="rtl">
                 <img className="fin-qr" src={qrSrc} alt="رمز التحقق من الفاتورة" />
-                <b>فاتورة ضريبية / Tax Invoice</b>
-                <small>رمز التحقق صادر من وافق بعد قبول الفاتورة.</small>
+                <b>{internalCopy ? 'رمز التحقق / QR' : 'فاتورة ضريبية / Tax Invoice'}</b>
+                <small>
+                  {internalCopy
+                    ? 'رمز مستمد من القيمة المخزّنة. هذه نسخة داخلية وليست الفاتورة الرسمية.'
+                    : 'رمز التحقق صادر من وافق بعد قبول الفاتورة.'}
+                </small>
               </div>
             ) : null
           }
         />
         <BankAccountDetails seller={seller} />
         {invoice.notes && <NotesBox notes={invoice.notes} />}
-        <PaperFooter>
-          {invoice.documentType === 'out_of_scope'
-            ? 'مستند غير ضريبي: المبلغ خارج نطاق ضريبة القيمة المضافة.'
-            : ['cleared', 'reported'].includes(invoice.status) && invoice.qrCode
-              ? 'فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'
-              : 'هذه معاينة داخلية للمسودة وليست فاتورة صادرة أو مستندًا ضريبيًا.'}
-        </PaperFooter>
+        <PaperFooter>{invoiceFooterText(invoice, { qrShown, internalCopy })}</PaperFooter>
       </div>
     </article>
   );
+}
+
+function invoiceFooterText(
+  invoice: FinanceInvoice,
+  { qrShown, internalCopy }: { qrShown: boolean; internalCopy: boolean },
+): string {
+  const parts: string[] = [];
+  if (invoice.documentType === 'out_of_scope') {
+    parts.push('مستند غير ضريبي: المبلغ خارج نطاق ضريبة القيمة المضافة.');
+  }
+  if (!['cleared', 'reported'].includes(invoice.status)) {
+    parts.push('هذه معاينة داخلية للمسودة وليست فاتورة صادرة أو مستندًا ضريبيًا.');
+  } else if (qrShown && !internalCopy) {
+    // In-app preview may state compliance only when the QR image is actually on the paper.
+    parts.push('فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.');
+  }
+  if (internalCopy) parts.push(INTERNAL_COPY_LABEL);
+  return parts.join(' ');
 }
 
 function DocumentHeader({
