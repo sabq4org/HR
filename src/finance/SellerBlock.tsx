@@ -6,7 +6,10 @@ export function SellerBlock({ seller }: { seller: FinanceSeller }) {
   const address = sellerAddressText(seller.address);
   return (
     <div className="fin-doc-brand">
-      <img src="/brand/sabq-logo.svg" alt="سبق" />
+      {/* Sized in the stylesheet to the height of the details beside it. */}
+      <span className="fin-doc-logo">
+        <img src="/brand/sabq-logo.svg" alt="سبق" />
+      </span>
       <div>
         <b>{seller.name || 'سبق'}</b>
         {address && <span>{address}</span>}

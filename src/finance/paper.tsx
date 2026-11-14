@@ -2,7 +2,7 @@
 // server PDF renderer, so both produce the same document from the same markup and stylesheet.
 // Keep this module free of hooks, API calls and CSS imports: the server renders it to static HTML.
 import type { ReactNode } from 'react';
-import { Check } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 import type {
   FinanceCustomerInput,
   FinanceDocumentType,
@@ -37,22 +37,26 @@ export const statusText: Record<FinanceInvoice['status'], string> = {
   reported: 'فاتورة ضريبية صادرة',
   rejected: 'مرفوضة',
   reconciliation_required: 'تحتاج إلى مطابقة الحالة',
+  cancelled: 'فاتورة ملغاة',
 };
 export const quoteStatusText: Record<FinanceQuote['status'], string> = {
   draft: 'مسودة عرض سعر',
   converted: 'تم التحويل إلى مسودة فاتورة',
+  cancelled: 'عرض سعر ملغي',
 };
 export const quoteFooterText: Record<FinanceQuote['status'], string> = {
   draft: 'عرض سعر محفوظ كمسودة. لم يُرسل إلى العميل، ولا يمثل فاتورة ضريبية.',
   converted: 'تم إنشاء مسودة فاتورة من عرض السعر. عرض السعر لا يمثل فاتورة ضريبية.',
+  cancelled: 'عرض سعر ملغي. لا يُعتد به ولا يمثل فاتورة ضريبية.',
 };
 export function invoiceStatusText(invoice: FinanceInvoice): string {
   return isTaxAcceptedInvoice(invoice.status)
     ? `${invoiceTitle(invoice.documentType, invoice.invoiceType).ar} صادرة`
     : statusText[invoice.status];
 }
-type StatusKind = 'neutral' | 'good' | 'bad' | 'waiting';
+type StatusKind = 'neutral' | 'good' | 'bad' | 'waiting' | 'cancelled';
 export function invoiceStatusKind(status: FinanceInvoice['status']): StatusKind {
+  if (status === 'cancelled') return 'cancelled';
   return isTaxAcceptedInvoice(status)
     ? 'good'
     : status === 'rejected' || status === 'reconciliation_required'
@@ -63,6 +67,8 @@ export function invoiceStatusKind(status: FinanceInvoice['status']): StatusKind 
 }
 /** A converted quote is only green once its linked invoice has confirmed acceptance. */
 export function quoteStatus(quote: FinanceQuote, invoice?: FinanceInvoice) {
+  if (quote.status === 'cancelled') return { text: 'ملغي', kind: 'cancelled' as const };
+  if (invoice?.status === 'cancelled') return { text: 'أُلغيت فاتورته', kind: 'cancelled' as const };
   if (quote.status === 'draft' || !invoice || invoice.status === 'draft') {
     return { text: quoteStatusText[quote.status], kind: 'waiting' as const };
   }
@@ -75,10 +81,26 @@ export function quoteStatus(quote: FinanceQuote, invoice?: FinanceInvoice) {
 export const INTERNAL_COPY_LABEL =
   'نسخة داخلية – ليست الفاتورة الضريبية الرسمية / Internal copy – not the official tax invoice';
 
+const paperStatusKind = (status: string): StatusKind =>
+  status.includes('ملغ') ? 'cancelled' : status.includes('مسودة') ? 'waiting' : 'good';
+/** Crosses a cancelled document so a printed or exported copy cannot pass for a live one. */
+export function CancelledStamp() {
+  return (
+    <div className="fin-cancelled-stamp" aria-hidden="true">
+      <X size={30} strokeWidth={3} />
+      <span>ملغي</span>
+      <small>CANCELLED</small>
+    </div>
+  );
+}
 export function Status({ text, kind = 'neutral' }: { text: string; kind?: StatusKind }) {
   return (
     <span className={`fin-status ${kind}`}>
-      <i aria-hidden="true" />
+      {kind === 'cancelled' ? (
+        <X size={12} strokeWidth={3} aria-hidden="true" />
+      ) : (
+        <i aria-hidden="true" />
+      )}
       {text}
     </span>
   );
@@ -87,7 +109,12 @@ export function Status({ text, kind = 'neutral' }: { text: string; kind?: Status
 /** Quote paper exactly as shown in the preview dialog. */
 export function QuotePaper({ quote, seller }: { quote: FinanceQuote; seller: FinanceSeller }) {
   return (
-    <article className="fin-document-paper fin-quote-paper" dir="rtl" lang="ar">
+    <article
+      className={`fin-document-paper fin-quote-paper${quote.status === 'cancelled' ? ' is-cancelled' : ''}`}
+      dir="rtl"
+      lang="ar"
+    >
+      {quote.status === 'cancelled' && <CancelledStamp />}
       <DocumentHeader
         seller={seller}
         kind="quote"
@@ -139,8 +166,14 @@ export function InvoicePaper({
 }) {
   const accepted = ['cleared', 'reported'].includes(invoice.status);
   const qrShown = Boolean(accepted && invoice.qrCode && qrSrc);
+  const cancelled = invoice.status === 'cancelled';
   return (
-    <article className="fin-document-paper fin-invoice-paper" dir="rtl" lang="ar">
+    <article
+      className={`fin-document-paper fin-invoice-paper${cancelled ? ' is-cancelled' : ''}`}
+      dir="rtl"
+      lang="ar"
+    >
+      {cancelled && <CancelledStamp />}
       <DocumentHeader
         seller={seller}
         kind="invoice"
@@ -162,7 +195,9 @@ export function InvoicePaper({
           {invoiceStatusText(invoice)} · حالة مصدرها وافق والهيئة
         </div>
       ) : (
-        <div className="fin-draft-watermark">مسودة فاتورة · للمعاينة الداخلية فقط</div>
+        <div className="fin-draft-watermark">
+          {cancelled ? 'فاتورة ملغاة · لا يُعتد بها' : 'مسودة فاتورة · للمعاينة الداخلية فقط'}
+        </div>
       )}
       <div className="fin-document-cards">
         <CustomerDetails customer={invoice.customer} />
@@ -216,7 +251,9 @@ function invoiceFooterText(
   if (invoice.documentType === 'out_of_scope') {
     parts.push('مستند غير ضريبي: المبلغ خارج نطاق ضريبة القيمة المضافة.');
   }
-  if (!['cleared', 'reported'].includes(invoice.status)) {
+  if (invoice.status === 'cancelled') {
+    parts.push('مسودة فاتورة ملغاة قبل الإصدار. لا يُعتد بها وليست مستندًا ضريبيًا.');
+  } else if (!['cleared', 'reported'].includes(invoice.status)) {
     parts.push('هذه معاينة داخلية للمسودة وليست فاتورة صادرة أو مستندًا ضريبيًا.');
   } else if (qrShown && !internalCopy) {
     // In-app preview may state compliance only when the QR image is actually on the paper.
@@ -247,7 +284,7 @@ function DocumentHeader({
       <aside className="fin-doc-heading">
         <h1>{title}</h1>
         <span>{subtitle ?? (kind === 'quote' ? 'Price Quotation' : 'Tax Invoice')}</span>
-        <Status text={status} kind={status.includes('مسودة') ? 'waiting' : 'good'} />
+        <Status text={status} kind={paperStatusKind(status)} />
         <b className="fin-doc-number" dir="ltr">
           {number}
         </b>
@@ -359,7 +396,7 @@ function DocumentDetails({
         <div>
           <dt>الحالة / Status</dt>
           <dd>
-            <Status text={status} kind={status.includes('مسودة') ? 'waiting' : 'good'} />
+            <Status text={status} kind={paperStatusKind(status)} />
           </dd>
         </div>
       </dl>

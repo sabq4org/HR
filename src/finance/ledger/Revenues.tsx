@@ -428,7 +428,9 @@ export function Revenues({ overview, reload, action, go, notify }: ViewProps) {
                         {voucher ? <Money value={voucher.outstandingHalalas} /> : '—'}
                       </td>
                       <td>
-                        {!voucher ? (
+                        {invoice.status === 'cancelled' ? (
+                          <Status text="ملغاة" kind="cancelled" />
+                        ) : !voucher ? (
                           <Status text="غير مرحّلة" kind="waiting" />
                         ) : voucher.outstandingHalalas <= 0 ? (
                           <Status text="مسددة" kind="good" />

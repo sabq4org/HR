@@ -210,6 +210,60 @@
 .fin-status.waiting i {
   background: #c49321;
 }
+.fin-status.cancelled {
+  border-color: #e3b5af;
+  background: #fff5f3;
+  color: #a33427;
+  font-weight: 700;
+}
+.fin-status.cancelled svg {
+  flex: 0 0 auto;
+}
+/* A cancelled document stays in the list, visibly crossed out. */
+.fin-table tr.fin-row-cancelled td {
+  color: #5f6b73;
+  background: #fbfbfb;
+}
+.fin-table tr.fin-row-cancelled td:first-child b,
+.fin-table tr.fin-row-cancelled td.num {
+  text-decoration: line-through;
+  text-decoration-color: #c5544a;
+}
+.text-button.danger {
+  color: #a33427;
+}
+.fin-document-paper.is-cancelled {
+  position: relative;
+}
+.fin-cancelled-stamp {
+  position: absolute;
+  top: 44%;
+  left: 50%;
+  z-index: 2;
+  display: grid;
+  justify-items: center;
+  gap: 0;
+  padding: 10px 34px 12px;
+  border: 4px solid #c5372b;
+  border-radius: 12px;
+  color: #c5372b;
+  opacity: 0.32;
+  transform: translate(-50%, -50%) rotate(-18deg);
+  pointer-events: none;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.fin-cancelled-stamp span {
+  font-size: 46px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+.fin-cancelled-stamp small {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  direction: ltr;
+}
 .fin-empty {
   display: grid;
   justify-items: center;
@@ -482,31 +536,40 @@
   direction: rtl;
 }
 .fin-doc-brand {
+  --logo-height: 68px;
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: center;
+  gap: 12px;
   min-width: 0;
 }
-.fin-doc-brand img {
-  width: 64px;
-  height: 58px;
-  object-fit: contain;
+/* The logo and the company details beside it share one height: same top edge, same bottom edge. */
+.fin-doc-logo {
   flex: 0 0 auto;
+  width: calc(var(--logo-height) * 218 / 194);
+  height: var(--logo-height);
+}
+.fin-doc-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 .fin-doc-brand > div {
   display: grid;
+  align-content: space-between;
   gap: 0;
-  padding-top: 2px;
+  min-height: var(--logo-height);
   line-height: 1.45;
 }
 .fin-doc-brand b {
   color: #3f709f;
-  font-size: 15px;
+  font-size: 16px;
+  line-height: 1.25;
   margin-bottom: 2px;
 }
-.fin-doc-brand span {
+.fin-doc-brand > div span {
   color: var(--paper-muted);
-  font-size: 9px;
+  font-size: 9.5px;
 }
 .fin-doc-heading {
   display: grid;
@@ -883,14 +946,13 @@
   .fin-doc-brand {
     gap: 7px;
   }
-  .fin-doc-brand img {
-    width: 52px;
-    height: 50px;
+  .fin-doc-brand {
+    --logo-height: 58px;
   }
   .fin-doc-brand b {
     font-size: 14px;
   }
-  .fin-doc-brand span {
+  .fin-doc-brand > div span {
     font-size: 9px;
   }
   .fin-doc-heading {
@@ -1509,4 +1571,35 @@
 }
 .fin-import-list .fin-status {
   white-space: nowrap;
+}
+
+.fin-cancel-confirm {
+  display: grid;
+  gap: 12px;
+}
+.fin-cancel-confirm p {
+  margin: 0;
+  line-height: 1.8;
+}
+.fin-cancel-note {
+  padding: 10px 12px;
+  border: 1px solid #edd3cf;
+  border-radius: 8px;
+  background: #fff8f6;
+  color: #7c3a32;
+  font-size: 13px;
+}
+.fin-cancel-confirm footer {
+  display: flex;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.button.danger {
+  background: #b53a2e;
+  border-color: #b53a2e;
+  color: #fff;
+}
+.button.danger:hover:not(:disabled) {
+  background: #9c3024;
 }

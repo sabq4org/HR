@@ -160,7 +160,9 @@ export interface FinanceQuote extends FinanceQuoteInput {
   id: string;
   number: string;
   version: number;
-  status: 'draft' | 'converted';
+  /** `cancelled` is a draft the owner voided: it stays on record and can no longer change. */
+  status: 'draft' | 'converted' | 'cancelled';
+  cancelledAt?: string;
   currency: 'SAR';
   customer: FinanceCustomerInput;
   seller: FinanceSeller;
@@ -187,7 +189,10 @@ export interface FinanceInvoice {
     | 'cleared'
     | 'reported'
     | 'rejected'
-    | 'reconciliation_required';
+    | 'reconciliation_required'
+    /** A draft voided before anything was sent to the provider; it stays on record. */
+    | 'cancelled';
+  cancelledAt?: string;
   invoiceType?: 'standard' | 'simplified';
   documentType?: FinanceDocumentType;
   purchaseOrder?: string;

@@ -85,7 +85,13 @@ export function CustomerCard({
             <span>الفواتير</span>
           </li>
           <li>
-            <b>{money(issued.reduce((sum, i) => sum + i.totalHalalas, 0))}</b>
+            <b>
+              {money(
+                issued
+                  .filter((i) => i.status !== 'cancelled')
+                  .reduce((sum, i) => sum + i.totalHalalas, 0),
+              )}
+            </b>
             <span>إجمالي الفواتير بالريال</span>
           </li>
         </ul>

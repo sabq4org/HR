@@ -1228,3 +1228,179 @@ test('customers saved in Wafeq are listed for review and imported once, linked a
     providerContacts = [];
   }
 });
+
+test('a draft quote is cancelled, not deleted: it stays on record and can no longer change', async () => {
+  const customer = (
+    await json<{ customer: { id: string } }>(
+      await api('/api/finance/customers', post(customerBody, 'cancel-customer')),
+    )
+  ).customer;
+  const q = (
+    await json<{ quote: { id: string; number: string; version: number } }>(
+      await api('/api/finance/quotes', post(quoteBody(customer.id), 'cancel-quote')),
+    )
+  ).quote;
+  const stale = await api(
+    `/api/finance/quotes/${q.id}/cancel`,
+    post({ version: q.version + 5 }, 'cancel-stale'),
+  );
+  assert.equal(stale.status, 409);
+  const done = await api(
+    `/api/finance/quotes/${q.id}/cancel`,
+    post({ version: q.version }, 'cancel-a'),
+  );
+  assert.equal(done.status, 200);
+  const cancelled = (
+    await json<{
+      quote: { status: string; number: string; version: number; cancelledAt: string };
+    }>(done)
+  ).quote;
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.number, q.number);
+  assert.equal(cancelled.version, q.version + 1);
+  assert.match(cancelled.cancelledAt, /^\d{4}-\d{2}-\d{2}T/);
+  // A second request, even under a new key, changes nothing.
+  const again = await api(
+    `/api/finance/quotes/${q.id}/cancel`,
+    post({ version: cancelled.version }, 'cancel-b'),
+  );
+  assert.equal(again.status, 200);
+  assert.equal(
+    (await json<{ quote: { version: number } }>(again)).quote.version,
+    cancelled.version,
+  );
+  const edit = await api(`/api/finance/quotes/${q.id}`, {
+    ...post({ ...quoteBody(customer.id), version: cancelled.version }, 'cancel-edit'),
+    method: 'PATCH',
+  });
+  assert.equal(edit.status, 409);
+  assert.equal((await json<{ error: { code: string } }>(edit)).error.code, 'QUOTE_CANCELLED');
+  const convert = await api(
+    `/api/finance/quotes/${q.id}/convert`,
+    post(
+      { version: cancelled.version, issueDate: '2026-11-14', dueDate: '2026-12-14' },
+      'cancel-convert',
+    ),
+  );
+  assert.equal(convert.status, 409);
+  assert.equal((await json<{ error: { code: string } }>(convert)).error.code, 'QUOTE_CANCELLED');
+  const rows = await db.read<{ n: number }>('SELECT COUNT(*) AS n FROM finance_quotes');
+  assert.equal(rows[0].n, 1);
+  assert.equal(
+    (await db.read<{ n: number }>('SELECT COUNT(*) AS n FROM finance_invoices'))[0].n,
+    0,
+  );
+  const listed = await json<{ quotes: { id: string; status: string }[] }>(
+    await api('/api/finance'),
+  );
+  assert.equal(listed.quotes.find((item) => item.id === q.id)?.status, 'cancelled');
+  const audit = await db.read<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM administration_events WHERE resource_type='finance_quote' AND action='cancelled'",
+  );
+  assert.equal(audit[0].n, 1);
+  // The next quote takes a new number; the cancelled one keeps its own.
+  const next = (
+    await json<{ quote: { number: string } }>(
+      await api('/api/finance/quotes', post(quoteBody(customer.id), 'cancel-next')),
+    )
+  ).quote;
+  assert.notEqual(next.number, q.number);
+});
+
+test('only a draft invoice that never left the system is cancelled; it then cannot be sent', async () => {
+  await api('/api/finance/settings/api-key', post({ apiKey: 'synthetic-fake-key' }, 'c-key'));
+  const customer = (
+    await json<{ customer: { id: string; version: number } }>(
+      await api('/api/finance/customers', post(customerBody, 'c-customer')),
+    )
+  ).customer;
+  await api(
+    `/api/finance/customers/${customer.id}/sync`,
+    post({ version: customer.version }, 'c-customer-sync'),
+  );
+  await api('/api/finance/settings', {
+    ...post(
+      {
+        version: 1,
+        seller: {
+          name: 'Sabq',
+          vatNumber: '310000000000003',
+          commercialRegistration: '',
+          address: { line: 'Riyadh', city: 'Riyadh', postalCode: '1', country: 'SA' },
+        },
+        revenueAccountId: 'revenue',
+        standardTaxRateId: 'tax15',
+        zeroTaxRateId: '',
+      },
+      'c-settings',
+    ),
+    method: 'PATCH',
+  });
+  const draft = async (tag: string) => {
+    const q = (
+      await json<{ quote: { id: string; version: number } }>(
+        await api('/api/finance/quotes', post(quoteBody(customer.id), `c-quote-${tag}`)),
+      )
+    ).quote;
+    const converted = await api(
+      `/api/finance/quotes/${q.id}/convert`,
+      post(
+        { version: q.version, issueDate: '2026-11-14', dueDate: '2026-12-14' },
+        `c-convert-${tag}`,
+      ),
+    );
+    return {
+      quoteId: q.id,
+      invoice: (await json<{ invoice: { id: string; number: string; version: number } }>(converted))
+        .invoice,
+    };
+  };
+  const first = await draft('a');
+  const before = providerInvoiceCalls;
+  const done = await api(
+    `/api/finance/invoices/${first.invoice.id}/cancel`,
+    post({ version: first.invoice.version }, 'c-cancel'),
+  );
+  assert.equal(done.status, 200);
+  const cancelled = (
+    await json<{ invoice: { status: string; number: string; cancelledAt: string } }>(done)
+  ).invoice;
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.number, first.invoice.number);
+  assert.ok(cancelled.cancelledAt);
+  const send = await api(
+    `/api/finance/invoices/${first.invoice.id}/sync`,
+    post({ version: first.invoice.version + 1 }, 'c-send'),
+  );
+  assert.equal(send.status, 409);
+  assert.equal((await json<{ error: { code: string } }>(send)).error.code, 'INVOICE_CANCELLED');
+  assert.equal(providerInvoiceCalls, before);
+  // The quote it came from stays converted and cannot be cancelled or converted again.
+  const quoteCancel = await api(
+    `/api/finance/quotes/${first.quoteId}/cancel`,
+    post({ version: 2 }, 'c-quote-cancel'),
+  );
+  assert.equal(quoteCancel.status, 409);
+  assert.equal(
+    (await db.read<{ n: number }>('SELECT COUNT(*) AS n FROM finance_invoices'))[0].n,
+    1,
+  );
+
+  // An invoice already sent to the provider is out of scope for this cancel.
+  const second = await draft('b');
+  const sent = await api(
+    `/api/finance/invoices/${second.invoice.id}/sync`,
+    post({ version: second.invoice.version }, 'c-sync-b'),
+  );
+  assert.equal(sent.status, 200);
+  const issued = (await json<{ invoice: { version: number } }>(sent)).invoice;
+  const refused = await api(
+    `/api/finance/invoices/${second.invoice.id}/cancel`,
+    post({ version: issued.version }, 'c-cancel-b'),
+  );
+  assert.equal(refused.status, 409);
+  assert.equal(
+    (await json<{ error: { code: string } }>(refused)).error.code,
+    'INVOICE_NOT_CANCELLABLE',
+  );
+});

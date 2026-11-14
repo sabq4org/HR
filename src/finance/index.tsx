@@ -227,6 +227,10 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
   const [convertDates, setConvertDates] = useState({ issueDate: today(), dueDate: '' });
   const [purchaseOrder, setPurchaseOrder] = useState('');
   const [finalInvoice, setFinalInvoice] = useState<FinanceInvoice | null>(null);
+  const [cancelling, setCancelling] = useState<
+    { kind: 'quote'; doc: FinanceQuote } | { kind: 'invoice'; doc: FinanceInvoice } | null
+  >(null);
+  const [cancelError, setCancelError] = useState('');
   const [ledgerAccounts, setLedgerAccounts] = useState<LedgerAccount[]>([]);
   const [ledgerInvoices, setLedgerInvoices] = useState<InvoiceLedgerState[]>([]);
   const [receiptInvoice, setReceiptInvoice] = useState<FinanceInvoice | null>(null);
@@ -594,6 +598,39 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
       setBusy('');
     }
   };
+  const cancelDocument = async () => {
+    if (!cancelling) return;
+    const { kind, doc } = cancelling;
+    setBusy(`cancel:${doc.id}`);
+    setCancelError('');
+    try {
+      if (kind === 'quote') {
+        const result = await mutate<{ quote: FinanceQuote }>(
+          `/finance/quotes/${doc.id}/cancel`,
+          'POST',
+          { version: doc.version },
+        );
+        setOverview((o) =>
+          o ? { ...o, quotes: o.quotes.map((x) => (x.id === doc.id ? result.quote : x)) } : o,
+        );
+      } else {
+        const result = await mutate<{ invoice: FinanceInvoice }>(
+          `/finance/invoices/${doc.id}/cancel`,
+          'POST',
+          { version: doc.version },
+        );
+        setOverview((o) =>
+          o ? { ...o, invoices: o.invoices.map((x) => (x.id === doc.id ? result.invoice : x)) } : o,
+        );
+      }
+      setCancelling(null);
+    } catch (e) {
+      setCancelError(errorText(e));
+      await load();
+    } finally {
+      setBusy('');
+    }
+  };
   const invoiceSync = async (invoice: FinanceInvoice, action: 'sync' | 'refresh') => {
     const path = `/finance/invoices/${invoice.id}/${action}`;
     setBusy(`invoice:${invoice.id}`);
@@ -911,7 +948,10 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                     </thead>
                     <tbody>
                       {overview.quotes.map((q) => (
-                        <tr key={q.id}>
+                        <tr
+                          key={q.id}
+                          className={q.status === 'cancelled' ? 'fin-row-cancelled' : undefined}
+                        >
                           <td>
                             <b>{q.number}</b>
                           </td>
@@ -938,6 +978,12 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                                 </button>
                                 <button className="text-button" onClick={() => beginConvert(q)}>
                                   تحويل إلى مسودة فاتورة
+                                </button>
+                                <button
+                                  className="text-button danger"
+                                  onClick={() => setCancelling({ kind: 'quote', doc: q })}
+                                >
+                                  إلغاء
                                 </button>
                               </>
                             )}
@@ -978,7 +1024,10 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                     </thead>
                     <tbody>
                       {overview.invoices.map((i) => (
-                        <tr key={i.id}>
+                        <tr
+                          key={i.id}
+                          className={i.status === 'cancelled' ? 'fin-row-cancelled' : undefined}
+                        >
                           <td>
                             <b>{i.number}</b>
                           </td>
@@ -1032,7 +1081,18 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                                       وصف السبب الحر لا يكفي.
                                     </small>
                                   )}
+                                <button
+                                  className="text-button danger"
+                                  disabled={busy === `invoice:${i.id}`}
+                                  onClick={() => setCancelling({ kind: 'invoice', doc: i })}
+                                >
+                                  إلغاء
+                                </button>
                               </>
+                            ) : i.status === 'cancelled' ? (
+                              <button className="text-button" onClick={() => setFinalInvoice(i)}>
+                                معاينة
+                              </button>
                             ) : (
                               <>
                                 {/* Retrying /sync reuses the stored provider operation keys. */}
@@ -1865,6 +1925,53 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
           close={() => setStatementCustomer(null)}
         />
       )}
+      {cancelling && (
+        <Modal
+          title={cancelling.kind === 'quote' ? 'إلغاء عرض السعر' : 'إلغاء مسودة الفاتورة'}
+          close={() => {
+            if (busy) return;
+            setCancelling(null);
+            setCancelError('');
+          }}
+        >
+          <div className="fin-cancel-confirm">
+            <p>
+              سيُلغى {cancelling.kind === 'quote' ? 'عرض السعر' : 'مسودة الفاتورة'}{' '}
+              <b dir="ltr">{cancelling.doc.number}</b> للعميل «{cancelling.doc.customer.name}».
+            </p>
+            <p className="fin-cancel-note">
+              الإلغاء ليس حذفًا: يبقى المستند في القائمة برقمه وعليه علامة «ملغي»، ولا يمكن بعدها
+              تعديله أو {cancelling.kind === 'quote' ? 'تحويله إلى فاتورة' : 'إصداره'}. ولا يمكن
+              التراجع عن الإلغاء.
+            </p>
+            {cancelError && (
+              <p className="fin-alert" role="alert">
+                {cancelError}
+              </p>
+            )}
+            <footer>
+              <button
+                className="button secondary"
+                disabled={Boolean(busy)}
+                onClick={() => {
+                  setCancelling(null);
+                  setCancelError('');
+                }}
+              >
+                تراجع
+              </button>
+              <button
+                className="button danger"
+                disabled={Boolean(busy)}
+                onClick={() => void cancelDocument()}
+              >
+                <X size={16} />
+                {busy ? 'جارٍ الإلغاء…' : 'تأكيد الإلغاء'}
+              </button>
+            </footer>
+          </div>
+        </Modal>
+      )}
       {preview && (
         <Modal title={`معاينة عرض السعر · ${preview.number}`} close={() => setPreview(null)} wide>
           <div className="fin-preview-actions">
@@ -1882,7 +1989,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
       )}
       {finalInvoice && (
         <Modal
-          title={`${['cleared', 'reported'].includes(finalInvoice.status) && finalInvoice.qrCode ? 'فاتورة سبق' : 'معاينة مسودة فاتورة'} · ${finalInvoice.number}`}
+          title={`${['cleared', 'reported'].includes(finalInvoice.status) && finalInvoice.qrCode ? 'فاتورة سبق' : finalInvoice.status === 'cancelled' ? 'فاتورة ملغاة' : 'معاينة مسودة فاتورة'} · ${finalInvoice.number}`}
           close={() => setFinalInvoice(null)}
           wide
         >
@@ -1892,6 +1999,8 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                 <Printer size={16} />
                 طباعة فاتورة سبق
               </button>
+            ) : finalInvoice.status === 'cancelled' ? (
+              <Status text="فاتورة ملغاة · لا تُصدر ولا تُرسل" kind="cancelled" />
             ) : (
               <Status text="معاينة داخلية غير صالحة للإصدار أو الطباعة" kind="waiting" />
             )}

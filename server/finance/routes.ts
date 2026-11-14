@@ -412,6 +412,15 @@ async function readQuote(db: AsyncDb, ownerId: string, id: string): Promise<Fina
   const quote = safeJson<FinanceQuote>(row.quote_ciphertext, `finance:quote:${row.id}`);
   return { ...quote, documentType: quote.documentType ?? 'standard' };
 }
+/**
+ * A cancelled quote keeps `draft` in its status column (the column's CHECK predates cancelling);
+ * the encrypted snapshot is the record. Every later write is fenced by the version it bumped.
+ */
+function quoteCancelled(row: QuoteRow): boolean {
+  return (
+    safeJson<FinanceQuote>(row.quote_ciphertext, `finance:quote:${row.id}`).status === 'cancelled'
+  );
+}
 async function readCatalogItem(
   db: AsyncDb,
   ownerId: string,
@@ -662,6 +671,8 @@ async function updateInvoiceSnapshot(
   });
   return next;
 }
+const invoiceCancelled = () =>
+  fault(409, 'INVOICE_CANCELLED', 'الفاتورة ملغاة ولا يمكن إصدارها أو إرسالها.');
 function sendErr(res: Response, error: unknown) {
   const e = error as { status?: number; code?: string; message?: string };
   res.status(e.status ?? 500).json({
@@ -1386,6 +1397,8 @@ export function registerFinance(
         if (!row) throw fault(404, 'QUOTE_NOT_FOUND', 'عرض السعر غير موجود.');
         if (row.status !== 'draft')
           throw fault(409, 'QUOTE_IMMUTABLE', 'لا يمكن تعديل عرض السعر بعد تحويله.');
+        if (quoteCancelled(row))
+          throw fault(409, 'QUOTE_CANCELLED', 'عرض السعر ملغي ولا يمكن تعديله.');
         if (row.version !== version)
           throw fault(409, 'VERSION_CONFLICT', 'تغير عرض السعر؛ حدّث الصفحة ثم أعد المحاولة.');
         const customer = await readCustomer(tx, actor.id, input.customerId);
@@ -1467,6 +1480,8 @@ export function registerFinance(
         if (prior) return { marker: { type: 'invoice', id: prior.id }, result: { id: prior.id } };
         if (row.status !== 'draft')
           throw fault(409, 'QUOTE_IMMUTABLE', 'عرض السعر غير قابل للتحويل مرة أخرى.');
+        if (quoteCancelled(row))
+          throw fault(409, 'QUOTE_CANCELLED', 'عرض السعر ملغي ولا يمكن تحويله إلى فاتورة.');
         if (row.version !== version)
           throw fault(409, 'VERSION_CONFLICT', 'تغير عرض السعر؛ حدّث الصفحة ثم أعد المحاولة.');
         const q = await readQuote(tx, actor.id, row.id);
@@ -1555,6 +1570,116 @@ export function registerFinance(
     );
     res.status(201).json({ invoice: await readInvoice(db, actor.id, invoice.id) });
   });
+  registerRoute(app, 'post', '/api/finance/quotes/:id/cancel', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    const id = routeId(req.params.id),
+      version = versionValue(requireRecord(req.body).version);
+    await idempotent<{ id: string }>(
+      db,
+      actor,
+      `finance.quote.cancel:${id}`,
+      req.get('idempotency-key'),
+      { version },
+      async (tx) => {
+        const row = (
+          await tx.read<QuoteRow>('SELECT * FROM finance_quotes WHERE owner_id=? AND id=?', [
+            actor.id,
+            id,
+          ])
+        )[0];
+        if (!row) throw fault(404, 'QUOTE_NOT_FOUND', 'عرض السعر غير موجود.');
+        const quote = await readQuote(tx, actor.id, id);
+        if (quote.status === 'cancelled') return { marker: { type: 'quote', id }, result: { id } };
+        if (row.status !== 'draft')
+          throw fault(
+            409,
+            'QUOTE_IMMUTABLE',
+            'عرض السعر تحوّل إلى فاتورة؛ ألغِ مسودة الفاتورة بدلًا منه.',
+          );
+        if (row.version !== version)
+          throw fault(409, 'VERSION_CONFLICT', 'تغير عرض السعر؛ حدّث الصفحة ثم أعد المحاولة.');
+        const next = version + 1;
+        const cancelled: FinanceQuote = {
+          ...quote,
+          status: 'cancelled',
+          version: next,
+          cancelledAt: now(),
+        };
+        const result = await tx.execute(
+          "UPDATE finance_quotes SET version=?,quote_ciphertext=?,updated_at=? WHERE owner_id=? AND id=? AND version=? AND status='draft'",
+          [
+            next,
+            encryptSensitive(JSON.stringify(cancelled), `finance:quote:${id}`),
+            now(),
+            actor.id,
+            id,
+            version,
+          ],
+        );
+        if (result.rowCount !== 1)
+          throw fault(409, 'VERSION_CONFLICT', 'تغير عرض السعر؛ حدّث الصفحة ثم أعد المحاولة.');
+        await audited(tx, actor, 'finance_quote', id, 'cancelled', next);
+        return { marker: { type: 'quote', id }, result: { id } };
+      },
+      async (_tx, m) => ({ id: m.id }),
+    );
+    res.json({ quote: await readQuote(db, actor.id, id) });
+  });
+  registerRoute(app, 'post', '/api/finance/invoices/:id/cancel', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    const id = routeId(req.params.id),
+      version = versionValue(requireRecord(req.body).version);
+    await idempotent<{ id: string }>(
+      db,
+      actor,
+      `finance.invoice.cancel:${id}`,
+      req.get('idempotency-key'),
+      { version },
+      async (tx) => {
+        const invoice = await readInvoice(tx, actor.id, id);
+        if (invoice.status === 'cancelled')
+          return { marker: { type: 'invoice', id }, result: { id } };
+        // Only a draft that never left the system: once a send was reserved, the provider may hold it.
+        const sent = (
+          await tx.read<{ id: string }>(
+            "SELECT id FROM finance_provider_operations WHERE owner_id=? AND resource_type='invoice' AND resource_id=?",
+            [actor.id, id],
+          )
+        )[0];
+        if (invoice.status !== 'draft' || invoice.wafeqId || sent)
+          throw fault(
+            409,
+            'INVOICE_NOT_CANCELLABLE',
+            'لا تُلغى من هنا إلا مسودة الفاتورة التي لم تُرسل إلى وافق.',
+          );
+        if (invoice.version !== version)
+          throw fault(409, 'VERSION_CONFLICT', 'تغيرت الفاتورة؛ حدّث الصفحة ثم أعد المحاولة.');
+        const cancelled: FinanceInvoice = {
+          ...invoice,
+          status: 'cancelled',
+          version: version + 1,
+          cancelledAt: now(),
+        };
+        const result = await tx.execute(
+          'UPDATE finance_invoices SET version=version+1,invoice_ciphertext=? WHERE owner_id=? AND id=? AND version=?',
+          [
+            encryptSensitive(JSON.stringify(cancelled), `finance:invoice:${id}`),
+            actor.id,
+            id,
+            version,
+          ],
+        );
+        if (result.rowCount !== 1)
+          throw fault(409, 'VERSION_CONFLICT', 'تغيرت الفاتورة؛ حدّث الصفحة ثم أعد المحاولة.');
+        await audited(tx, actor, 'finance_invoice', id, 'cancelled', version + 1);
+        return { marker: { type: 'invoice', id }, result: { id } };
+      },
+      async (_tx, m) => ({ id: m.id }),
+    );
+    res.json({ invoice: await readInvoice(db, actor.id, id) });
+  });
   registerRoute(app, 'post', '/api/finance/invoices/:id/sync', async (req, res) => {
     const actor = await auth(req);
     requireFinance(actor, access);
@@ -1570,6 +1695,7 @@ export function registerFinance(
         [actor.id, id],
       )
     )[0];
+    if (invoice.status === 'cancelled') throw invoiceCancelled();
     if (invoice.wafeqId && (!priorOperation || priorOperation.state === 'complete')) {
       res.json({ invoice });
       return;
@@ -1644,7 +1770,9 @@ export function registerFinance(
         'إصدار الفواتير ذات الضريبة الصفرية غير مدعوم حاليًا؛ لم يُرسل أي طلب إلى وافق.',
       );
     const client = await storedClient(db, actor.id, clientFactory);
-    const operation = await reserveOperation(db, actor.id, 'invoice', id);
+    const operation = await reserveOperation(db, actor.id, 'invoice', id, async (tx) => {
+      if ((await readInvoice(tx, actor.id, id)).status === 'cancelled') throw invoiceCancelled();
+    });
     let current = await updateInvoiceSnapshot(db, actor, invoice, {
       status: 'syncing',
       zatcaStatus: 'pending',
