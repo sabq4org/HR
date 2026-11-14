@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { X, Check, Clock3, Ban, ChevronLeft } from 'lucide-react';
 import type { Bootstrap, Employee, LeaveRequest, LeaveStatus, Role } from '../shared/contracts';
 
@@ -87,16 +87,25 @@ export function Avatar({
   person,
   size = 'md',
 }: {
-  person: { initials: string; color: string };
+  person: { initials: string; color: string; id?: string; photoId?: string | null };
   size?: 'sm' | 'md' | 'lg' | 'xl';
 }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  const photo =
+    person.id && person.photoId && failed !== person.photoId
+      ? `/api/employees/${encodeURIComponent(person.id)}/photo?v=${encodeURIComponent(person.photoId)}`
+      : null;
   return (
     <span
-      className={`avatar avatar-${size}`}
+      className={`avatar avatar-${size}${photo ? ' avatar-photo' : ''}`}
       style={{ backgroundColor: person.color }}
       aria-hidden="true"
     >
-      {person.initials}
+      {photo ? (
+        <img src={photo} alt="" loading="lazy" onError={() => setFailed(person.photoId ?? null)} />
+      ) : (
+        person.initials
+      )}
     </span>
   );
 }

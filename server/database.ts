@@ -405,12 +405,24 @@ async function applyPostgresMigrations(pool: Pool, schema: string): Promise<void
   }
 }
 
-export async function createDatabase(path = ':memory:'): Promise<Db> {
+export async function createDatabase(
+  path = ':memory:',
+  options: { seed?: boolean } = {},
+): Promise<Db> {
   const connection = new DatabaseSync(path);
   connection.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;');
   await applySqliteMigrations(connection);
   const db = new SqliteAdapter(connection);
   try {
+    // Private (real-data) databases never receive synthetic personas or fixtures.
+    if (options.seed === false) {
+      const synthetic = await db.read<{ id: string }>(
+        "SELECT id FROM employees WHERE id IN ('emp-noura','emp-omar','emp-sara') LIMIT 1",
+      );
+      if (synthetic.length)
+        throw new Error('Refusing to open a synthetic demo database as a private data database.');
+      return db;
+    }
     await seed(db);
     await seedAdministrationProfiles(db);
     return db;

@@ -24,6 +24,15 @@ if (hostedDemo && process.env.HR_DB_PATH) {
 if (process.env.HR_DB_DRIVER && !['sqlite', 'postgres'].includes(process.env.HR_DB_DRIVER)) {
   throw new Error('HR_DB_DRIVER must be sqlite or postgres.');
 }
+// HR_DATA_MODE=private: real employee data on the owner's own machine only.
+// Loopback listener, separate SQLite file, no synthetic seed. See docs/private-local.md.
+const privateData = process.env.HR_DATA_MODE === 'private';
+if (process.env.HR_DATA_MODE && !privateData)
+  throw new Error('HR_DATA_MODE must be "private" when set.');
+if (privateData && (hostedDemo || process.env.HR_PUBLIC_ORIGIN))
+  throw new Error('Private data mode cannot run as a hosted or public preview.');
+if (privateData && process.env.HR_DB_DRIVER === 'postgres')
+  throw new Error('Private data mode is SQLite-on-this-machine only until hosting is approved.');
 const runtime = hostedDemo
   ? await createHostedDemoApp({
       publicOrigin: process.env.HR_PUBLIC_ORIGIN ?? '',
@@ -32,13 +41,20 @@ const runtime = hostedDemo
   : await (async () => {
       const defaultDataDir = resolve('.data');
       mkdirSync(defaultDataDir, { recursive: true });
-      const db =
-        process.env.HR_DB_DRIVER === 'postgres'
+      const db = privateData
+        ? await createDatabase(
+            process.env.HR_DB_PATH ?? resolve(defaultDataDir, 'hr-private.sqlite'),
+            { seed: false },
+          )
+        : process.env.HR_DB_DRIVER === 'postgres'
           ? await createPostgresDatabase(process.env.DATABASE_URL ?? '', 'hr_development')
           : await createDatabase(
               process.env.HR_DB_PATH ?? resolve(defaultDataDir, 'hr-local.sqlite'),
             );
-      return { app: createApp(db), close: () => db.close() };
+      return {
+        app: createApp(db, { dataMode: privateData ? 'private' : 'synthetic' }),
+        close: () => db.close(),
+      };
     })();
 const { app } = runtime;
 app.use((_req, res, next) => {
@@ -66,7 +82,7 @@ const server = createServer(app);
 const host = hostedDemo ? '0.0.0.0' : '127.0.0.1';
 server.listen(port, host, () => {
   process.stdout.write(
-    `Sabq HR synthetic ${hostedDemo ? 'hosted' : 'local'} app listening on ${host}:${port}\n`,
+    `Sabq HR ${privateData ? 'PRIVATE (real data, this machine only)' : hostedDemo ? 'synthetic hosted' : 'synthetic local'} app listening on ${host}:${port}\n`,
   );
 });
 let stopping = false;

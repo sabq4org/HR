@@ -666,6 +666,13 @@ export async function getEmployeeFile(
     role: employee.role,
     color: employee.color,
     status: employee.status,
+    photoId:
+      (
+        await db.read<{ id: string }>(
+          "SELECT id FROM employee_documents WHERE employee_id=? AND category='photo' AND state='active' ORDER BY uploaded_at DESC,id DESC LIMIT 1",
+          [employee.id],
+        )
+      )[0]?.id ?? null,
   };
   const required = employeeFields.filter((field) => field.required);
   const missing = required

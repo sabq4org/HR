@@ -14,6 +14,8 @@ export interface Employee {
   role: Role;
   color: string;
   status: 'active' | 'on_leave' | 'suspended' | 'terminated';
+  /** Id of the active profile photo document, or null. Bytes come from /api/employees/:id/photo. */
+  photoId?: string | null;
 }
 export interface Balance {
   allocated: number;
