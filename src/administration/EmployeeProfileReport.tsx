@@ -125,6 +125,11 @@ const stateLabels: Record<string, string> = {
   on_leave: 'في إجازة',
   suspended: 'موقوف',
   terminated: 'منتهية الخدمة',
+  allocation: 'تخصيص رصيد',
+  reserve: 'حجز رصيد',
+  release: 'إعادة رصيد',
+  consume: 'استهلاك رصيد',
+  opening: 'رصيد افتتاحي',
 };
 function format(value: unknown, field?: FormField, employees: { id: string; name: string }[] = []) {
   if (value === null || value === undefined || value === '') return 'غير مسجل';
