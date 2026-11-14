@@ -70,6 +70,8 @@ export async function seedAdministrationProfiles(db: AsyncDb): Promise<void> {
         housingAllowance: 2500,
         transportAllowance: 750,
         otherAllowance: 0,
+        payrollPaymentMethod: index % 2 ? 'wps' : 'direct',
+        payrollEmploymentType: 'staff',
         bankName: 'بنك تجريبي',
         iban: `DEMO-ACCOUNT-${suffix}`,
         insuranceNumber: `DEMO-INS-${suffix}`,

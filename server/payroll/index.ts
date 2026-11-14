@@ -1,7 +1,25 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Express, Request } from 'express';
 import type { AsyncDb } from '../database.js';
-import type { PayrollLine, PayrollRun } from '../../shared/administration.js';
+import type {
+  PayrollLine,
+  PayrollPaymentMethod,
+  PayrollPolicyOption,
+  PayrollRun,
+} from '../../shared/administration.js';
+import {
+  buildPayrollRegister,
+  PAYROLL_COMPONENTS,
+  registerTable,
+} from '../../shared/payroll-register.js';
+import {
+  GOSI_PROBLEM_LABEL,
+  gosiContribution,
+  parseGosiRule,
+  resolveGosiCategory,
+  type GosiCategory,
+  type GosiRule,
+} from '../../shared/gosi.js';
 import {
   appendEvent,
   getApprovedPayrollSource,
@@ -33,6 +51,95 @@ function decimalRiyalToMinor(value: unknown): number | null {
   const minor = whole * 100 + fraction;
   return Number.isSafeInteger(minor) ? minor : null;
 }
+
+/**
+ * Payroll rule versions the calculator accepts. Both read the components as entered in the
+ * employee profile and compute no rate: 'synthetic-profile-components' for the synthetic seed,
+ * 'profile-components' for a version HR creates and an independent approver approves.
+ */
+const PAYROLL_POLICY_KEYS = ['payroll-demo', 'payroll'];
+const PAYROLL_CALCULATIONS = ['synthetic-profile-components', 'profile-components'];
+function periodBounds(period: string) {
+  const start = `${period}-01`;
+  const end = new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0))
+    .toISOString()
+    .slice(0, 10);
+  return { start, end };
+}
+function supportedPolicy(row: Row): boolean {
+  try {
+    const values = JSON.parse(row.values_json);
+    return (
+      PAYROLL_POLICY_KEYS.includes(row.policy_key) &&
+      values?.currency === 'SAR' &&
+      PAYROLL_CALCULATIONS.includes(values?.calculation)
+    );
+  } catch {
+    return false;
+  }
+}
+const policyCovers = (row: Row, period: string) => {
+  const { start, end } = periodBounds(period);
+  return row.effective_from <= start && (!row.effective_to || row.effective_to >= end);
+};
+/** Approved payroll rule versions, newest first; optionally only those covering a period. */
+export async function approvedPayrollPolicies(
+  db: AsyncDb,
+  period?: string,
+): Promise<PayrollPolicyOption[]> {
+  const rows = await db.read<Row>(
+    "SELECT * FROM administrative_policies WHERE state='synthetic_approved' ORDER BY effective_from DESC,version DESC,id",
+  );
+  return rows
+    .filter((row) => supportedPolicy(row) && (!period || policyCovers(row, period)))
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      version: Number(row.version),
+      effectiveFrom: row.effective_from,
+      effectiveTo: row.effective_to ?? null,
+      source: row.source,
+      synthetic: JSON.parse(row.values_json).calculation === 'synthetic-profile-components',
+      ...(() => {
+        try {
+          return { gosi: parseGosiRule(JSON.parse(row.values_json)), gosiInvalid: false };
+        } catch {
+          return { gosi: null, gosiInvalid: true };
+        }
+      })(),
+    }));
+}
+const COMPONENT_BY_FIELD: Record<string, string> = {
+  basicSalary: PAYROLL_COMPONENTS.basic,
+  housingAllowance: PAYROLL_COMPONENTS.housing,
+  transportAllowance: PAYROLL_COMPONENTS.transport,
+  otherAllowance: PAYROLL_COMPONENTS.other,
+};
+async function policyGosi(db: AsyncDb, policyId: string): Promise<GosiRule | null> {
+  const row = (
+    await db.read<Row>('SELECT values_json FROM administrative_policies WHERE id=?', [policyId])
+  )[0];
+  if (!row) return null;
+  try {
+    return parseGosiRule(JSON.parse(row.values_json));
+  } catch {
+    throw fail(
+      400,
+      'gosi_rule_invalid',
+      'قسم التأمينات في إصدار القواعد غير مكتمل أو غير صالح؛ لا يُحتسب المسير به.',
+    );
+  }
+}
+const EXCLUSION_LABEL: Record<string, string> = {
+  copy_left: 'في المسير السابق وليسوا على رأس العمل الآن (لم يُنسخوا)',
+  copy_added: 'على رأس العمل ولم يكونوا في المسير السابق (أضيفوا من ملفاتهم)',
+  salary_incomplete: 'الراتب الأساسي غير مدخل أو مكونات الراتب غير صالحة',
+  employment_type_missing: 'نوع الارتباط (رسمي أو متعاون) غير محدد في الملف',
+  contractor_amount_missing: 'المبلغ الشهري المقطوع للمتعاون غير مدخل',
+  ...GOSI_PROBLEM_LABEL,
+};
+const paymentMethodOf = (value: unknown): PayrollPaymentMethod =>
+  value === 'direct' || value === 'wps' ? value : 'unspecified';
 
 /**
  * Payroll commands shared by the session routes (/api/admin/payroll) and the «محاسب سبق»
@@ -86,6 +193,23 @@ export function createPayrollCommands(db: AsyncDb) {
       .reduce((n, l) => n + Number(l.amount_minor), 0);
     if (!Number.isSafeInteger(earningsMinor) || !Number.isSafeInteger(deductionsMinor))
       throw fail(500, 'payroll_total_invalid', 'مجموع المسير يتجاوز دقة العملة الآمنة.');
+    // Auditors see one stable pseudonym per employee so the register still groups rows.
+    const pseudonyms = new Map<string, string>();
+    for (const l of visible)
+      if (!pseudonyms.has(l.employee_id))
+        pseudonyms.set(l.employee_id, `موظف ${pseudonyms.size + 1}`);
+    const visibleIds = new Set(visible.map((l) => l.employee_id));
+    const people = (
+      await query.read<Row>(
+        'SELECT p.*,e.name employee_name FROM payroll_run_people p JOIN employees e ON e.id=p.employee_id WHERE p.run_id=? ORDER BY p.employee_id',
+        [id],
+      )
+    ).filter((p) => visibleIds.has(p.employee_id));
+    const policy = (
+      await query.read<Row>('SELECT name,version FROM administrative_policies WHERE id=?', [
+        r.policy_id,
+      ])
+    )[0];
     const events = await query.read<Row>(
       // employees, not employee_access: the service account row is hidden from the view but
       // its events must still read «محاسب سبق».
@@ -103,15 +227,28 @@ export function createPayrollCommands(db: AsyncDb) {
       policyId: r.policy_id,
       correctionOf: r.correction_of,
       reason: actor.role === 'auditor' ? '[معلومة محمية]' : r.reason,
-      lines: visible.map((l, index): PayrollLine => ({
+      policyName: policy ? `${policy.name} · الإصدار ${Number(policy.version)}` : r.policy_id,
+      lines: visible.map((l): PayrollLine => ({
         id: l.id,
         employeeId: actor.role === 'auditor' ? '' : l.employee_id,
-        employeeName: actor.role === 'auditor' ? `موظف ${index + 1}` : l.employee_name,
+        employeeName: actor.role === 'auditor' ? pseudonyms.get(l.employee_id)! : l.employee_name,
         component: l.component,
         kind: l.kind,
         amountMinor: Number(l.amount_minor),
         source: actor.role === 'auditor' ? 'مصدر مالي معتمد' : l.source,
         sourceRequestId: actor.role === 'auditor' ? null : l.source_request_id,
+      })),
+      people: people.map((p) => ({
+        employeeId: actor.role === 'auditor' ? '' : p.employee_id,
+        employeeName:
+          actor.role === 'auditor' ? (pseudonyms.get(p.employee_id) ?? 'موظف') : p.employee_name,
+        title: actor.role === 'auditor' ? '' : p.title,
+        paymentMethod: paymentMethodOf(p.payment_method),
+        employerContributionMinor: Number(p.employer_contribution_minor),
+        insuranceCategory: p.insurance_category ?? null,
+        insuranceCategoryInferred: Number(p.insurance_category_inferred) === 1,
+        insuredWageMinor: Number(p.insured_wage_minor),
+        employmentType: p.employment_type === 'contractor' ? 'contractor' : 'staff',
       })),
       payments: payments.map((p) => ({
         employeeId: actor.role === 'auditor' ? '' : p.employee_id,
@@ -140,6 +277,148 @@ export function createPayrollCommands(db: AsyncDb) {
         version: Number(e.version),
       })),
     };
+  }
+  /**
+   * Recomputes every staff member's insurance line and employer share from the run's own
+   * contributory lines and the rule version's GOSI section. Contractors and people without a
+   * category get none. Used after creating, copying or editing a draft, so an edited basic
+   * salary never leaves a stale insurance amount.
+   */
+  async function applyInsurance(tx: AsyncDb, runId: string, gosi: GosiRule, policyId: string) {
+    const people = await tx.read<Row>(
+      'SELECT employee_id,employment_type,insurance_category FROM payroll_run_people WHERE run_id=?',
+      [runId],
+    );
+    const lines = await tx.read<Row>(
+      "SELECT employee_id,component,amount_minor FROM payroll_lines WHERE run_id=? AND kind='earning'",
+      [runId],
+    );
+    const at = now();
+    for (const person of people) {
+      await tx.execute(
+        'DELETE FROM payroll_lines WHERE run_id=? AND employee_id=? AND component=? AND kind=?',
+        [runId, person.employee_id, PAYROLL_COMPONENTS.insurance, 'deduction'],
+      );
+      let result = { wageMinor: 0, employeeMinor: 0, employerMinor: 0 };
+      if (person.employment_type === 'staff' && person.insurance_category) {
+        const components: Record<string, number> = {};
+        for (const [field, component] of Object.entries(COMPONENT_BY_FIELD))
+          components[field] = lines
+            .filter((l) => l.employee_id === person.employee_id && l.component === component)
+            .reduce((n, l) => n + Number(l.amount_minor), 0);
+        result = gosiContribution(gosi, person.insurance_category as GosiCategory, components);
+      }
+      if (result.employeeMinor)
+        await tx.execute(
+          'INSERT INTO payroll_lines(id,run_id,employee_id,component,kind,amount_minor,source,source_request_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+          [
+            randomUUID(),
+            runId,
+            person.employee_id,
+            PAYROLL_COMPONENTS.insurance,
+            'deduction',
+            result.employeeMinor,
+            `حصة الموظف وفق إصدار القواعد ${policyId}`,
+            null,
+            at,
+          ],
+        );
+      await tx.execute(
+        'UPDATE payroll_run_people SET employer_contribution_minor=?,insured_wage_minor=? WHERE run_id=? AND employee_id=?',
+        [result.employerMinor, result.wageMinor, runId, person.employee_id],
+      );
+    }
+  }
+  /**
+   * Adds one on-duty employee to a draft from the profile: contractors get their lump sum,
+   * staff their salary components and (when the rule has an insurance section) a GOSI
+   * category. Returns an exclusion code instead when the profile is incomplete. Insurance
+   * amounts are written afterwards by applyInsurance.
+   */
+  async function addPersonFromProfile(
+    tx: AsyncDb,
+    args: {
+      runId: string;
+      person: Row;
+      gosi: GosiRule | null;
+      synthetic: boolean;
+      created: string;
+    },
+  ): Promise<string | null> {
+    const { runId, person, gosi, synthetic, created } = args;
+    const profile = await getProfileValues(tx, person.id);
+    const blank = (value: unknown) =>
+      value === undefined || value === null || String(value).trim() === '';
+    const typeValue = String(profile.payrollEmploymentType ?? '').trim();
+    // A rule with an insurance section needs to know who is under GOSI.
+    if (!typeValue && gosi) {
+      return 'employment_type_missing';
+    }
+    const employmentType: 'staff' | 'contractor' =
+      typeValue === 'contractor' ? 'contractor' : 'staff';
+    const earnings: [string, number][] = [];
+    let category: { category: GosiCategory; inferred: boolean } | null = null;
+    if (employmentType === 'contractor') {
+      const lump = decimalRiyalToMinor(profile.contractorMonthlyAmount);
+      if (!lump) {
+        return 'contractor_amount_missing';
+      }
+      earnings.push([PAYROLL_COMPONENTS.lumpSum, lump]);
+    } else {
+      // Salary components as entered: the basic salary is required and a blank
+      // allowance counts as zero.
+      const amounts: Record<string, number | null> = {};
+      for (const key of ['basicSalary', 'housingAllowance', 'transportAllowance', 'otherAllowance'])
+        amounts[key] =
+          key !== 'basicSalary' && blank(profile[key]) ? 0 : decimalRiyalToMinor(profile[key]);
+      if (Object.values(amounts).some((v) => v === null) || !amounts.basicSalary) {
+        return 'salary_incomplete';
+      }
+      if (gosi) {
+        const resolved = resolveGosiCategory(profile);
+        if (!resolved.category) {
+          return resolved.problem;
+        }
+        category = resolved;
+      }
+      for (const key of Object.keys(COMPONENT_BY_FIELD))
+        earnings.push([COMPONENT_BY_FIELD[key]!, amounts[key]!]);
+    }
+    for (const [component, amountMinor] of earnings) {
+      if (!amountMinor) continue;
+      await tx.execute(
+        'INSERT INTO payroll_lines(id,run_id,employee_id,component,kind,amount_minor,source,source_request_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+        [
+          randomUUID(),
+          runId,
+          person.id,
+          component,
+          'earning',
+          amountMinor,
+          synthetic
+            ? 'الملف الوظيفي الاصطناعي؛ قيمة عرض فقط بلا احتساب نظامي.'
+            : 'الملف الوظيفي؛ مبلغ مُدخل كما هو.',
+          null,
+          created,
+        ],
+      );
+    }
+    await tx.execute(
+      'INSERT INTO payroll_run_people(run_id,employee_id,title,payment_method,employment_type,employer_contribution_minor,insurance_category,insurance_category_inferred,insured_wage_minor,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+      [
+        runId,
+        person.id,
+        String(person.title ?? ''),
+        paymentMethodOf(profile.payrollPaymentMethod),
+        employmentType,
+        0,
+        category?.category ?? null,
+        category?.inferred ? 1 : 0,
+        0,
+        created,
+      ],
+    );
+    return null;
   }
   async function validateRunNet(tx: AsyncDb, run: Row, requireCorrection: boolean) {
     const lines = await tx.read<Row>(
@@ -208,6 +487,7 @@ export function createPayrollCommands(db: AsyncDb) {
           resource?: string;
           id?: string;
           excludedCount?: number;
+          exclusions?: unknown;
         };
         if (replayed.resource !== 'payroll_run' || !replayed.id)
           throw fail(500, 'idempotency_record_invalid', 'تعذر التحقق من نتيجة العملية السابقة.');
@@ -216,12 +496,14 @@ export function createPayrollCommands(db: AsyncDb) {
           ...(Number.isSafeInteger(replayed.excludedCount)
             ? { excludedCount: replayed.excludedCount }
             : {}),
+          ...(Array.isArray(replayed.exclusions) ? { exclusions: replayed.exclusions } : {}),
         } as T;
       }
       const result = await work(tx);
       const runId = (result as { run?: { id?: string } } | null)?.run?.id;
       if (!runId) throw fail(500, 'idempotency_record_invalid', 'تعذر حفظ نتيجة العملية.');
       const excludedCount = (result as { excludedCount?: number }).excludedCount;
+      const exclusions = (result as { exclusions?: unknown }).exclusions;
       await tx.execute(
         'INSERT INTO payroll_commands(actor_id,action,command_key,payload_hash,response_json,created_at) VALUES(?,?,?,?,?,?)',
         [
@@ -233,6 +515,7 @@ export function createPayrollCommands(db: AsyncDb) {
             resource: 'payroll_run',
             id: runId,
             ...(Number.isSafeInteger(excludedCount) ? { excludedCount } : {}),
+            ...(Array.isArray(exclusions) ? { exclusions } : {}),
           }),
           now(),
         ],
@@ -243,13 +526,23 @@ export function createPayrollCommands(db: AsyncDb) {
   /** serviceAudit: extra details for the administration event a service-key write leaves. */
   async function createRun(req: Request, actor: Actor, serviceAudit?: Record<string, unknown>) {
     if (!mayPrepare(actor)) throw fail(403, 'forbidden', 'إنشاء المسير متاح للموارد البشرية فقط.');
-    const { period, policyId = 'payroll-policy-demo-v2', reason, correctionOf } = req.body ?? {};
+    const { period, policyId: requestedPolicyId, reason, correctionOf } = req.body ?? {};
     if (
       !/^\d{4}-(0[1-9]|1[0-2])$/.test(period) ||
       typeof reason !== 'string' ||
-      reason.trim().length < 3
+      reason.trim().length < 3 ||
+      (requestedPolicyId !== undefined && typeof requestedPolicyId !== 'string')
     )
       throw fail(400, 'invalid_input', 'أدخل فترة صحيحة وسببًا واضحًا.');
+    // Without an explicit version, the newest approved version covering the period applies.
+    const policyId: string | undefined =
+      requestedPolicyId ?? (await approvedPayrollPolicies(db, period))[0]?.id;
+    if (!policyId)
+      throw fail(
+        400,
+        'policy_unavailable',
+        'لا يوجد إصدار قواعد رواتب معتمد يسري على هذه الفترة. تنشئه الموارد البشرية من صفحة القواعد ويعتمده المعتمد المستقل.',
+      );
     const result = await replay(
       req,
       actor,
@@ -262,28 +555,32 @@ export function createPayrollCommands(db: AsyncDb) {
             [policyId],
           )
         )[0];
-        if (!policy) throw fail(400, 'policy_unavailable', 'إصدار القواعد غير متاح.');
-        const calculation = JSON.parse(policy.values_json);
-        if (
-          policy.policy_key !== 'payroll-demo' ||
-          calculation.currency !== 'SAR' ||
-          calculation.calculation !== 'synthetic-profile-components'
-        )
+        if (!policy)
+          throw fail(
+            400,
+            'policy_unavailable',
+            'إصدار قواعد الرواتب المطلوب غير معتمد أو غير موجود.',
+          );
+        if (!supportedPolicy(policy))
           throw fail(
             400,
             'unsupported_calculator',
-            'إصدار القواعد لا يطابق حاسبة مكونات الملف الاصطناعية.',
+            'إصدار القواعد لا يطابق حاسبة مكونات الملف الوظيفي.',
           );
-        const periodStart = `${period}-01`;
-        const periodEnd = new Date(
-          Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0),
-        )
-          .toISOString()
-          .slice(0, 10);
-        if (
-          policy.effective_from > periodStart ||
-          (policy.effective_to && policy.effective_to < periodEnd)
-        )
+        const policyValues = JSON.parse(policy.values_json);
+        const synthetic = policyValues.calculation === 'synthetic-profile-components';
+        let gosi: GosiRule | null;
+        try {
+          gosi = parseGosiRule(policyValues);
+        } catch {
+          throw fail(
+            400,
+            'gosi_rule_invalid',
+            'قسم التأمينات في إصدار القواعد غير مكتمل أو غير صالح؛ لا يُحتسب المسير به.',
+          );
+        }
+        const exclusions = new Map<string, number>();
+        if (!policyCovers(policy, period))
           throw fail(400, 'policy_out_of_period', 'إصدار القواعد لا يسري على فترة المسير.');
         let original: Row | undefined;
         if (correctionOf) {
@@ -327,6 +624,10 @@ export function createPayrollCommands(db: AsyncDb) {
             'SELECT employee_id,component,kind FROM payroll_lines WHERE run_id=?',
             [original.id],
           );
+          await tx.execute(
+            'INSERT INTO payroll_run_people(run_id,employee_id,title,payment_method,employment_type,employer_contribution_minor,insurance_category,insurance_category_inferred,insured_wage_minor,created_at) SELECT ?,employee_id,title,payment_method,employment_type,0,insurance_category,insurance_category_inferred,0,? FROM payroll_run_people WHERE run_id=?',
+            [id, created, original.id],
+          );
           for (const line of priorLines)
             await tx.execute(
               'INSERT INTO payroll_lines(id,run_id,employee_id,component,kind,amount_minor,source,source_request_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
@@ -344,48 +645,23 @@ export function createPayrollCommands(db: AsyncDb) {
             );
         } else {
           const people = await tx.read<Row>(
-            "SELECT id,name FROM employee_access WHERE status='active' AND role NOT IN ('finance','approver') AND id<>? ORDER BY id",
+            "SELECT id,name,title FROM employee_access WHERE status='active' AND role NOT IN ('finance','approver') AND id<>? ORDER BY id",
             [actor.id],
           );
           for (const person of people) {
-            const profile = await getProfileValues(tx, person.id);
-            const salaryComponents = [
-              ['الراتب الأساسي', 'basicSalary'],
-              ['بدل السكن', 'housingAllowance'],
-              ['بدل النقل', 'transportAllowance'],
-              ['بدلات ثابتة أخرى', 'otherAllowance'],
-            ] as const;
-            const components = salaryComponents.map(([component, key]) => ({
-              component,
-              amountMinor: decimalRiyalToMinor(profile[key]),
-            }));
-            if (
-              components.some(
-                (component) => component.amountMinor === null || component.amountMinor < 0,
-              ) ||
-              components.every((component) => component.amountMinor === 0)
-            ) {
+            const problem = await addPersonFromProfile(tx, {
+              runId: id,
+              person,
+              gosi,
+              synthetic,
+              created,
+            });
+            if (problem) {
               excludedCount += 1;
-              continue;
-            }
-            for (const component of components) {
-              if (!component.amountMinor) continue;
-              await tx.execute(
-                'INSERT INTO payroll_lines(id,run_id,employee_id,component,kind,amount_minor,source,source_request_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
-                [
-                  randomUUID(),
-                  id,
-                  person.id,
-                  component.component,
-                  'earning',
-                  component.amountMinor,
-                  'الملف الوظيفي الاصطناعي؛ قيمة عرض فقط بلا احتساب نظامي.',
-                  null,
-                  created,
-                ],
-              );
+              exclusions.set(problem, (exclusions.get(problem) ?? 0) + 1);
             }
           }
+          if (gosi) await applyInsurance(tx, id, gosi, policyId);
           const count = (
             await tx.read<Row>('SELECT COUNT(*) count FROM payroll_lines WHERE run_id=?', [id])
           )[0];
@@ -393,7 +669,7 @@ export function createPayrollCommands(db: AsyncDb) {
             throw fail(
               400,
               'no_salary_profiles',
-              'لا توجد ملفات رواتب اصطناعية مكتملة؛ أضف المكونات للملف قبل إعداد المسير.',
+              'لا توجد ملفات رواتب مكتملة؛ أدخل الراتب الأساسي في الملف الوظيفي قبل إعداد المسير.',
             );
         }
         await tx.execute(
@@ -412,7 +688,19 @@ export function createPayrollCommands(db: AsyncDb) {
             1,
             created,
           );
-        return { run: await getRun(id, actor, tx), ...(correctionOf ? {} : { excludedCount }) };
+        return {
+          run: await getRun(id, actor, tx),
+          ...(correctionOf
+            ? {}
+            : {
+                excludedCount,
+                exclusions: [...exclusions].map(([code, count]) => ({
+                  code,
+                  label: EXCLUSION_LABEL[code] ?? code,
+                  count,
+                })),
+              }),
+        };
       },
     );
     return result;
@@ -536,11 +824,27 @@ export function createPayrollCommands(db: AsyncDb) {
       return { run: await getRun(run.id, actor, tx) };
     });
   }
-  return { getRun, validateRunNet, replay, createRun, runAction };
+  return {
+    getRun,
+    validateRunNet,
+    replay,
+    createRun,
+    runAction,
+    applyInsurance,
+    addPersonFromProfile,
+  };
 }
 
 export function registerPayroll(app: Express, { db, requireActor }: Options) {
-  const { getRun, validateRunNet, replay, createRun, runAction } = createPayrollCommands(db);
+  const {
+    getRun,
+    validateRunNet,
+    replay,
+    createRun,
+    runAction,
+    applyInsurance,
+    addPersonFromProfile,
+  } = createPayrollCommands(db);
   const route = (
     method: 'get' | 'post' | 'patch',
     path: string,
@@ -620,10 +924,184 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
     }
     return { sources: options };
   });
+  route('get', '/payroll/policies', async (req, actor) => {
+    if (!['hr', 'finance', 'approver', 'auditor'].includes(actor.role))
+      throw fail(403, 'forbidden', 'قواعد الرواتب متاحة للأدوار المالية والإدارية فقط.');
+    const period = typeof req.query.period === 'string' ? req.query.period : undefined;
+    if (period !== undefined && !/^\d{4}-(0[1-9]|1[0-2])$/.test(period))
+      throw fail(400, 'invalid_input', 'الفترة غير صالحة.');
+    return { policies: await approvedPayrollPolicies(db, period) };
+  });
   route('get', '/payroll/:id', async (req, actor) => ({
     run: await getRun(String(req.params.id), actor),
   }));
   route('post', '/payroll', (req, actor) => createRun(req, actor));
+  route('post', '/payroll/:id/copy', async (req, actor) => {
+    if (actor.role !== 'hr') throw fail(403, 'forbidden', 'نسخ المسير متاح للموارد البشرية فقط.');
+    const body = req.body ?? {};
+    const { period, reason, policyId: requestedPolicyId } = body;
+    if (
+      typeof period !== 'string' ||
+      !/^\d{4}-(0[1-9]|1[0-2])$/.test(period) ||
+      typeof reason !== 'string' ||
+      reason.trim().length < 3 ||
+      (requestedPolicyId !== undefined && typeof requestedPolicyId !== 'string')
+    )
+      throw fail(400, 'invalid_input', 'أدخل فترة صحيحة وسببًا واضحًا.');
+    return replay(req, actor, `copy:${req.params.id}`, body, async (tx) => {
+      const source = (
+        await tx.read<Row>('SELECT * FROM payroll_runs WHERE id=?', [String(req.params.id)])
+      )[0];
+      if (!source || source.correction_of || source.state === 'rejected')
+        throw fail(404, 'not_found', 'المسير الأساسي المراد نسخه غير موجود.');
+      if (period <= source.period)
+        throw fail(400, 'copy_period_invalid', 'يُنسخ المسير إلى شهر لاحق لشهره فقط.');
+      const existing = (
+        await tx.read<Row>(
+          "SELECT id FROM payroll_runs WHERE period=? AND correction_of IS NULL AND state<>'rejected'",
+          [period],
+        )
+      )[0];
+      if (existing) throw fail(409, 'period_already_exists', 'يوجد مسير أساسي لهذه الفترة.');
+      const policyId = requestedPolicyId ?? (await approvedPayrollPolicies(tx, period))[0]?.id;
+      const policy = policyId
+        ? (
+            await tx.read<Row>(
+              "SELECT * FROM administrative_policies WHERE id=? AND state='synthetic_approved'",
+              [policyId],
+            )
+          )[0]
+        : undefined;
+      if (!policy || !supportedPolicy(policy) || !policyCovers(policy, period))
+        throw fail(
+          400,
+          'policy_unavailable',
+          'لا يوجد إصدار قواعد رواتب معتمد يسري على هذه الفترة. تنشئه الموارد البشرية من صفحة القواعد ويعتمده المعتمد المستقل.',
+        );
+      const gosi = await policyGosi(tx, policy.id);
+      const synthetic =
+        JSON.parse(policy.values_json).calculation === 'synthetic-profile-components';
+      const id = randomUUID(),
+        created = now();
+      await tx.execute(
+        "INSERT INTO payroll_runs(id,period,version,state,prepared_by,policy_id,correction_of,reason,created_at,updated_at) VALUES(?,?,1,'draft',?,?,NULL,?,?,?)",
+        [id, period, actor.id, policy.id, reason.trim(), created, created],
+      );
+      // On duty now, with the same exclusions as a new run (preparer, finance, approver).
+      const onDuty = await tx.read<Row>(
+        "SELECT id,name,title FROM employee_access WHERE status='active' AND role NOT IN ('finance','approver') AND id<>? ORDER BY id",
+        [actor.id],
+      );
+      const sourcePeople = new Map(
+        (await tx.read<Row>('SELECT * FROM payroll_run_people WHERE run_id=?', [source.id])).map(
+          (p) => [p.employee_id, p],
+        ),
+      );
+      const sourceLines = await tx.read<Row>(
+        'SELECT * FROM payroll_lines WHERE run_id=? ORDER BY id',
+        [source.id],
+      );
+      const exclusions = new Map<string, number>();
+      const note = (code: string) => exclusions.set(code, (exclusions.get(code) ?? 0) + 1);
+      const stillOnDuty = new Set(onDuty.map((p) => p.id));
+      for (const employeeId of new Set(sourceLines.map((l) => l.employee_id)))
+        if (!stillOnDuty.has(employeeId)) note('copy_left');
+      for (const person of onDuty) {
+        const prior = sourcePeople.get(person.id);
+        const lines = sourceLines.filter(
+          (l) =>
+            l.employee_id === person.id &&
+            !l.source_request_id &&
+            l.component !== PAYROLL_COMPONENTS.insurance,
+        );
+        if (!prior || !lines.length) {
+          // Not in last month's register: build their lines from the profile.
+          const problem = await addPersonFromProfile(tx, {
+            runId: id,
+            person,
+            gosi,
+            synthetic,
+            created,
+          });
+          if (problem) note(problem);
+          else note('copy_added');
+          continue;
+        }
+        let category = prior.insurance_category ?? null;
+        let inferred = Number(prior.insurance_category_inferred) === 1;
+        if (gosi && prior.employment_type === 'staff' && !category) {
+          const resolved = resolveGosiCategory(await getProfileValues(tx, person.id));
+          if (!resolved.category) {
+            note(resolved.problem);
+            continue;
+          }
+          category = resolved.category;
+          inferred = resolved.inferred;
+        }
+        for (const line of lines)
+          await tx.execute(
+            'INSERT INTO payroll_lines(id,run_id,employee_id,component,kind,amount_minor,source,source_request_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+            [
+              randomUUID(),
+              id,
+              person.id,
+              line.component,
+              line.kind,
+              Number(line.amount_minor),
+              `منسوخ من مسير ${source.period}`,
+              null,
+              created,
+            ],
+          );
+        await tx.execute(
+          'INSERT INTO payroll_run_people(run_id,employee_id,title,payment_method,employment_type,employer_contribution_minor,insurance_category,insurance_category_inferred,insured_wage_minor,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+          [
+            id,
+            person.id,
+            String(person.title ?? prior.title ?? ''),
+            prior.payment_method,
+            prior.employment_type,
+            0,
+            category,
+            inferred ? 1 : 0,
+            0,
+            created,
+          ],
+        );
+      }
+      if (gosi) await applyInsurance(tx, id, gosi, policy.id);
+      const count = (
+        await tx.read<Row>('SELECT COUNT(*) count FROM payroll_lines WHERE run_id=?', [id])
+      )[0];
+      if (Number(count?.count ?? 0) === 0)
+        throw fail(400, 'no_salary_profiles', 'لا يوجد من يُنسخ إلى المسير الجديد.');
+      await validateRunNet(tx, { id, correction_of: null }, false);
+      await tx.execute(
+        'INSERT INTO payroll_events(id,run_id,actor_id,actor_role,action,reason,created_at,version) VALUES(?,?,?,?,?,?,?,?)',
+        [
+          randomUUID(),
+          id,
+          actor.id,
+          actor.role,
+          'created',
+          `${reason.trim()} (نسخة من مسير ${source.period})`,
+          created,
+          1,
+        ],
+      );
+      return {
+        run: await getRun(id, actor, tx),
+        excludedCount: [...exclusions]
+          .filter(([code]) => !['copy_added'].includes(code))
+          .reduce((n, [, c]) => n + c, 0),
+        exclusions: [...exclusions].map(([code, count]) => ({
+          code,
+          label: EXCLUSION_LABEL[code] ?? code,
+          count,
+        })),
+      };
+    });
+  });
   route('patch', '/payroll/:id', async (req, actor) => {
     if (actor.role !== 'hr') throw fail(403, 'forbidden', 'تعديل المسير متاح للموارد البشرية فقط.');
     const body = req.body ?? {};
@@ -748,6 +1226,11 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
             now(),
           ],
         );
+      // Insurance follows the rule, not hand edits: recompute it from the edited lines.
+      if (!run.correction_of) {
+        const gosi = await policyGosi(tx, run.policy_id);
+        if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
+      }
       await validateRunNet(tx, run, false);
       await tx.execute(
         'UPDATE payroll_runs SET version=version+1,updated_at=? WHERE id=? AND version=?',
@@ -835,10 +1318,113 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
   });
   route('get', '/payroll/:id/export', async (req, actor) => {
     const run = await getRun(String(req.params.id), actor);
-    if (actor.role === 'employee')
+    if (!['hr', 'finance', 'approver', 'auditor'].includes(actor.role))
       throw fail(403, 'forbidden', 'تصدير المسير متاح للأدوار المالية والإدارية فقط.');
-    return payrollCsv(run);
+    return payrollRegisterCsv(run);
   });
+  app.get('/api/admin/payroll/:id/register.xlsx', async (req, res) => {
+    try {
+      const actor = await requireActor(req);
+      const run = await getRun(String(req.params.id), actor);
+      if (!['hr', 'finance', 'approver', 'auditor'].includes(actor.role))
+        throw fail(403, 'forbidden', 'تصدير المسير متاح للأدوار المالية والإدارية فقط.');
+      const buffer = await payrollRegisterXlsx(run);
+      res
+        .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        .setHeader('Cache-Control', 'no-store')
+        .attachment(`payroll-${run.period}.xlsx`)
+        .send(buffer);
+    } catch (e) {
+      const err = e as any;
+      res.status(err.status ?? 500).json({
+        error: {
+          code: err.code ?? 'internal_error',
+          message: err.status ? err.message : 'تعذرت معالجة الطلب.',
+        },
+      });
+    }
+  });
+}
+
+const csvRow = (row: (string | number)[]) =>
+  row
+    .map((v) => {
+      const value = String(v);
+      const safe = /^[\s]*[=+\-@]/.test(value) && typeof v === 'string' ? `'${value}` : value;
+      return '"' + safe.replace(/"/g, '""') + '"';
+    })
+    .join(',');
+
+/** The register in the owner's template column order (no BOM; the client adds one). */
+export function payrollRegisterCsv(run: PayrollRun): string {
+  const { header, rows } = registerTable(buildPayrollRegister(run));
+  return [header, ...rows].map(csvRow).join('\r\n');
+}
+
+/** Excel register: title rows, template columns, one section per payment method, totals. */
+export async function payrollRegisterXlsx(run: PayrollRun): Promise<Buffer> {
+  const { default: ExcelJS } = await import('exceljs');
+  const register = buildPayrollRegister(run);
+  const { header } = registerTable(register);
+  const book = new ExcelJS.Workbook();
+  const sheet = book.addWorksheet('مسير الرواتب', {
+    views: [{ rightToLeft: true, state: 'frozen', ySplit: 5 }],
+    pageSetup: { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1 },
+  });
+  const width = header.length;
+  const title = (row: number, text: string, size: number) => {
+    sheet.mergeCells(row, 1, row, width);
+    const cell = sheet.getCell(row, 1);
+    cell.value = text;
+    cell.font = { bold: true, size };
+    cell.alignment = { horizontal: 'center' };
+  };
+  const [year, month] = run.period.split('-').map(Number);
+  const monthName = new Intl.DateTimeFormat('ar-SA-u-ca-gregory-nu-latn', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(year!, month! - 1, 1)));
+  title(1, 'صحيفة سبق الإلكترونية', 16);
+  title(2, run.correctionOf ? 'مسير فرق تصحيحي' : 'مسير الرواتب', 14);
+  title(3, monthName, 12);
+  const headerRow = sheet.getRow(5);
+  headerRow.values = header;
+  headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  headerRow.eachCell((cell) => {
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+  });
+  const amountColumns = header.length - 5; // between the title column and the two text columns
+  let index = 0;
+  for (const group of register.groups) {
+    const groupRow = sheet.addRow([`${group.label} (${group.rows.length} موظف)`]);
+    sheet.mergeCells(groupRow.number, 1, groupRow.number, width);
+    groupRow.font = { bold: true };
+    for (const row of group.rows) {
+      const values = registerTable({ ...register, groups: [{ ...group, rows: [row] }] }).rows[0]!;
+      values[0] = ++index;
+      sheet.addRow(values);
+    }
+    const subtotal = registerTable({ ...register, groups: [], totals: group.totals }).rows[0]!;
+    subtotal[1] = `مجموع ${group.label}`;
+    sheet.addRow(subtotal).font = { bold: true };
+  }
+  const total = registerTable({ ...register, groups: [] }).rows[0]!;
+  const totalRow = sheet.addRow(total);
+  totalRow.font = { bold: true, color: { argb: 'FF059669' } };
+  sheet.addRow([]);
+  sheet.addRow([
+    '',
+    'حصة صاحب العمل في التأمينات (لا تدخل في الصافي)',
+    '',
+    Number((register.employerContributionMinor / 100).toFixed(2)),
+  ]);
+  sheet.columns.forEach((column, i) => {
+    column.width = i === 1 ? 28 : i === 0 ? 6 : i === 2 ? 20 : 13;
+    if (i >= 3 && i < 3 + amountColumns) column.numFmt = '#,##0.00';
+  });
+  return Buffer.from(await book.xlsx.writeBuffer());
 }
 
 /** CSV of a run's lines (no BOM). Shared by the in-app export and the HR service key export. */

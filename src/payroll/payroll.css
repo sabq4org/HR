@@ -746,3 +746,274 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+/* Payroll register in the owner's template layout. */
+.payroll-notice {
+  padding: 12px 14px;
+  border: 1px solid #b7dfc9;
+  border-radius: 10px;
+  background: #effaf3;
+  color: #14532d;
+  font-size: 13px;
+}
+.payroll-warning ul {
+  margin: 6px 0 0;
+  padding-inline-start: 20px;
+}
+.payroll-policy label {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.policy-rate-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--payroll-muted);
+  font-size: 12px;
+}
+.payroll-error-text {
+  color: #b42318 !important;
+}
+.payroll-policy-form,
+.payroll-lines {
+  border: 1px solid var(--payroll-line);
+  border-radius: 12px;
+  background: var(--payroll-surface);
+}
+.payroll-policy-form > summary,
+.payroll-lines > summary {
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.payroll-policy-form form {
+  display: grid;
+  gap: 14px;
+  padding: 0 16px 16px;
+}
+.payroll-policy-form p {
+  margin: 0;
+  color: var(--payroll-muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.policy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+.policy-grid label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.policy-grid .wide {
+  grid-column: 1 / -1;
+}
+.policy-grid .check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.policy-grid input:not([type='checkbox']),
+.policy-rates input {
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 1px solid #cfdbe6;
+  border-radius: 8px;
+  font: inherit;
+}
+.policy-rates {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.policy-rates th,
+.policy-rates td {
+  padding: 6px;
+  border-bottom: 1px solid var(--payroll-line);
+  text-align: right;
+}
+.payroll-register {
+  display: grid;
+  gap: 16px;
+}
+.register-group h3 {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border-inline-start: 4px solid var(--payroll-blue);
+  border-radius: 6px;
+  background: var(--payroll-soft);
+  font-size: 14px;
+}
+.register-group h3 small {
+  color: var(--payroll-muted);
+  font-weight: 500;
+}
+.register-table {
+  min-width: 1180px;
+  font-size: 12px;
+}
+.register-table th {
+  white-space: nowrap;
+}
+.register-table td.num {
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  white-space: nowrap;
+  direction: ltr;
+}
+.register-table td.net {
+  background: #eef5fb;
+  font-weight: 700;
+}
+.register-table td.minus {
+  color: #b42318;
+}
+.register-table td.name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.register-table td.muted {
+  color: var(--payroll-muted);
+}
+.register-table tfoot td {
+  background: #f3f7fa;
+  font-weight: 700;
+}
+.pay-state.unpaid,
+.pay-state.failed {
+  color: #b45309;
+}
+.pay-state.paid {
+  color: #047857;
+}
+.register-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+.register-summary > div {
+  padding: 10px 12px;
+  border: 1px solid var(--payroll-line);
+  border-radius: 10px;
+  background: var(--payroll-soft);
+}
+.register-summary .strong {
+  border-color: var(--payroll-blue);
+  background: #eef5fb;
+}
+.register-summary dt {
+  color: var(--payroll-muted);
+  font-size: 11px;
+}
+.register-summary dd {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+@media print {
+  @page register {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+  .payroll-print-sheet.register-paper {
+    page: register;
+  }
+  .register-paper header {
+    align-items: center;
+    padding-bottom: 10px;
+  }
+  .register-paper header h1 {
+    font-size: 20px;
+  }
+  .register-paper .paper-state {
+    padding: 4px 12px;
+    border: 1px solid #1264a3;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .register-paper .register-group {
+    margin-top: 12px;
+    break-inside: auto;
+  }
+  .register-paper .register-wrap {
+    overflow: visible;
+    border: 0;
+  }
+  .register-paper .register-table {
+    min-width: 0;
+    font-size: 9px;
+  }
+  .register-paper .register-table th,
+  .register-paper .register-table td {
+    padding: 4px 5px;
+  }
+  .register-paper .register-table thead {
+    display: table-header-group;
+  }
+  .register-paper .register-table tr {
+    break-inside: avoid;
+  }
+  .register-paper .register-summary {
+    margin-top: 12px;
+    grid-template-columns: repeat(4, 1fr);
+    break-inside: avoid;
+  }
+  .register-paper .register-summary dd {
+    font-size: 12px;
+  }
+  .register-signatures {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    margin-top: 22px;
+    break-inside: avoid;
+  }
+  .register-signatures > div {
+    min-height: 96px;
+    padding: 10px;
+    border: 1px solid #d7e5ef;
+    border-radius: 8px;
+    text-align: center;
+  }
+  .register-signatures h4 {
+    margin: 0;
+    font-size: 13px;
+  }
+  .register-signatures p {
+    display: grid;
+    gap: 2px;
+    margin: 8px 0 0;
+  }
+  .register-signatures .pending {
+    color: #b45309;
+  }
+}
+.payroll-register,
+.register-group,
+.payroll-lines,
+.payroll-policy-form {
+  min-width: 0;
+  max-width: 100%;
+}
+.payroll-register {
+  grid-template-columns: minmax(0, 1fr);
+}
+.payroll-lines {
+  overflow: hidden;
+}
+.payroll-edit-note {
+  color: var(--payroll-muted);
+  font-size: 12px;
+}

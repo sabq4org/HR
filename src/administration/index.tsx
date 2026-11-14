@@ -1970,13 +1970,7 @@ export function PoliciesPage() {
               <td>{date(p.effectiveFrom)}</td>
               <td>{date(p.effectiveTo)}</td>
               <td>{p.source}</td>
-              <td>
-                {p.state === 'draft'
-                  ? 'مسودة'
-                  : p.state === 'retired'
-                    ? 'متوقفة'
-                    : 'معتمدة للبيانات الاصطناعية'}
-              </td>
+              <td>{p.state === 'draft' ? 'مسودة' : p.state === 'retired' ? 'متوقفة' : 'معتمدة'}</td>
               <td>
                 {(canManage || canApprove) && (
                   <div className="adm-row-actions">
