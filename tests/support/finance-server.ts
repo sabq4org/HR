@@ -6,6 +6,7 @@ import express from 'express';
 import { createApp } from '../../server/app.js';
 import { createDatabase } from '../../server/database.js';
 import type { WafeqClientLike, WafeqInvoiceResult } from '../../server/integrations/wafeq.js';
+import { acceptFinanceInvoice } from './accept-invoice.js';
 
 process.env.HR_DATA_KEY = randomBytes(32).toString('base64url');
 const db = await createDatabase(':memory:', { seed: false });
@@ -76,6 +77,14 @@ const app = createApp(db, {
   dataMode: 'private',
   financeEmployeeId: 'emp-finance-owner',
   financeClientFactory: () => provider,
+});
+app.post('/__test__/accept-invoice/:id', async (req, res) => {
+  try {
+    await acceptFinanceInvoice(db, String(req.params.id));
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'failed' });
+  }
 });
 const clientDirectory = fileURLToPath(new URL('../../dist/client', import.meta.url));
 app.use(express.static(clientDirectory, { index: false }));
