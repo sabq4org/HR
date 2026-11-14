@@ -63,3 +63,8 @@ CREATE TABLE IF NOT EXISTS leave_settlement_events (
 CREATE INDEX IF NOT EXISTS leave_settlement_events_settlement ON leave_settlement_events(settlement_id, created_at);
 CREATE TRIGGER IF NOT EXISTS leave_settlement_events_no_update BEFORE UPDATE ON leave_settlement_events BEGIN SELECT RAISE(ABORT, 'append-only settlement events'); END;
 CREATE TRIGGER IF NOT EXISTS leave_settlement_events_no_delete BEFORE DELETE ON leave_settlement_events BEGIN SELECT RAISE(ABORT, 'append-only settlement events'); END;
+
+-- Art. 109 leave-wage advance: a payroll line may come from an approved annual leave (the
+-- advance in the run before it starts, and its recovery in the months it falls in).
+ALTER TABLE payroll_lines ADD COLUMN source_leave_id TEXT REFERENCES leave_requests(id);
+CREATE INDEX IF NOT EXISTS payroll_lines_source_leave ON payroll_lines(source_leave_id) WHERE source_leave_id IS NOT NULL;

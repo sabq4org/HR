@@ -15,6 +15,7 @@ export const REGISTER_COLUMNS = [
   ['transportMinor', 'بدل النقل'],
   ['otherAllowancesMinor', 'بدلات أخرى'],
   ['bonusMinor', 'المكافأة'],
+  ['leaveAdvanceMinor', 'أجر إجازة مقدم'],
   ['grossMinor', 'إجمالي الراتب'],
   ['insuranceMinor', 'تأمين الموظف'],
   ['deductionsMinor', 'الخصومات'],
@@ -32,6 +33,10 @@ export const PAYROLL_COMPONENTS = {
   other: 'بدلات ثابتة أخرى',
   insurance: 'تأمين الموظف',
   lumpSum: 'مبلغ مقطوع',
+  // Art. 109: leave wage paid in the run before the leave starts, and its recovery from the
+  // months the leave falls in (the regular salary of those months pays the same days again).
+  leaveAdvance: 'أجر إجازة مقدم',
+  leaveAdvanceRecovery: 'استرداد أجر إجازة مقدم',
 } as const;
 
 export const PAYMENT_METHOD_LABEL: Record<PayrollPaymentMethod, string> = {
@@ -88,6 +93,7 @@ function column(line: Pick<PayrollLine, 'component' | 'kind'>): RegisterAmountKe
   if (name === PAYROLL_COMPONENTS.housing) return 'housingMinor';
   if (name === PAYROLL_COMPONENTS.transport) return 'transportMinor';
   if (name === PAYROLL_COMPONENTS.other || name === 'بدلات أخرى') return 'otherAllowancesMinor';
+  if (name === PAYROLL_COMPONENTS.leaveAdvance) return 'leaveAdvanceMinor';
   return 'bonusMinor';
 }
 
@@ -145,7 +151,8 @@ export function buildPayrollRegister(
       row.housingMinor +
       row.transportMinor +
       row.otherAllowancesMinor +
-      row.bonusMinor;
+      row.bonusMinor +
+      row.leaveAdvanceMinor;
     row.totalDeductionsMinor = row.insuranceMinor + row.deductionsMinor;
     row.netMinor = row.grossMinor - row.totalDeductionsMinor;
     let group = groups.get(row.paymentMethod);

@@ -209,9 +209,22 @@ export async function entitlementStatement(
 export function rulesForEmploymentType(rules: LeaveEntitlementRule[], type: string) {
   return type === 'contractor' ? rules.filter((r) => !r.values.excludeContractors) : rules;
 }
-const ruleCovering = (rules: LeaveEntitlementRule[], day: string) =>
+export const ruleCovering = (rules: LeaveEntitlementRule[], day: string) =>
   rules.filter((r) => r.effectiveFrom <= day && (!r.effectiveTo || r.effectiveTo >= day)).pop() ??
   null;
+
+/** The rule's monthly wage from the profile, or null when the basic salary or a component is invalid. */
+export function ruleWage(profile: Record<string, unknown>, rule: LeaveEntitlementRule) {
+  let monthlyWageMinor = 0;
+  for (const key of rule.values.wageComponents) {
+    const raw = profile[key];
+    const blank = raw === undefined || raw === null || String(raw).trim() === '';
+    const minor = blank && key !== 'basicSalary' ? 0 : decimalRiyalToMinor(raw);
+    if (minor === null || (key === 'basicSalary' && !minor)) return null;
+    monthlyWageMinor += minor;
+  }
+  return { monthlyWageMinor };
+}
 
 /** Posts accrual through `through` for every on-duty eligible employee. Idempotent per date. */
 export async function postAccruals(tx: AsyncDb, actor: Actor, through: string) {

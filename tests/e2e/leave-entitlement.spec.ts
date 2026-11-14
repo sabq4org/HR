@@ -93,4 +93,38 @@ test('leave entitlement: rule approval, accrual, settlement review and approval'
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: testInfo.outputPath('entitlement-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // Art. 109: an approved leave next month is paid in advance in this month's run.
+  const webkit = testInfo.project.name === 'webkit';
+  const [period, start, end] = webkit
+    ? ['2028-03', '2028-04-09', '2028-04-11']
+    : ['2028-01', '2028-02-06', '2028-02-08'];
+  await persona(page, 'emp-sara');
+  const { leave } = await call(page, '/leaves', { startDate: start, endDate: end, note: '' });
+  await persona(page, 'emp-omar');
+  const managed = await call(page, `/leaves/${leave.id}/decision`, {
+    decision: 'approve',
+    version: leave.version,
+  });
+  await persona(page, 'emp-noura');
+  await call(page, `/leaves/${leave.id}/decision`, {
+    decision: 'approve',
+    version: managed.leave.version,
+  });
+  const { run } = await call(page, '/admin/payroll', {
+    period,
+    reason: 'مسير اختبار الأجر المقدم',
+  });
+  const advance = run.lines.find(
+    (l: { employeeId: string; component: string }) =>
+      l.employeeId === 'emp-sara' && l.component === 'أجر إجازة مقدم',
+  );
+  expect(advance?.sourceLeaveId).toBe(leave.id);
+  await page.goto('/payroll');
+  await page.getByRole('button', { name: new RegExp(period) }).click();
+  await expect(page.getByRole('columnheader', { name: 'أجر إجازة مقدم' }).first()).toBeVisible();
+  await page.getByText('الأسطر التفصيلية ومصادرها').click();
+  await expect(page.getByText('إجازة سنوية معتمدة (م109)').first()).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('leave-advance-payroll.png'), fullPage: true });
 });
