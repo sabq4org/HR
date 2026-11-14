@@ -17,6 +17,13 @@ import { annualLeaveDays } from '../shared/leave.js';
 import { decryptSensitive } from './administration/security.js';
 import { canAccessFinance, registerFinance } from './finance/routes.js';
 import { bearerToken, inAccountantScope, matchesServiceKey } from './finance/service-keys.js';
+import {
+  HR_SERVICE_KEY_PREFIX,
+  inHrServiceScope,
+  matchHrServiceKey,
+  type HrReadScope,
+} from './service-api/keys.js';
+import { registerHrServiceApi, type HrServiceContext } from './service-api/routes.js';
 
 type Session = Actor & { expiresAt: number };
 type EmployeeRow = {
@@ -302,6 +309,10 @@ export function createApp(
     financeEmployeeId?: string;
     financeClientFactory?: Parameters<typeof registerFinance>[1]['createClient'];
     financeApiKeyHashes?: readonly string[];
+    /** «محاسب سبق» HR service key digests (HR_SERVICE_API_KEY_HASHES). Private modes only. */
+    hrServiceKeyHashes?: readonly string[];
+    /** Read scopes granted to the HR service key (HR_SERVICE_API_KEY_SCOPES). */
+    hrServiceScopes?: readonly HrReadScope[];
   } = {},
 ) {
   const db = database;
@@ -367,6 +378,8 @@ export function createApp(
   });
   // Accountant service keys (Authorization: Bearer sabqfin_...). Finance scope only.
   const serviceRequests = new WeakSet<Request>();
+  // HR service key requests (Authorization: Bearer sabqhr_...). Read-only HR service API only.
+  const hrServiceRequests = new WeakMap<Request, HrServiceContext>();
   const failedKeyAttempts: number[] = [];
   app.use((req, res, next) => {
     const token = bearerToken(req.get('authorization'));
@@ -379,6 +392,27 @@ export function createApp(
         res,
         fault(429, 'API_KEY_LOCKED', 'محاولات مفاتيح خاطئة كثيرة. انتظر 15 دقيقة.'),
       );
+    if (token && token.startsWith(HR_SERVICE_KEY_PREFIX)) {
+      const hrHashes = options.hrServiceKeyHashes ?? [];
+      const hrScopes = options.hrServiceScopes ?? [];
+      if (!privateData || hrHashes.length === 0 || hrScopes.length === 0)
+        return jsonError(
+          res,
+          fault(401, 'API_KEY_DISABLED', 'مفاتيح الخدمة غير مفعّلة في هذه النسخة.'),
+        );
+      const keyId = matchHrServiceKey(token, hrHashes);
+      if (!keyId) {
+        failedKeyAttempts.push(now);
+        return jsonError(res, fault(401, 'INVALID_API_KEY', 'مفتاح الخدمة غير صالح.'));
+      }
+      if (!inHrServiceScope(req.method, req.path))
+        return jsonError(
+          res,
+          fault(403, 'API_KEY_SCOPE', 'مفتاح محاسب سبق مقصور على قراءة واجهة الموارد البشرية.'),
+        );
+      hrServiceRequests.set(req, { scopes: hrScopes, keyId: keyId.slice(0, 12) });
+      return next();
+    }
     const hashes = options.financeApiKeyHashes ?? [];
     if (!privateData || !options.financeEmployeeId || hashes.length === 0)
       return jsonError(
@@ -395,6 +429,7 @@ export function createApp(
     next();
   });
   app.use((req, res, next) => {
+    // HR service keys are GET/HEAD only (enforced above), so they never reach this check.
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !serviceRequests.has(req)) {
       const origin = req.get('origin');
       if (!origin)
@@ -506,7 +541,13 @@ export function createApp(
     res.status(204).end();
   });
   app.use('/api', (req, res, next) => {
-    if (req.path === '/health' || serviceRequests.has(req) || hasAccess(req)) return next();
+    if (
+      req.path === '/health' ||
+      serviceRequests.has(req) ||
+      hrServiceRequests.has(req) ||
+      hasAccess(req)
+    )
+      return next();
     jsonError(res, fault(401, 'ACCESS_REQUIRED', 'أدخل كلمة مرور الدخول أولًا.'));
   });
   const demoIds = ['emp-noura', 'emp-omar', 'emp-sara', 'emp-reem', 'emp-abdullah', 'emp-hind'];
@@ -529,6 +570,8 @@ export function createApp(
     return value?.slice(cookieName.length + 1);
   };
   const actorFor = async (req: Request): Promise<Actor | undefined> => {
+    // The HR service key is not a session actor: no browser route accepts it.
+    if (hrServiceRequests.has(req)) return undefined;
     if (serviceRequests.has(req)) {
       // The key acts as the granted finance account with the least role; cookies are ignored.
       const employee = options.financeEmployeeId
@@ -1195,6 +1238,7 @@ export function createApp(
       }
     });
   }
+  registerHrServiceApi(app, { db, contextFor: (req) => hrServiceRequests.get(req) });
   registerAdministration(app, { db, requireActor, privateMode: privateData });
   registerFinance(app, {
     db,

@@ -12,6 +12,7 @@ import type {
 import { documentCategories, employeeFields, formByKind } from '../../shared/catalog.js';
 import type { Role } from '../../shared/contracts.js';
 import { registerPayroll } from '../payroll/index.js';
+import { serviceActorName } from '../service-api/keys.js';
 import { registerEmployeeImports } from '../imports/routes.js';
 import { createIssuedDocument } from '../letters/document.js';
 import {
@@ -1940,7 +1941,7 @@ function registerReportRoutes(app: Express, ctx: { db: AsyncDb; requireActor: Re
         actorName:
           actor.role === 'auditor'
             ? 'مستخدم'
-            : ((await readEmployee(db, r.actor_id))?.name ?? 'مستخدم'),
+            : ((await readEmployee(db, r.actor_id))?.name ?? serviceActorName(r.actor_id)),
         actorRole: r.actor_role,
         action: r.action,
         resourceId: actor.role === 'auditor' ? '' : r.resource_id,

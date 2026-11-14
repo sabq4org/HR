@@ -79,6 +79,7 @@ const roleNames: Record<string, string> = {
   finance: 'المالية',
   approver: 'المعتمد المستقل',
   auditor: 'المراجع',
+  service: 'مفتاح خدمة',
 };
 const actionNames: Record<string, string> = {
   created: 'إنشاء',
@@ -97,6 +98,10 @@ const actionNames: Record<string, string> = {
   archive: 'أرشفة',
   updated: 'تعديل',
   attendance_created: 'تسجيل حضور',
+  service_read_sensitive_profile: 'قراءة بيانات شخصية بمفتاح خدمة',
+  service_read_compensation: 'قراءة الراتب والحساب بمفتاح خدمة',
+  service_read_sensitive_leave: 'قراءة استحقاق الإجازة بمفتاح خدمة',
+  service_read_payroll_amounts: 'قراءة مبالغ المسير بمفتاح خدمة',
 };
 const attendanceStates: Record<string, string> = {
   submitted: 'بانتظار المراجعة',
