@@ -12,6 +12,7 @@ import {
 import { registerAdministration } from './administration/routes.js';
 import { decryptSensitive } from './administration/security.js';
 import { canAccessFinance, registerFinance } from './finance/routes.js';
+import { bearerToken, inAccountantScope, matchesServiceKey } from './finance/service-keys.js';
 
 type Session = Actor & { expiresAt: number };
 type EmployeeRow = {
@@ -288,6 +289,11 @@ export function createApp(
     financeEmployeeId?: string;
     /** Dependency injection for isolated tests; the runtime always uses the fixed Wafeq API. */
     financeClientFactory?: Parameters<typeof registerFinance>[1]['createClient'];
+    /**
+     * SHA-256 digests of accountant service keys (never the keys). Read on every request, so a
+     * caller may rotate the list in place. Keys act only as financeEmployeeId, finance scope only.
+     */
+    financeApiKeyHashes?: readonly string[];
   } = {},
 ) {
   const db = database;
@@ -346,8 +352,37 @@ export function createApp(
       );
     next();
   });
+  // Accountant service keys (Authorization: Bearer sabqfin_...). Finance scope only.
+  const serviceRequests = new WeakSet<Request>();
+  const failedKeyAttempts: number[] = [];
   app.use((req, res, next) => {
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    const token = bearerToken(req.get('authorization'));
+    if (token === undefined) return next();
+    const now = Date.now();
+    while (failedKeyAttempts.length && failedKeyAttempts[0] < now - 15 * 60 * 1000)
+      failedKeyAttempts.shift();
+    if (failedKeyAttempts.length >= 20)
+      return jsonError(
+        res,
+        fault(429, 'API_KEY_LOCKED', 'محاولات مفاتيح خاطئة كثيرة. انتظر 15 دقيقة.'),
+      );
+    const hashes = options.financeApiKeyHashes ?? [];
+    if (!privateData || !options.financeEmployeeId || hashes.length === 0)
+      return jsonError(
+        res,
+        fault(401, 'API_KEY_DISABLED', 'مفاتيح الخدمة غير مفعّلة في هذه النسخة.'),
+      );
+    if (!token || !matchesServiceKey(token, hashes)) {
+      failedKeyAttempts.push(now);
+      return jsonError(res, fault(401, 'INVALID_API_KEY', 'مفتاح الخدمة غير صالح.'));
+    }
+    if (!inAccountantScope(req.method, req.path))
+      return jsonError(res, fault(403, 'API_KEY_SCOPE', 'مفتاح المحاسب مقصور على النظام المالي.'));
+    serviceRequests.add(req);
+    next();
+  });
+  app.use((req, res, next) => {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !serviceRequests.has(req)) {
       const origin = req.get('origin');
       if (!origin)
         return jsonError(res, fault(403, 'ORIGIN_REQUIRED', 'يلزم طلب من المصدر المحلي نفسه.'));
@@ -378,6 +413,15 @@ export function createApp(
     express.json({ limit: '3mb' }),
   );
   app.use('/api/admin/imports/employees/commit', express.json({ limit: '512kb' }));
+  app.use((req, res, next) => {
+    if (!serviceRequests.has(req) || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method))
+      return next();
+    const hasBody =
+      Number(req.get('content-length') ?? 0) > 0 || Boolean(req.get('transfer-encoding'));
+    if (hasBody && !req.is('application/json'))
+      return jsonError(res, fault(415, 'JSON_REQUIRED', 'أرسل البيانات بصيغة JSON.'));
+    next();
+  });
   app.use(express.json({ limit: '64kb' }));
 
   // Access gate (private hosted mode): one password, set as a deployment secret, must be
@@ -446,7 +490,7 @@ export function createApp(
     res.status(204).end();
   });
   app.use('/api', (req, res, next) => {
-    if (req.path === '/health' || hasAccess(req)) return next();
+    if (req.path === '/health' || serviceRequests.has(req) || hasAccess(req)) return next();
     jsonError(res, fault(401, 'ACCESS_REQUIRED', 'أدخل كلمة مرور الدخول أولًا.'));
   });
   const demoIds = ['emp-noura', 'emp-omar', 'emp-sara', 'emp-reem', 'emp-abdullah', 'emp-hind'];
@@ -467,6 +511,15 @@ export function createApp(
     return value?.slice(cookieName.length + 1);
   };
   const actorFor = async (req: Request): Promise<Actor | undefined> => {
+    if (serviceRequests.has(req)) {
+      // The key acts as the granted finance account with the least role; cookies are ignored.
+      const employee = options.financeEmployeeId
+        ? await getEmployee(db, options.financeEmployeeId)
+        : undefined;
+      if (!employee || employee.status === 'suspended' || employee.status === 'terminated')
+        return undefined;
+      return { id: employee.id, role: 'employee' };
+    }
     const token = tokenFor(req);
     if (!token) return undefined;
     const session = sessions.get(token);
