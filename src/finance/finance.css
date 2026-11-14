@@ -1267,3 +1267,7 @@
     break-inside: avoid-page;
   }
 }
+/* Numbers stay left-to-right but sit under their label, on the label's side of the card. */
+.fin-detail-card:not(.fin-detail-rows) dd[dir='ltr'] {
+  text-align: right;
+}
