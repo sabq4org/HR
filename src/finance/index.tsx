@@ -55,7 +55,7 @@ import {
   invoiceStatusText,
   invoiceStatusKind,
 } from './paper';
-import { completeSeller } from '../../shared/finance';
+import { completeSeller, financeCountries } from '../../shared/finance';
 import './finance.css';
 
 export { Status } from './paper';
@@ -213,6 +213,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
   const [cardCustomer, setCardCustomer] = useState<FinanceCustomer | null>(null);
   const [statementCustomer, setStatementCustomer] = useState<FinanceCustomer | null>(null);
   const [customerForm, setCustomerForm] = useState<FinanceCustomerInput>(blankCustomer());
+  const foreign = customerForm.address.country !== 'SA';
   const [quoteForm, setQuoteForm] = useState<FinanceQuoteInput>(() => ({
     customerId: '',
     documentType: 'standard',
@@ -302,6 +303,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
         ? {
             customerId: quote.customerId,
             documentType: quote.documentType ?? 'standard',
+            ...(quote.language ? { language: quote.language } : {}),
             title: quote.title,
             issueDate: quote.issueDate,
             validUntil: quote.validUntil,
@@ -1311,6 +1313,27 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                         }
                       />
                     </Field>
+                    <Field label="الاسم بالإنجليزية (للمستندات الإنجليزية)">
+                      <input
+                        dir="ltr"
+                        value={settingsForm.seller.nameEnglish ?? ''}
+                        onChange={(e) =>
+                          update('seller', { ...settingsForm.seller, nameEnglish: e.target.value })
+                        }
+                      />
+                    </Field>
+                    <Field label="العنوان بالإنجليزية (للمستندات الإنجليزية)">
+                      <input
+                        dir="ltr"
+                        value={settingsForm.seller.addressEnglish ?? ''}
+                        onChange={(e) =>
+                          update('seller', {
+                            ...settingsForm.seller,
+                            addressEnglish: e.target.value,
+                          })
+                        }
+                      />
+                    </Field>
                   </div>
                 </fieldset>
                 <fieldset>
@@ -1385,7 +1408,38 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
         >
           <form className="fin-dialog-form" onSubmit={onCustomerSave}>
             <div className="fin-grid">
-              <Field label="اسم العميل بالعربية">
+              <Field label="الدولة">
+                <select
+                  value={customerForm.address.country}
+                  onChange={(e) => {
+                    const country = e.target.value;
+                    setCustomerForm({
+                      ...customerForm,
+                      // Outside Saudi Arabia the documents default to English.
+                      language: country === 'SA' ? 'ar' : 'en',
+                      address: { ...customerForm.address, country },
+                    });
+                  }}
+                >
+                  {financeCountries.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.ar}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="لغة المستندات">
+                <select
+                  value={customerForm.language ?? 'ar'}
+                  onChange={(e) =>
+                    setCustomerForm({ ...customerForm, language: e.target.value as 'ar' | 'en' })
+                  }
+                >
+                  <option value="ar">العربية</option>
+                  <option value="en">English</option>
+                </select>
+              </Field>
+              <Field label={foreign ? 'اسم العميل' : 'اسم العميل بالعربية'}>
                 <input
                   required
                   autoFocus
@@ -1393,14 +1447,16 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                   onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
                 />
               </Field>
-              <Field label="الاسم بالإنجليزية (اختياري)">
-                <input
-                  value={customerForm.nameEnglish || ''}
-                  onChange={(e) =>
-                    setCustomerForm({ ...customerForm, nameEnglish: e.target.value })
-                  }
-                />
-              </Field>
+              {!foreign && (
+                <Field label="الاسم بالإنجليزية (اختياري)">
+                  <input
+                    value={customerForm.nameEnglish || ''}
+                    onChange={(e) =>
+                      setCustomerForm({ ...customerForm, nameEnglish: e.target.value })
+                    }
+                  />
+                </Field>
+              )}
               <Field label="نوع العميل">
                 <select
                   value={customerForm.type || 'business'}
@@ -1415,13 +1471,14 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                   <option value="individual">فرد (B2C)</option>
                 </select>
               </Field>
-              <Field label="الرقم الضريبي">
+              <Field label={foreign ? 'الرقم الضريبي في بلده (اختياري)' : 'الرقم الضريبي'}>
                 <input
+                  dir="ltr"
                   value={customerForm.vatNumber}
                   onChange={(e) => setCustomerForm({ ...customerForm, vatNumber: e.target.value })}
                 />
               </Field>
-              <Field label="السجل التجاري">
+              <Field label={foreign ? 'رقم التسجيل (اختياري)' : 'السجل التجاري'}>
                 <input
                   value={customerForm.commercialRegistration || ''}
                   onChange={(e) =>
@@ -1450,9 +1507,6 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                   onChange={(e) => setCustomerForm({ ...customerForm, mobile: e.target.value })}
                 />
               </Field>
-              <Field label="الدولة">
-                <input value="المملكة العربية السعودية" readOnly />
-              </Field>
               <Field label="المدينة">
                 <input
                   value={customerForm.address.city}
@@ -1464,18 +1518,20 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                   }
                 />
               </Field>
-              <Field label="الحي">
-                <input
-                  value={customerForm.address.district || ''}
-                  onChange={(e) =>
-                    setCustomerForm({
-                      ...customerForm,
-                      address: { ...customerForm.address, district: e.target.value },
-                    })
-                  }
-                />
-              </Field>
-              <Field label="الشارع">
+              {!foreign && (
+                <Field label="الحي">
+                  <input
+                    value={customerForm.address.district || ''}
+                    onChange={(e) =>
+                      setCustomerForm({
+                        ...customerForm,
+                        address: { ...customerForm.address, district: e.target.value },
+                      })
+                    }
+                  />
+                </Field>
+              )}
+              <Field label={foreign ? 'العنوان' : 'الشارع'}>
                 <input
                   value={customerForm.address.line}
                   onChange={(e) =>
@@ -1486,18 +1542,20 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                   }
                 />
               </Field>
-              <Field label="رقم المبنى">
-                <input
-                  value={customerForm.address.buildingNumber || ''}
-                  onChange={(e) =>
-                    setCustomerForm({
-                      ...customerForm,
-                      address: { ...customerForm.address, buildingNumber: e.target.value },
-                    })
-                  }
-                />
-              </Field>
-              <Field label="الرمز البريدي">
+              {!foreign && (
+                <Field label="رقم المبنى">
+                  <input
+                    value={customerForm.address.buildingNumber || ''}
+                    onChange={(e) =>
+                      setCustomerForm({
+                        ...customerForm,
+                        address: { ...customerForm.address, buildingNumber: e.target.value },
+                      })
+                    }
+                  />
+                </Field>
+              )}
+              <Field label={foreign ? 'الرمز البريدي (اختياري)' : 'الرمز البريدي'}>
                 <input
                   value={customerForm.address.postalCode}
                   onChange={(e) =>
@@ -1613,7 +1671,10 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                 <select
                   required
                   value={quoteForm.customerId}
-                  onChange={(e) => setQuoteForm({ ...quoteForm, customerId: e.target.value })}
+                  onChange={(e) =>
+                    // A new customer brings its own document language.
+                    setQuoteForm({ ...quoteForm, customerId: e.target.value, language: undefined })
+                  }
                 >
                   <option value="">اختر عميلًا</option>
                   {(overview?.customers ?? []).map((c) => (
@@ -1621,6 +1682,21 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                       {c.name}
                     </option>
                   ))}
+                </select>
+              </Field>
+              <Field label="لغة المستند">
+                <select
+                  value={
+                    quoteForm.language ??
+                    overview?.customers.find((c) => c.id === quoteForm.customerId)?.language ??
+                    'ar'
+                  }
+                  onChange={(e) =>
+                    setQuoteForm({ ...quoteForm, language: e.target.value as 'ar' | 'en' })
+                  }
+                >
+                  <option value="ar">العربية</option>
+                  <option value="en">English</option>
                 </select>
               </Field>
               <Field label="عنوان العرض">

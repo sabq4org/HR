@@ -1174,9 +1174,10 @@ test('customers saved in Wafeq are listed for review and imported once, linked a
     contact('w-1', 'Synthetic Media Co', '300000000000003'),
     contact('w-2', 'Sample LLC'),
     contact('w-3', 'Synthetic Events Co'),
-    // Same VAT number as w-1 under another id, and a contact outside Saudi Arabia.
+    // Same VAT number as w-1 under another id; a contact abroad; a country that is not a code.
     contact('w-4', 'Synthetic Media Branch', '300000000000003'),
-    { ...contact('w-5', 'Synthetic Abroad Co'), country: 'AE' },
+    { ...contact('w-5', 'Synthetic Abroad Co'), country: 'ae' },
+    { ...contact('w-6', 'Synthetic Unknown Co'), country: 'Atlantis' },
   ];
   try {
     // A local customer with the same name is already covered.
@@ -1191,26 +1192,36 @@ test('customers saved in Wafeq are listed for review and imported once, linked a
         ['w-2', 'exists'],
         ['w-3', 'new'],
         ['w-4', 'new'],
-        ['w-5', 'unsupported'],
+        ['w-5', 'new'],
+        ['w-6', 'unsupported'],
       ],
     );
     assert.equal((await api('/api/finance/wafeq/customers/import', post({ ids: [] }))).status, 400);
     const first = await api(
       '/api/finance/wafeq/customers/import',
-      post({ ids: ['w-1', 'w-2', 'w-4', 'w-5'] }, 'import-1'),
+      post({ ids: ['w-1', 'w-2', 'w-4', 'w-6'] }, 'import-1'),
     );
     assert.equal(first.status, 201);
     assert.deepEqual(await first.json(), { imported: 1, skipped: 3 });
     // A second request, even with a new key, does not duplicate.
     const again = await api(
       '/api/finance/wafeq/customers/import',
-      post({ ids: ['w-1', 'w-3'] }, 'import-2'),
+      post({ ids: ['w-1', 'w-3', 'w-5'] }, 'import-2'),
     );
-    assert.deepEqual(await again.json(), { imported: 1, skipped: 1 });
+    assert.deepEqual(await again.json(), { imported: 2, skipped: 1 });
     const overview = await json<{
-      customers: { name: string; wafeqId: string | null; syncStatus: string; vatNumber: string }[];
+      customers: {
+        name: string;
+        wafeqId: string | null;
+        syncStatus: string;
+        vatNumber: string;
+        language?: string;
+        address: { country: string };
+      }[];
     }>(await api('/api/finance'));
-    assert.equal(overview.customers.length, 3);
+    assert.equal(overview.customers.length, 4);
+    const abroad = overview.customers.find((c) => c.name === 'Synthetic Abroad Co');
+    assert.deepEqual([abroad?.address.country, abroad?.language], ['AE', 'en']);
     const media = overview.customers.find((c) => c.name === 'Synthetic Media Co');
     assert.deepEqual(
       [media?.wafeqId, media?.syncStatus, media?.vatNumber],
@@ -1403,4 +1414,87 @@ test('only a draft invoice that never left the system is cancelled; it then cann
     (await json<{ error: { code: string } }>(refused)).error.code,
     'INVOICE_NOT_CANCELLABLE',
   );
+});
+
+test('a customer abroad keeps its country and tax ID, and its documents default to English', async () => {
+  const foreign = {
+    name: 'Synthetic Trading LLC',
+    email: 'abroad@example.test',
+    vatNumber: '100000000000000AE',
+    language: 'en',
+    address: { line: 'Synthetic Street 1', city: 'Dubai', postalCode: '', country: 'AE' },
+  };
+  const created = await api('/api/finance/customers', post(foreign, 'abroad-customer'));
+  assert.equal(created.status, 201);
+  const customer = (
+    await json<{ customer: { id: string; language: string; address: { country: string } } }>(
+      created,
+    )
+  ).customer;
+  assert.equal(customer.address.country, 'AE');
+  assert.equal(customer.language, 'en');
+  // A Saudi address still needs a postal code and a well-formed VAT number.
+  const saudi = await api(
+    '/api/finance/customers',
+    post({ ...customerBody, vatNumber: '100000000000000AE' }, 'saudi-bad-vat'),
+  );
+  assert.equal(saudi.status, 400);
+  const badCountry = await api(
+    '/api/finance/customers',
+    post({ ...foreign, address: { ...foreign.address, country: 'Dubai' } }, 'bad-country'),
+  );
+  assert.equal(badCountry.status, 400);
+  const badLanguage = await api(
+    '/api/finance/customers',
+    post({ ...foreign, language: 'fr' }, 'bad-language'),
+  );
+  assert.equal(badLanguage.status, 400);
+  // The seller stays in Saudi Arabia.
+  const seller = await api('/api/finance/settings', {
+    ...post(
+      {
+        version: 1,
+        seller: {
+          name: 'Sabq',
+          vatNumber: '310000000000003',
+          commercialRegistration: '',
+          address: { line: 'Road', city: 'Dubai', postalCode: '1', country: 'AE' },
+        },
+        revenueAccountId: '',
+        standardTaxRateId: '',
+        zeroTaxRateId: '',
+      },
+      'seller-abroad',
+    ),
+    method: 'PATCH',
+  });
+  assert.equal(seller.status, 400);
+
+  const quote = (
+    await json<{ quote: { id: string; version: number; language: string } }>(
+      await api('/api/finance/quotes', post(quoteBody(customer.id), 'abroad-quote')),
+    )
+  ).quote;
+  assert.equal(quote.language, 'en');
+  const arabic = (
+    await json<{ quote: { language: string } }>(
+      await api(
+        '/api/finance/quotes',
+        post({ ...quoteBody(customer.id), language: 'ar' }, 'abroad-quote-ar'),
+      ),
+    )
+  ).quote;
+  assert.equal(arabic.language, 'ar');
+  const invoice = (
+    await json<{ invoice: { language: string } }>(
+      await api(
+        `/api/finance/quotes/${quote.id}/convert`,
+        post(
+          { version: quote.version, issueDate: '2026-11-14', dueDate: '2026-12-14' },
+          'abroad-convert',
+        ),
+      ),
+    )
+  ).invoice;
+  assert.equal(invoice.language, 'en');
 });

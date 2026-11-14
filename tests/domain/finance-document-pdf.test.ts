@@ -437,6 +437,30 @@ test('without Chromium quotes and invoices fall back to pdfkit and statements an
     assert.equal(quote.bytes!.subarray(0, 5).toString(), '%PDF-');
     const invoice = await app.call('GET', `/api/finance/invoices/${app.invoice.id}/document.pdf`);
     assert.equal(invoice.renderer, 'pdfkit');
+    // The pdfkit layout is Arabic only: an English document is refused, not printed in Arabic.
+    const english = (
+      await app.call('POST', '/api/finance/quotes', {
+        customerId: app.customer.id,
+        documentType: 'standard',
+        language: 'en',
+        title: 'Test campaign',
+        issueDate: '2026-07-01',
+        validUntil: '2026-07-31',
+        lines: [
+          {
+            description: 'Banner',
+            quantity: '1',
+            unitPrice: '100.00',
+            taxRateBps: 1500,
+            taxReason: '',
+          },
+        ],
+      })
+    ).body.quote;
+    const refused = await app.call('GET', `/api/finance/quotes/${english.id}/document.pdf`);
+    assert.equal(refused.status, 503);
+    assert.equal(refused.body.error.code, 'PDF_RENDERER_UNAVAILABLE');
+    assert.equal(await app.events('quote_pdf_exported'), 1);
     const statement = await app.call(
       'GET',
       `/api/finance/customers/${app.customer.id}/statement.pdf`,

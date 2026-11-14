@@ -1344,6 +1344,19 @@
   body:has(.fin-statement-paper) .fin-alert {
     display: none !important;
   }
+  /* Hidden page content still takes room: drop it, so the lists behind the dialog cannot push
+     a blank page after the statement however many customers or invoices they hold. */
+  body:has(.fin-statement-paper)
+    *:not(:has(.fin-statement-paper)):not(.dialog:has(.fin-statement-paper) *) {
+    display: none !important;
+  }
+  body:has(.fin-statement-paper) *:has(.fin-statement-paper):not(.dialog) {
+    min-height: 0 !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+  }
   .fin-statement-stats > div,
   .fin-statement-kind {
     -webkit-print-color-adjust: exact;
@@ -1580,4 +1593,41 @@
 }
 .button.danger:hover:not(:disabled) {
   background: #9c3024;
+}
+
+/* English papers read left to right: issuer on the left, document heading on the right. */
+.fin-document-paper[dir='ltr'] .fin-doc-head {
+  direction: ltr;
+}
+.fin-document-paper[dir='ltr'] .fin-doc-heading {
+  justify-items: end;
+  text-align: right;
+}
+.fin-document-paper[dir='ltr'] .fin-doc-heading h1,
+.fin-document-paper[dir='ltr'] .fin-document-title {
+  font-family: inherit;
+  font-weight: 700;
+}
+.fin-document-paper[dir='ltr'] .fin-detail-card,
+.fin-document-paper[dir='ltr'] .fin-bank-card {
+  direction: ltr;
+}
+.fin-document-paper[dir='ltr'] .fin-detail-card.fin-detail-rows dd {
+  text-align: right;
+}
+.fin-document-paper[dir='ltr'] .fin-paper-description {
+  text-align: left !important;
+}
+.fin-document-paper[dir='ltr'] .fin-bank-card dd.fin-bank-value {
+  text-align: left;
+}
+/* Totals sit on the right of an English paper, the QR (when shown) on the left. */
+.fin-document-paper[dir='ltr'] .fin-paper-summary {
+  direction: rtl;
+}
+.fin-document-paper[dir='ltr'] .fin-paper-summary-rows {
+  direction: ltr;
+}
+.fin-document-paper[dir='ltr'] .fin-detail-card:not(.fin-detail-rows) dd[dir='ltr'] {
+  text-align: left;
 }
