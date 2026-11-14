@@ -43,6 +43,8 @@ export type { WafeqClientLike } from '../integrations/wafeq.js';
 import { autoPostInvoice, customerStatement } from './ledger.js';
 import { registerLedger } from './ledger-routes.js';
 import { invoicePdf, quotePdf } from './pdf.js';
+import { htmlToPdf } from './chromium-pdf.js';
+import { invoiceHtml, quoteHtml, statementHtml } from './document-html.js';
 
 export type FinanceAccessOptions = { privateMode: boolean; allowedActorId?: string };
 export function canAccessFinance(actor: Actor, access: FinanceAccessOptions): boolean {
@@ -1655,10 +1657,11 @@ export function registerFinance(
     // The provider has no documented QR image contract yet; do not return JSON to an <img> caller.
     throw fault(409, 'ARTIFACT_UNAVAILABLE', 'صيغة صورة QR الرسمية لم تثبت بعد.');
   });
-  registerRoute(app, 'get', '/api/finance/customers/:id/statement', async (req, res) => {
-    const actor = await auth(req);
-    requireFinance(actor, access);
-    const customer = await readCustomer(db, actor.id, routeId(req.params.id));
+  const loadStatement = async (
+    req: Request,
+    ownerId: string,
+  ): Promise<{ statement: CustomerStatement; customer: FinanceCustomer }> => {
+    const customer = await readCustomer(db, ownerId, routeId(req.params.id));
     const bound = (name: string) =>
       typeof req.query[name] === 'string' && req.query[name] ? dateValue(req.query[name]) : null;
     const from = bound('from'),
@@ -1667,33 +1670,62 @@ export function registerFinance(
       throw fault(400, 'INVALID_DATE_RANGE', 'بداية الفترة يجب ألا تتجاوز نهايتها.');
     const statement: CustomerStatement = {
       customer: customerSnapshot(customer),
-      seller: (await getSettings(db, actor.id, privateMode)).seller,
-      ...(await customerStatement(db, actor.id, customer.id, from, to)),
+      seller: (await getSettings(db, ownerId, privateMode)).seller,
+      ...(await customerStatement(db, ownerId, customer.id, from, to)),
     };
-    res.json({ statement });
+    return { statement, customer };
+  };
+  registerRoute(app, 'get', '/api/finance/customers/:id/statement', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    res.json({ statement: (await loadStatement(req, actor.id)).statement });
   });
-  // Server-rendered PDFs. The invoice copy is internal and labelled as not a tax invoice; the
-  // official provider artifact stays on GET /api/finance/invoices/:id/pdf.
-  const sendPdf = (res: Response, name: string, bytes: Buffer) =>
+  // Server-rendered PDFs, printed by headless Chromium from the same paper and stylesheet as the
+  // in-app preview (src/finance/paper.tsx). Without Chromium the earlier pdfkit layout is used and
+  // the response says so in x-pdf-renderer. The official provider artifact stays on
+  // GET /api/finance/invoices/:id/pdf.
+  const sendPdf = (res: Response, name: string, pdf: { bytes: Buffer; renderer: string }) =>
     res
       .status(200)
       .type('application/pdf')
       .set('content-disposition', `attachment; filename="${name}.pdf"`)
       .set('cache-control', 'private, no-store')
-      .send(bytes);
+      .set('x-pdf-renderer', pdf.renderer)
+      .send(pdf.bytes);
+  const renderPdf = async (html: () => string, fallback: () => Promise<Buffer>) => {
+    try {
+      const bytes = await htmlToPdf(html());
+      if (bytes) return { bytes, renderer: 'chromium' };
+    } catch (error) {
+      console.error('Chromium PDF render failed; using pdfkit fallback', error);
+    }
+    return { bytes: await fallback(), renderer: 'pdfkit' };
+  };
+  // Same rule as the preview: a document frozen before the company details were complete borrows
+  // the empty fields from the current settings.
+  const documentSeller = async (ownerId: string, seller: FinanceSeller) =>
+    completeSeller(seller, (await getSettings(db, ownerId, privateMode)).seller);
   registerRoute(app, 'get', '/api/finance/quotes/:id/document.pdf', async (req, res) => {
     const actor = await auth(req);
     requireFinance(actor, access);
     const quote = await readQuote(db, actor.id, routeId(req.params.id));
-    const bytes = await quotePdf(quote);
+    const seller = await documentSeller(actor.id, quote.seller);
+    const pdf = await renderPdf(
+      () => quoteHtml(quote, seller),
+      () => quotePdf({ ...quote, seller }),
+    );
     await audited(db, actor, 'finance_quote', quote.id, 'quote_pdf_exported', quote.version);
-    sendPdf(res, quote.number.replace(/[^A-Za-z0-9_-]/g, '_'), bytes);
+    sendPdf(res, quote.number.replace(/[^A-Za-z0-9_-]/g, '_'), pdf);
   });
   registerRoute(app, 'get', '/api/finance/invoices/:id/document.pdf', async (req, res) => {
     const actor = await auth(req);
     requireFinance(actor, access);
     const invoice = await readInvoice(db, actor.id, routeId(req.params.id));
-    const bytes = await invoicePdf(invoice);
+    const seller = await documentSeller(actor.id, invoice.seller);
+    const pdf = await renderPdf(
+      () => invoiceHtml(invoice, seller),
+      () => invoicePdf({ ...invoice, seller }),
+    );
     await audited(
       db,
       actor,
@@ -1702,7 +1734,28 @@ export function registerFinance(
       'invoice_copy_pdf_exported',
       invoice.version,
     );
-    sendPdf(res, `${invoice.number.replace(/[^A-Za-z0-9_-]/g, '_')}-internal`, bytes);
+    sendPdf(res, `${invoice.number.replace(/[^A-Za-z0-9_-]/g, '_')}-internal`, pdf);
+  });
+  // Same query as the preview: optional from, to defaults to today in Riyadh. Landscape A4.
+  registerRoute(app, 'get', '/api/finance/customers/:id/statement.pdf', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    const { statement, customer } = await loadStatement(req, actor.id);
+    const bytes = await htmlToPdf(statementHtml(statement));
+    if (!bytes)
+      throw fault(503, 'PDF_RENDERER_UNAVAILABLE', 'خدمة توليد PDF لكشف الحساب غير متاحة حاليًا.');
+    await audited(
+      db,
+      actor,
+      'finance_customer',
+      customer.id,
+      'statement_pdf_exported',
+      customer.version,
+    );
+    sendPdf(res, `statement-${statement.to}`.replace(/[^A-Za-z0-9_-]/g, '_'), {
+      bytes,
+      renderer: 'chromium',
+    });
   });
   registerLedger(app, { db, requireActor, access });
 }

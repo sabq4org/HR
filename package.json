@@ -42,6 +42,7 @@
     "lucide-react": "1.72.0",
     "pdfkit": "0.20.2",
     "pg": "8.23.1",
+    "playwright-core": "1.65.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-router-dom": "7.18.5",
