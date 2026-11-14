@@ -8,6 +8,8 @@ import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { createApp } from '../../server/app.js';
 import { createDatabase, type Db } from '../../server/database.js';
+import { postInvoice } from '../../server/finance/ledger.js';
+import { acceptFinanceInvoice } from '../support/accept-invoice.js';
 import {
   generateServiceKey,
   hashServiceKey,
@@ -129,14 +131,8 @@ async function serve() {
     })
   ).body.invoice;
   assert.equal((await call('POST', '/api/finance/ledger/setup', {})).status, 201);
-  assert.equal(
-    (
-      await call('POST', `/api/finance/ledger/invoices/${invoice.id}/post`, {
-        revenueAccountCode: '4101',
-      })
-    ).status,
-    201,
-  );
+  const accepted = await acceptFinanceInvoice(db, invoice.id);
+  await db.transaction((tx) => postInvoice(tx, { id: OWNER, role: 'hr' }, accepted, '4101'));
   const events = async (action: string) =>
     Number(
       (
