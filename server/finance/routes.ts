@@ -37,6 +37,7 @@ import {
 export type { WafeqClientLike } from '../integrations/wafeq.js';
 import { autoPostInvoice } from './ledger.js';
 import { registerLedger } from './ledger-routes.js';
+import { invoicePdf, quotePdf } from './pdf.js';
 
 export type FinanceAccessOptions = { privateMode: boolean; allowedActorId?: string };
 export function canAccessFinance(actor: Actor, access: FinanceAccessOptions): boolean {
@@ -1645,6 +1646,38 @@ export function registerFinance(
       throw fault(409, 'ARTIFACT_UNAVAILABLE', 'رمز QR الرسمي لا يتاح قبل تأكيد الاعتماد.');
     // The provider has no documented QR image contract yet; do not return JSON to an <img> caller.
     throw fault(409, 'ARTIFACT_UNAVAILABLE', 'صيغة صورة QR الرسمية لم تثبت بعد.');
+  });
+  // Server-rendered PDFs. The invoice copy is internal and labelled as not a tax invoice; the
+  // official provider artifact stays on GET /api/finance/invoices/:id/pdf.
+  const sendPdf = (res: Response, name: string, bytes: Buffer) =>
+    res
+      .status(200)
+      .type('application/pdf')
+      .set('content-disposition', `attachment; filename="${name}.pdf"`)
+      .set('cache-control', 'private, no-store')
+      .send(bytes);
+  registerRoute(app, 'get', '/api/finance/quotes/:id/document.pdf', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    const quote = await readQuote(db, actor.id, routeId(req.params.id));
+    const bytes = await quotePdf(quote);
+    await audited(db, actor, 'finance_quote', quote.id, 'quote_pdf_exported', quote.version);
+    sendPdf(res, quote.number.replace(/[^A-Za-z0-9_-]/g, '_'), bytes);
+  });
+  registerRoute(app, 'get', '/api/finance/invoices/:id/document.pdf', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    const invoice = await readInvoice(db, actor.id, routeId(req.params.id));
+    const bytes = await invoicePdf(invoice);
+    await audited(
+      db,
+      actor,
+      'finance_invoice',
+      invoice.id,
+      'invoice_copy_pdf_exported',
+      invoice.version,
+    );
+    sendPdf(res, `${invoice.number.replace(/[^A-Za-z0-9_-]/g, '_')}-internal`, bytes);
   });
   registerLedger(app, { db, requireActor, access });
 }
