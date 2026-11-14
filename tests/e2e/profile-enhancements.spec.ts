@@ -14,8 +14,15 @@ test('employee profile remains usable at narrow widths and opens a dedicated pri
   await login(page);
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 844 });
-    await page.goto('/profile/file');
-    await expect(page.getByRole('heading', { name: 'الملف الوظيفي', exact: true })).toBeVisible();
+    await page.goto('/');
+    if (width < 600) await page.getByRole('button', { name: 'فتح القائمة' }).click();
+    await page
+      .getByRole('navigation', { name: 'التنقل الرئيسي' })
+      .getByRole('link', { name: 'ملفي الوظيفي', exact: true })
+      .click();
+    await expect(page).toHaveURL(/\/profile$/);
+    await expect(page.getByRole('heading', { name: 'ملفي الوظيفي', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'تقرير PDF', exact: true })).toBeVisible();
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
     );
@@ -36,7 +43,9 @@ test('employee profile remains usable at narrow widths and opens a dedicated pri
     await page.screenshot({ path: `artifacts/screenshots/profile-overview-${width}.png` });
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.getByRole('button', { name: 'طباعة / حفظ PDF' }).click();
+  await page.getByRole('button', { name: 'تقرير PDF', exact: true }).click();
+  await expect(page).toHaveURL(/\/profile\?view=report$/);
+  await page.reload();
   await expect(page.getByRole('heading', { name: 'الملف الوظيفي', exact: true })).toBeVisible();
   await expect(page.locator('.employee-report')).toBeVisible();
   await expect(page.locator('.employee-report-brand img')).toHaveAttribute(
@@ -51,6 +60,7 @@ test('employee profile remains usable at narrow widths and opens a dedicated pri
   await page.emulateMedia({ media: 'print' });
   await expect(page.locator('.employee-report')).toBeVisible();
   await expect(page.locator('.employee-report-controls')).toBeHidden();
+  await expect(page.locator('.employee-report-help')).toBeHidden();
   await page.screenshot({ path: 'artifacts/screenshots/profile-report-print.png', fullPage: true });
   if (browserName === 'chromium') {
     await page.pdf({
@@ -60,4 +70,12 @@ test('employee profile remains usable at narrow widths and opens a dedicated pri
     });
   }
   await page.emulateMedia({ media: 'screen' });
+  await page.getByRole('button', { name: 'العودة للملف' }).click();
+  await expect(page).toHaveURL(/\/profile$/);
+  await expect(page.getByRole('heading', { name: 'ملفي الوظيفي', exact: true })).toBeVisible();
+  await page.goto('/profile/file');
+  await expect(page.getByRole('button', { name: 'تقرير PDF', exact: true })).toBeVisible();
+  await page.goto('/employees/emp-sara');
+  await expect(page.getByRole('button', { name: 'البنك', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'تقرير PDF', exact: true })).toBeVisible();
 });

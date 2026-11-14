@@ -631,11 +631,13 @@ export default function App() {
                   </>
                 }
               />
-              <Route path="/profile" element={<ProfilePage self />} />
+              <Route path="/profile" element={<EmployeeFilePage title="ملفي الوظيفي" />} />
+              <Route path="/profile/overview" element={<ProfilePage self />} />
               <Route path="/profile/file" element={<EmployeeFilePage />} />
               <Route path="/employees" element={<PeoplePage />} />
               <Route path="/employees/import" element={<EmployeeImportPage />} />
-              <Route path="/employees/:id" element={<ProfilePage />} />
+              <Route path="/employees/:id" element={<EmployeeFileRoute />} />
+              <Route path="/employees/:id/overview" element={<ProfilePage />} />
               <Route path="/employees/:id/file" element={<EmployeeFileRoute />} />
               <Route path="/leaves" element={<LeavesPage />} />
               <Route

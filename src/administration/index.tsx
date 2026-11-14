@@ -538,7 +538,13 @@ function fieldsByGroup(fields: FormField[]) {
   }, {});
 }
 
-export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
+export function EmployeeFilePage({
+  employeeId,
+  title = 'الملف الوظيفي',
+}: {
+  employeeId?: string;
+  title?: string;
+}) {
   const { data, notify, refresh } = useApp();
   const id = employeeId || data.me.id;
   const {
@@ -554,7 +560,19 @@ export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [editGroup, setEditGroup] = useState('');
-  const [reportOpen, setReportOpen] = useState(false);
+  const [profileSearch, setProfileSearch] = useSearchParams();
+  const reportOpen = profileSearch.get('view') === 'report';
+  const setReportOpen = (open: boolean) => {
+    setProfileSearch(
+      (current) => {
+        const next = new URLSearchParams(current);
+        if (open) next.set('view', 'report');
+        else next.delete('view');
+        return next;
+      },
+      { replace: !open },
+    );
+  };
   useEffect(() => {
     if (file) setValues(file.values);
   }, [file]);
@@ -581,13 +599,13 @@ export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
   };
   if (loading)
     return (
-      <Shell title="الملف الوظيفي" subtitle="بيانات الموظف وسجلها">
+      <Shell title={title} subtitle="بيانات العمل والبنك والتأمينات والإجازات، في ملف واحد.">
         <Busy />
       </Shell>
     );
   if (error)
     return (
-      <Shell title="الملف الوظيفي" subtitle="بيانات الموظف وسجلها">
+      <Shell title={title} subtitle="بيانات العمل والبنك والتأمينات والإجازات، في ملف واحد.">
         <Notice error={error} retry={() => void reload()} />
       </Shell>
     );
@@ -599,12 +617,12 @@ export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
   const tabs = [...detailsTabs, 'الوثائق', 'فترات العمل', 'الطلبات', 'سجل التغييرات'];
   return (
     <Shell
-      title="الملف الوظيفي"
-      subtitle="بيانات الموظف وسجلها"
+      title={title}
+      subtitle="بيانات العمل والبنك والتأمينات والإجازات، في ملف واحد."
       action={
         <>
           <button className="adm-button secondary" onClick={() => setReportOpen(true)}>
-            <Printer size={16} /> طباعة / حفظ PDF
+            <FileText size={16} /> تقرير PDF
           </button>
           {editable && tab === 'البيانات' && (
             <ActionButton onClick={() => setEditing(!editing)}>
@@ -634,6 +652,11 @@ export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
           <span>وثائق سارية من {file.documents.length}</span>
         </div>
       </header>
+      <div className="profile-shortcuts">
+        <Link to={id === data.me.id ? '/profile/overview' : `/employees/${id}/overview`}>
+          عرض الملخص الوظيفي <ArrowRight size={14} />
+        </Link>
+      </div>
       <ProfileReadiness file={file} />
       {!editable && (
         <p className="adm-note">

@@ -204,6 +204,9 @@ export function EmployeeProfileReport({
           <Printer size={16} /> طباعة / حفظ PDF
         </button>
       </div>
+      <p className="employee-report-help">
+        لحفظ نسخة على جهازك، اضغط «طباعة / حفظ PDF»، ثم اختر «حفظ بصيغة PDF» من نافذة الطباعة.
+      </p>
       <article className="employee-report" dir="rtl">
         <header className="employee-report-brand">
           <img src="/brand/sabq-logo.svg" alt="سبق" />

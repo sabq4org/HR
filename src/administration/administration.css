@@ -879,6 +879,25 @@
   background: #edf1f4;
   color: #173149;
 }
+.profile-shortcuts {
+  display: flex;
+  justify-content: flex-end;
+  margin: -6px 0 14px;
+}
+.profile-shortcuts a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  color: var(--adm-blue);
+  font-size: 12px;
+}
+.employee-report-help {
+  max-width: 850px;
+  margin: 0 auto 16px;
+  color: #52677e;
+  font-size: 13px;
+}
 .employee-report-controls {
   display: flex;
   justify-content: space-between;
@@ -1101,7 +1120,8 @@
     padding: 0;
     background: #fff !important;
   }
-  .employee-report-controls {
+  .employee-report-controls,
+  .employee-report-help {
     display: none !important;
   }
   .employee-report {
