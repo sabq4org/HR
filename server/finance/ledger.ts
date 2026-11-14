@@ -279,6 +279,7 @@ async function sequence(tx: AsyncDb, sql: string, params: unknown[]): Promise<st
   if (count >= 999999) throw fault(409, 'NUMBER_SEQUENCE_EXHAUSTED', 'وصل الترقيم إلى حده.');
   return String(count + 1).padStart(6, '0');
 }
+const vatKeys = new Set(['vat_input', 'vat_output', 'vat_settlement']);
 export async function postEntry(
   tx: AsyncDb,
   actor: Actor,
@@ -289,6 +290,31 @@ export async function postEntry(
   const lines = input.lines.filter((line) => line.debit !== 0 || line.credit !== 0);
   if (lines.length < 2) throw fault(400, 'ENTRY_LINES_REQUIRED', 'القيد يحتاج طرفين على الأقل.');
   const accounts = await accountRows(tx, actor.id);
+  // A closed return froze its carry-forward: no VAT movement may be backdated to before its end,
+  // even into a month that no return covers and nobody locked.
+  if (
+    input.kind !== 'vat_close' &&
+    input.kind !== 'vat_payment' &&
+    lines.some(
+      (line) =>
+        // Out-of-scope and non-deductible bases never reach a box of the return.
+        (line.tax && line.tax.code !== 'O' && line.tax.code !== 'ND') ||
+        vatKeys.has(accounts.get(line.accountCode)?.system_key ?? ''),
+    )
+  ) {
+    const last = (
+      await tx.read<{ d: string | null }>(
+        'SELECT MAX(period_end) AS d FROM finance_vat_returns WHERE owner_id=?',
+        [actor.id],
+      )
+    )[0]?.d;
+    if (last && date <= last)
+      throw fault(
+        409,
+        'VAT_PERIOD_CLOSED',
+        `أُقفل إقرار ضريبي حتى ${last}؛ لا تُسجَّل حركة ضريبية بتاريخ يسبقه. سجّلها في الفترة المفتوحة أو صحّحها في الخانة 14.`,
+      );
+  }
   let debit = 0,
     credit = 0;
   for (const line of lines) {
@@ -1153,6 +1179,21 @@ export async function closeVat(
     [actor.id, period.periodEnd, period.periodStart],
   );
   if (existing.length) throw fault(409, 'VAT_PERIOD_CLOSED', 'سبق إقفال إقرار يغطي هذه الفترة.');
+  // Returns close in order: an earlier open period may hold a credit this one must bring forward.
+  const earlier = await tx.read<{ d: string }>(
+    `SELECT MIN(e.entry_date) AS d FROM finance_journal_lines l
+     JOIN finance_journal_entries e ON e.owner_id=l.owner_id AND e.id=l.entry_id
+     JOIN finance_accounts a ON a.owner_id=l.owner_id AND a.code=l.account_code
+     WHERE l.owner_id=? AND e.entry_date<? AND ((l.tax_side IS NOT NULL AND l.tax_code NOT IN ('O','ND')) OR a.system_key IN ('vat_input','vat_output'))
+       AND NOT EXISTS (SELECT 1 FROM finance_vat_returns r WHERE r.owner_id=l.owner_id AND r.period_start<=e.entry_date AND r.period_end>=e.entry_date)`,
+    [actor.id, period.periodStart],
+  );
+  if (earlier[0]?.d)
+    throw fault(
+      409,
+      'VAT_EARLIER_PERIOD_OPEN',
+      `توجد حركة ضريبية بتاريخ ${earlier[0].d} في فترة أسبق لم تُقفل. أقفل الفترات بترتيبها الزمني.`,
+    );
   // Art. 63: the cap applies to tax understated earlier; an overstatement may be corrected later.
   if (correction > settings.vatCorrectionLimitHalalas)
     throw fault(
@@ -1356,6 +1397,7 @@ export async function balanceSheet(
     balanced: a === l + e,
   };
 }
+const STATEMENT_ROWS = 2000;
 export async function accountStatement(
   db: AsyncDb,
   ownerId: string,
@@ -1375,9 +1417,13 @@ export async function accountStatement(
     `SELECT l.id AS line_id, l.debit, l.credit, l.memo_ciphertext, e.id, e.entry_no, e.entry_date, e.description_ciphertext
      FROM finance_journal_lines l JOIN finance_journal_entries e ON e.owner_id=l.owner_id AND e.id=l.entry_id
      WHERE l.owner_id=? AND l.account_code=? AND e.entry_date>=? AND e.entry_date<=?
-     ORDER BY e.entry_date, e.entry_no, l.line_no LIMIT 2000`,
+     ORDER BY e.entry_date, e.entry_no, l.line_no LIMIT ${STATEMENT_ROWS + 1}`,
     [ownerId, code, from, to],
   );
+  // The detail is capped, the balance is not: closing comes from every movement up to the end date.
+  const truncated = lines.length > STATEMENT_ROWS;
+  if (truncated) lines.length = STATEMENT_ROWS;
+  const closing = signed(row, (await totals(db, ownerId, { to })).get(code));
   let balance = opening;
   return {
     account: account(row, signed(row, (await totals(db, ownerId)).get(code))),
@@ -1399,7 +1445,8 @@ export async function accountStatement(
         balanceHalalas: balance,
       };
     }),
-    closingHalalas: balance,
+    closingHalalas: closing,
+    truncated,
   };
 }
 export async function aging(
@@ -1408,7 +1455,37 @@ export async function aging(
   side: 'receivable' | 'payable',
   asOf: string,
 ): Promise<AgingRow[]> {
-  const items = await listVouchers(db, ownerId, [side === 'receivable' ? 'invoice' : 'expense']);
+  // Rebuild each balance as it stood on the reporting date: only documents and settlements dated
+  // on or before it count, and a later reversal has not happened yet.
+  const reversedOn = new Map(
+    (
+      await db.read<{ reversal_of: string; entry_date: string }>(
+        "SELECT reversal_of, entry_date FROM finance_journal_entries WHERE owner_id=? AND kind='reversal' AND reversal_of IS NOT NULL",
+        [ownerId],
+      )
+    ).map((row) => [row.reversal_of, row.entry_date]),
+  );
+  const live = (row: VoucherRow) =>
+    row.doc_date <= asOf &&
+    (row.status === 'posted' || (reversedOn.get(row.entry_id) ?? '9999-12-31') > asOf);
+  const rows = await db.read<VoucherRow>(
+    `${voucherSelect} WHERE v.owner_id=? AND v.doc_date<=? AND v.kind IN (?,?,?,?)`,
+    [
+      ownerId,
+      asOf,
+      ...(side === 'receivable'
+        ? ['invoice', 'receipt', 'credit_note', 'invoice']
+        : ['expense', 'payment', 'payment', 'expense']),
+    ],
+  );
+  const settled = new Map<string, number>();
+  for (const row of rows)
+    if (row.related_id && row.kind !== 'invoice' && row.kind !== 'expense' && live(row))
+      settled.set(row.related_id, (settled.get(row.related_id) ?? 0) + n(row.total));
+  const items = rows
+    .filter((row) => (row.kind === 'invoice' || row.kind === 'expense') && live(row))
+    // `voucher` settles posted documents only; one reversed after the date was still open on it.
+    .map((row) => voucher({ ...row, status: 'posted' }, settled));
   return items
     .filter((item) => item.outstandingHalalas !== 0)
     .map((item) => {

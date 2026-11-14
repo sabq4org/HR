@@ -309,6 +309,8 @@ export interface AccountStatement {
   to: string;
   openingHalalas: number;
   closingHalalas: number;
+  /** True when the range holds more lines than the detail shows; the balances stay complete. */
+  truncated: boolean;
   rows: {
     entryId: string;
     entryNumber: string;

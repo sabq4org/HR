@@ -96,6 +96,11 @@ function Statement({ accounts, initial }: { accounts: LedgerAccount[]; initial: 
         </button>
       </div>
       {error && <Alert>{error}</Alert>}
+      {data?.truncated && (
+        <Alert>
+          تُعرض أول 2000 حركة فقط، والرصيد الختامي يشمل كل الحركات. ضيّق المدة لرؤية الباقي.
+        </Alert>
+      )}
       {!code ? (
         <Empty title="اختر حسابًا" detail="كشف الحساب يعرض كل حركة ورصيدها الجاري." />
       ) : (

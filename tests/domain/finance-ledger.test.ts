@@ -8,6 +8,8 @@ import { registerFinance, type WafeqClientLike } from '../../server/finance/rout
 import { vatPeriod } from '../../server/finance/ledger.js';
 import { createDatabase, createPostgresDatabase, type AsyncDb } from '../../server/database.js';
 import type {
+  AccountStatement,
+  AgingRow,
   BalanceSheet,
   BudgetReport,
   IncomeStatement,
@@ -475,6 +477,48 @@ async function scenario(db: AsyncDb) {
       [0, -100_000, -15_000],
     );
 
+    // Aging is rebuilt as of the reporting date, not from today's balances.
+    const agingAt = async (asOf: string) =>
+      (
+        await h.get<{ rows: AgingRow[] }>(
+          `/api/finance/ledger/reports/aging?side=receivable&asOf=${asOf}`,
+        )
+      ).body.rows.reduce((sum, row) => sum + row.outstandingHalalas, 0);
+    assert.equal(await agingAt('2026-07-09'), 0, 'not issued yet');
+    assert.equal(await agingAt('2026-07-15'), 1_150_000, 'before the first receipt');
+    assert.equal(await agingAt('2026-07-25'), 650_000, 'after the receipt, before the credit note');
+    assert.equal(await agingAt('2026-10-31'), 1_150_000 - 500_000 - 230_000 - 115_000);
+
+    // The statement's closing balance comes from the ledger and matches the account balance.
+    const statement = (
+      await h.get<AccountStatement>(
+        '/api/finance/ledger/reports/account/1110?from=2026-01-01&to=2026-12-31',
+      )
+    ).body;
+    assert.equal(statement.truncated, false);
+    assert.equal(statement.closingHalalas, 305_000);
+    assert.equal(statement.rows.at(-1)?.balanceHalalas, statement.closingHalalas);
+
+    // Once a return is closed, VAT cannot be backdated before its end, even into an unlocked month.
+    assert.equal(
+      (
+        await expense({
+          date: '2026-06-15',
+          accountCode: '5302',
+          taxCode: 'S',
+          net: '100.00',
+          reference: 'LATE-1',
+        })
+      ).body.error.code,
+      'VAT_PERIOD_CLOSED',
+    );
+    assert.equal(
+      (await expense({ date: '2026-06-15', accountCode: '5206', taxCode: 'O', net: '10.00' }))
+        .status,
+      201,
+      'a movement outside the return is still allowed in an open month',
+    );
+
     // Statements: debits equal credits, and assets equal liabilities plus equity.
     const trial = await h.get<{ rows: TrialBalanceRow[] }>(
       '/api/finance/ledger/reports/trial-balance?from=2026-01-01&to=2026-12-31',
@@ -487,7 +531,7 @@ async function scenario(db: AsyncDb) {
       '/api/finance/ledger/reports/income-statement?from=2026-01-01&to=2026-12-31',
     );
     assert.equal(income.body.revenueHalalas, 1_000_000 - 300_000 + 300_000);
-    assert.equal(income.body.expenseHalalas, 100_000 + 100_000 + 23_000 + 50_000 + 200_000);
+    assert.equal(income.body.expenseHalalas, 100_000 + 100_000 + 23_000 + 50_000 + 200_000 + 1_000);
     const sheet = await h.get<BalanceSheet>(
       '/api/finance/ledger/reports/balance-sheet?asOf=2026-12-31',
     );
@@ -566,6 +610,48 @@ test(
     );
   },
 );
+
+test('ledger: VAT returns close in chronological order and carry a credit forward', async () => {
+  process.env.HR_DATA_KEY ??= Buffer.alloc(32, 7).toString('base64url');
+  const h = await harness(await createDatabase());
+  try {
+    await h.send('/api/finance/ledger/setup', {});
+    // Q1 2026: input VAT only (a SAR 150 credit). Q2 2026: SAR 60 output VAT.
+    const purchase = await h.send('/api/finance/ledger/expenses', {
+      date: '2026-02-10',
+      description: 'شراء اصطناعي',
+      accountCode: '5302',
+      taxCode: 'S',
+      net: '1000.00',
+      cashAccountCode: '1102',
+      reference: 'Q1-1',
+    });
+    assert.equal(purchase.status, 201);
+    const sale = await h.send('/api/finance/ledger/revenues', {
+      date: '2026-05-10',
+      description: 'إيراد اصطناعي',
+      accountCode: '4101',
+      taxCode: 'S',
+      net: '400.00',
+      cashAccountCode: '1102',
+      reference: 'Q2-1',
+    });
+    assert.equal(sale.status, 201);
+    const close = (periodStart: string) =>
+      h.send<{ return: VatReturn } & Fail>('/api/finance/ledger/vat/close', {
+        periodStart,
+        correction: '0',
+      });
+    assert.equal((await close('2026-04-01')).body.error.code, 'VAT_EARLIER_PERIOD_OPEN');
+    const first = await close('2026-01-01');
+    assert.equal(first.body.return.netDueHalalas, -15_000);
+    const second = await close('2026-04-01');
+    assert.equal(second.body.return.creditBroughtForwardHalalas, 15_000);
+    assert.equal(second.body.return.netDueHalalas, 6_000 - 15_000);
+  } finally {
+    await h.close();
+  }
+});
 
 test('ledger: mixed 0% lines need an explicit VAT treatment, and reversal frees the invoice', async () => {
   const h = await harness(await createDatabase());
