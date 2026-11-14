@@ -482,6 +482,96 @@ export function registerAdministration(
       res.json({ file });
     },
   );
+  // Quick on-duty switch from the team directory (decision 011). It reuses the existing
+  // employment_status field through saveProfileValues, so the change gets the same resource
+  // permission, version guard, field history and audit trail as an edit from the file.
+  routeWithActor(
+    app,
+    'post',
+    '/api/admin/employees/:id/work-status',
+    requireActor,
+    async (req, res, actor) => {
+      const employeeId = param(req, 'id');
+      const b = requireRecord(req.body);
+      if (typeof b.onDuty !== 'boolean')
+        throw fault(400, 'INVALID_STATUS', 'حدّد هل الموظف على رأس العمل أم لا.');
+      const onDuty = b.onDuty;
+      const expectedStatus = requiredString(
+        b.expectedStatus,
+        'INVALID_STATUS',
+        'أرسل الحالة الظاهرة في البطاقة.',
+        40,
+      );
+      const readStatus = async (tx: AsyncDb, id: string) => {
+        const e = await readEmployee(tx, id);
+        if (!e) throw fault(404, 'EMPLOYEE_NOT_FOUND', 'الموظف غير موجود.');
+        return { id: e.id, status: e.status };
+      };
+      const employee = await idempotent(
+        db,
+        actor,
+        `employee:work-status:${employeeId}`,
+        req.get('Idempotency-Key') ?? undefined,
+        { onDuty, expectedStatus },
+        async (tx, m) => readStatus(tx, m.id),
+        async (tx) => {
+          const e = await readEmployee(tx, employeeId);
+          if (!e) throw fault(404, 'EMPLOYEE_NOT_FOUND', 'الموظف غير موجود.');
+          if (!mayManageEmployee(actor, e))
+            throw fault(
+              403,
+              'FORBIDDEN',
+              actor.role === 'hr'
+                ? 'لا يمكنك تغيير حالتك الوظيفية بنفسك.'
+                : 'يتطلب تغيير الحالة الوظيفية صلاحية الشؤون الإدارية.',
+            );
+          if (e.status !== expectedStatus)
+            throw fault(409, 'STALE_VERSION', 'تغيرت حالة الموظف؛ حدّث الصفحة ثم أعد المحاولة.');
+          const wasOnDuty = e.status === 'active' || e.status === 'on_leave';
+          if (wasOnDuty === onDuty)
+            throw fault(409, 'STATUS_UNCHANGED', 'الحالة الوظيفية مطابقة لما طلبته.');
+          if (onDuty && e.status === 'terminated') {
+            const periods = await tx.read<{ end_date: string | null }>(
+              'SELECT end_date FROM employment_periods WHERE employee_id=?',
+              [e.id],
+            );
+            // A dated separation closed the employment period; only rehire may open a new one.
+            if (periods.length && periods.every((period) => period.end_date !== null))
+              throw fault(
+                409,
+                'REHIRE_REQUIRED',
+                'انتهت خدمة هذا الموظف بتاريخ مسجل؛ استخدم إعادة التعيين من ملفه.',
+              );
+          }
+          const next = onDuty ? 'active' : 'terminated';
+          const reason = onDuty
+            ? 'ضبط سريع من دليل الفريق: على رأس العمل.'
+            : 'ضبط سريع من دليل الفريق: ليس على رأس العمل.';
+          const version = await saveProfileValues(
+            tx,
+            actor,
+            e.id,
+            { employmentStatus: next },
+            reason,
+            at(),
+            e.record_version,
+          );
+          await appendEvent(
+            tx,
+            actor,
+            'employee',
+            e.id,
+            'employee_work_status_changed',
+            reason,
+            { from: e.status, to: next, source: 'team-directory' },
+            version,
+          );
+          return { marker: { type: 'employee', id: e.id }, result: await readStatus(tx, e.id) };
+        },
+      );
+      res.json({ employee });
+    },
+  );
   routeWithActor(
     app,
     'post',
