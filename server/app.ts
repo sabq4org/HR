@@ -14,6 +14,7 @@ import { createAccountAccess } from './access/index.js';
 import { registerPilotStatus } from './pilot-status.js';
 import { currentPolicy, leaveChangesFor, registerLeaveRoutes } from './leave/routes.js';
 import { registerEntitlementRoutes } from './leave/entitlement.js';
+import { registerEndOfServiceRoutes } from './end-of-service/index.js';
 import { annualLeaveDays } from '../shared/leave.js';
 import { isSystemOwner } from './system-owner.js';
 import { decryptSensitive } from './administration/security.js';
@@ -1229,6 +1230,7 @@ export function createApp(
   });
   registerLeaveRoutes(app, { db, requireActor, authMode });
   registerEntitlementRoutes(app, { db, requireActor });
+  registerEndOfServiceRoutes(app, { db, requireActor });
   app.post('/api/notifications/read', async (req, res) => {
     try {
       const actor = await requireActor(req);

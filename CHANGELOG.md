@@ -2,6 +2,15 @@
 
 يسجّل كل تغيير مؤثر في السلوك أو الأمان، مع رابط القرار والاختبار، حتى يتتبعه أي مطور أو وكيل لاحق. الأحدث أولًا.
 
+## 2026-11-15 — فترات الخدمة المتحقق منها ومكافأة نهاية الخدمة، وصيغة رسمية للخطابات (فرع `claude/project-thread-fbuzju`)
+
+- **الخطابات في الوضع الخاص:** خطاب التعريف بالراتب وبالعمل وشهادة الخبرة تصدر بصيغة رسمية بلا «اصطناعي/تجريبي»، ويُحفظ `synthetic=false` في المستند. «كشف راتب» بدل «كشف راتب تجريبي». اختبار في `tests/domain/private-employment-records.test.ts`.
+- **فترات الخدمة:** `/api/eos/service-periods` لتسجيل الفترة بمصدرها وتصحيحها ثم التحقق منها، مع `employment_period_events` لا يُعدل. تفتح شهادة الخبرة بعد التحقق.
+- **مكافأة نهاية الخدمة (م84 وم85 وم87 وم80):** قاعدة بإصدار `end-of-service-award`، وحساب في `shared/end-of-service.ts`، وتسوية `eos_settlements` بإعداد ومراجعة واعتماد مستقل. القرار: `docs/decisions/016-end-of-service-award.md`.
+- **الواجهة:** صفحة «نهاية الخدمة» (`src/end-of-service/index.tsx`).
+- **الترحيل 021** في SQLite وPostgres (الرقم 020 محجوز لخيط آخر). قوائم الترحيلات في الاختبارات حُدّثت.
+- **الاختبارات:** `tests/domain/end-of-service.test.ts` (SQLite وPostgreSQL) و`tests/e2e/end-of-service.spec.ts`.
+
 ## 2026-11-15 — استحقاق الإجازة السنوية وتصفية رصيدها (فرع `claude/project-thread-n6cg0t`)
 
 - **القاعدة:** إصدار في `administrative_policies` بالمفتاح `annual-leave-entitlement` (21 ثم 30 بعد خمس سنوات، الأجر اليومي = مكونات الأجر ÷ 30) يُتحقق من قيمه في الخادم ويعتمده المعتمد أو مالك النظام. لا رقم في الشيفرة. القرار: `docs/decisions/015-annual-leave-entitlement.md`.
