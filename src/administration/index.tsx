@@ -1900,7 +1900,7 @@ export function PoliciesPage() {
   });
   const [busy, setBusy] = useState(false);
   const canManage = data.me.role === 'hr';
-  const canApprove = data.me.role === 'approver';
+  const canApprove = data.me.role === 'approver' || data.me.systemOwner === true;
   const create = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);

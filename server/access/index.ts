@@ -11,6 +11,7 @@ import type { Actor, AccountSummary } from '../../shared/access.js';
 import type { Role } from '../../shared/contracts.js';
 import type { AsyncDb } from '../database.js';
 import { decryptSensitive, encryptSensitive, sha256 } from '../administration/security.js';
+import { isSystemOwner } from '../system-owner.js';
 
 const SESSION_COOKIE_LOCAL = 'sabq_hr_account';
 const SESSION_COOKIE_SECURE = '__Host-sabq_hr_account';
@@ -323,7 +324,11 @@ export function createAccountAccess(db: AsyncDb, options: { secure: boolean }) {
       );
       return undefined;
     }
-    return { id: current.id, role: current.role };
+    return {
+      id: current.id,
+      role: current.role,
+      ...((await isSystemOwner(db, current.id, current.role)) ? { owner: true } : {}),
+    };
   };
   const logout = async (req: Request, res: Response) => {
     const rawToken = tokenFrom(req, cookieName);

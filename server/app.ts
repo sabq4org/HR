@@ -14,6 +14,7 @@ import { createAccountAccess } from './access/index.js';
 import { registerPilotStatus } from './pilot-status.js';
 import { currentPolicy, leaveChangesFor, registerLeaveRoutes } from './leave/routes.js';
 import { annualLeaveDays } from '../shared/leave.js';
+import { isSystemOwner } from './system-owner.js';
 import { decryptSensitive } from './administration/security.js';
 import { canAccessFinance, registerFinance } from './finance/routes.js';
 import { bearerToken, inAccountantScope, matchesServiceKey } from './finance/service-keys.js';
@@ -62,7 +63,8 @@ type LeaveRow = {
   parent_leave_id?: string | null;
   change_id?: string | null;
 };
-export type Actor = { id: string; role: Role };
+export type Actor = { id: string; role: Role; owner?: boolean };
+
 export type RequireActor = (req: Request) => Promise<Actor>;
 type ApiFault = Error & { status: number; code: string };
 type DemoRules = {
@@ -608,7 +610,11 @@ export function createApp(
       sessions.delete(token);
       return undefined;
     }
-    return { id: employee.id, role: employee.role };
+    return {
+      id: employee.id,
+      role: employee.role,
+      ...((await isSystemOwner(db, employee.id, employee.role)) ? { owner: true } : {}),
+    };
   };
   const requireActor: RequireActor = async (req) => {
     const actor = await actorFor(req);
@@ -698,7 +704,12 @@ export function createApp(
         .filter((e) => e.status !== 'suspended' && e.status !== 'terminated')
         .map((e) => ({ id: e.id, name: e.name, role: e.role, title: e.title }));
       res.json({
-        me: employee ? toEmployee(employee, await photoIds(db, [employee.id])) : null,
+        me: employee
+          ? {
+              ...toEmployee(employee, await photoIds(db, [employee.id])),
+              ...(actor?.owner ? { systemOwner: true } : {}),
+            }
+          : null,
         personas,
         mode: runtimeMode,
         authMode,

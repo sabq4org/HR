@@ -45,6 +45,7 @@ import {
 import { decryptSensitive, encryptSensitive, sha256 } from './security.js';
 import { reportCsv, type ReportExportType } from './report-export.js';
 import { fault, roleFromState, stateForRole, validateValues } from './validation.js';
+import { approvesPayroll } from '../system-owner.js';
 
 const at = () => new Date().toISOString();
 const isRole = (value: string): value is Role =>
@@ -1798,7 +1799,7 @@ function registerPolicyRoutes(
             throw fault(403, 'SELF_APPROVAL', 'لا تعتمد القاعدة التي أنشأتها.');
           if (
             action === 'approve'
-              ? actor.role !== 'approver' || row.state !== 'draft'
+              ? !approvesPayroll(actor) || row.state !== 'draft'
               : actor.role !== 'hr' || row.state !== 'synthetic_approved'
           )
             throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية الإجراء في هذه المرحلة.');

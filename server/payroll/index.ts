@@ -28,11 +28,14 @@ import {
 } from '../administration/service.js';
 import { ensureServiceAccountRow } from '../service-api/service-account.js';
 import { decryptSensitive, encryptSensitive } from '../administration/security.js';
+import { approvesPayroll } from '../system-owner.js';
 
 type Actor = {
   id: string;
   // 'service' is the «محاسب سبق» key: it may only prepare a draft and submit its own draft.
   role: 'employee' | 'manager' | 'hr' | 'finance' | 'approver' | 'auditor' | 'service';
+  /** System owner (decision 014): an HR account that may also approve payroll. */
+  owner?: boolean;
 };
 /** Preparer roles: HR people, and the service key through /api/service/hr/payroll. */
 const mayPrepare = (actor: Actor) => actor.role === 'hr' || actor.role === 'service';
@@ -269,6 +272,11 @@ export function createPayrollCommands(db: AsyncDb) {
       canEdit: actor.role === 'hr' && r.state === 'draft' && r.prepared_by === actor.id,
       canReview:
         actor.role === 'finance' && r.state === 'pending_finance' && r.prepared_by !== actor.id,
+      canApprove:
+        approvesPayroll(actor) &&
+        r.state === 'pending_approver' &&
+        r.prepared_by !== actor.id &&
+        r.reviewed_by !== actor.id,
       timeline: events.map((e) => ({
         id: e.id,
         actorId: actor.role === 'auditor' ? '' : e.actor_id,
@@ -794,9 +802,9 @@ export function createPayrollCommands(db: AsyncDb) {
         : body.action === 'review'
           ? actor.role === 'finance'
           : body.action === 'approve'
-            ? actor.role === 'approver'
+            ? approvesPayroll(actor)
             : body.action === 'reject'
-              ? ['finance', 'approver'].includes(actor.role)
+              ? actor.role === 'finance' || approvesPayroll(actor)
               : false;
     if (!allowed) throw fail(403, 'forbidden', 'لا تملك صلاحية تنفيذ هذا الإجراء.');
     if (
@@ -833,7 +841,7 @@ export function createPayrollCommands(db: AsyncDb) {
         reviewed = actor.id;
       } else if (
         action === 'approve' &&
-        actor.role === 'approver' &&
+        approvesPayroll(actor) &&
         run.state === 'pending_approver' &&
         run.prepared_by !== actor.id &&
         run.reviewed_by !== actor.id
@@ -843,8 +851,12 @@ export function createPayrollCommands(db: AsyncDb) {
         approved = actor.id;
       } else if (
         action === 'reject' &&
-        ['finance', 'approver'].includes(actor.role) &&
-        ['pending_finance', 'pending_approver'].includes(run.state)
+        ((['finance', 'approver'].includes(actor.role) &&
+          ['pending_finance', 'pending_approver'].includes(run.state)) ||
+          (approvesPayroll(actor) &&
+            run.state === 'pending_approver' &&
+            run.prepared_by !== actor.id &&
+            run.reviewed_by !== actor.id))
       ) {
         next = 'rejected';
       } else throw fail(403, 'transition_forbidden', 'لا تملك صلاحية تنفيذ هذه الخطوة.');
