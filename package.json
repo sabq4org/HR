@@ -23,6 +23,7 @@
     "private:supplement": "tsx scripts/profile-supplement.ts",
     "private:access": "tsx scripts/private-access.ts",
     "finance:key": "tsx scripts/finance-key.ts",
+    "hr:key": "tsx scripts/hr-service-key.ts",
     "finance:sandbox": "tsx scripts/finance-sandbox.ts",
     "test": "node --import tsx --test tests/domain/*.test.ts",
     "test:e2e": "playwright test",
