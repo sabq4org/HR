@@ -505,11 +505,17 @@ export function PeoplePage() {
   const [query, setQuery] = useState('');
   const [department, setDepartment] = useState('all');
   const departments = [...new Set(data.employees.map((e) => e.department))];
-  const people = data.employees.filter(
+  const [duty, setDuty] = useState<'on' | 'off'>('on');
+  const isOnDuty = (e: Employee) => e.status === 'active' || e.status === 'on_leave';
+  const matching = data.employees.filter(
     (e) =>
       (department === 'all' || department === e.department) &&
       `${e.name} ${e.title} ${e.employeeNumber}`.includes(query),
   );
+  const onDutyCount = matching.filter(isOnDuty).length;
+  const offDutyCount = matching.length - onDutyCount;
+  // Staff who left stay out of the default view; they live in the second tab.
+  const people = matching.filter((e) => isOnDuty(e) === (duty === 'on'));
   return (
     <>
       <PageHeading
@@ -558,6 +564,22 @@ export function PeoplePage() {
           </div>
         )}
       </section>
+      <div className="people-tabs tabs" role="group" aria-label="حالة العمل">
+        <button
+          className={duty === 'on' ? 'tab active' : 'tab'}
+          aria-pressed={duty === 'on'}
+          onClick={() => setDuty('on')}
+        >
+          على رأس العمل <span>{onDutyCount}</span>
+        </button>
+        <button
+          className={duty === 'off' ? 'tab active' : 'tab'}
+          aria-pressed={duty === 'off'}
+          onClick={() => setDuty('off')}
+        >
+          ليسوا على رأس العمل <span>{offDutyCount}</span>
+        </button>
+      </div>
       {people.length ? (
         <div className="people-grid">
           {people.map((e) => {
@@ -606,7 +628,16 @@ export function PeoplePage() {
           })}
         </div>
       ) : (
-        <Empty title="لم نجد اسمًا مطابقًا" detail="جرّب اسمًا آخر أو اختر جميع الأقسام." />
+        <Empty
+          title={matching.length ? 'لا أحد في هذا التبويب' : 'لم نجد اسمًا مطابقًا'}
+          detail={
+            matching.length
+              ? duty === 'on'
+                ? 'كل النتائج المطابقة في تبويب «ليسوا على رأس العمل».'
+                : 'كل النتائج المطابقة على رأس العمل.'
+              : 'جرّب اسمًا آخر أو اختر جميع الأقسام.'
+          }
+        />
       )}
       {creating && (
         <EmployeeCreateDialog
