@@ -845,7 +845,9 @@ export function createApp(
         };
       }
       res.json({
-        me: toEmployee(me, photos),
+        // The UI reads `me` from here, not /api/session; without the flag the system owner never
+        // sees «اعتماد» on rule drafts even though the server lets them approve (decision 014).
+        me: { ...toEmployee(me, photos), ...(actor.owner ? { systemOwner: true } : {}) },
         financeAccess: canAccessFinance(actor, financeOptions),
         employees: visible.map((e) => toEmployee(e, photos)),
         leaves,
