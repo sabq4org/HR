@@ -24,6 +24,7 @@
     "private:access": "tsx scripts/private-access.ts",
     "test": "node --import tsx --test tests/domain/*.test.ts",
     "test:e2e": "playwright test",
+    "test:finance": "playwright test --config playwright.finance.config.ts",
     "test:recovery": "tsx scripts/verify-recovery.ts",
     "check": "npm run typecheck && npm test && npm run build",
     "db:backup": "tsx scripts/database-operations.ts backup",

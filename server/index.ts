@@ -56,6 +56,7 @@ const runtime = privateHosted
           dataMode: 'private',
           publicOrigin: process.env.HR_PUBLIC_ORIGIN,
           accessPassword: process.env.HR_ACCESS_PASSWORD,
+          financeEmployeeId: process.env.HR_FINANCE_EMPLOYEE_ID,
         }),
         close: () => db.close(),
       };
@@ -79,7 +80,10 @@ const runtime = privateHosted
                 process.env.HR_DB_PATH ?? resolve(defaultDataDir, 'hr-local.sqlite'),
               );
         return {
-          app: createApp(db, { dataMode: privateData ? 'private' : 'synthetic' }),
+          app: createApp(db, {
+            dataMode: privateData ? 'private' : 'synthetic',
+            financeEmployeeId: privateData ? process.env.HR_FINANCE_EMPLOYEE_ID : undefined,
+          }),
           close: () => db.close(),
         };
       })();
@@ -95,7 +99,7 @@ if (production) {
   app.use(express.static(resolve('dist/client'), { index: false }));
   app.get('/{*path}', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    res.sendFile(resolve('dist/client/index.html'));
+    res.sendFile('index.html', { root: resolve('dist/client') });
   });
 } else {
   const { createServer: createViteServer } = await import('vite');

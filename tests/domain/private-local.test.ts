@@ -199,6 +199,27 @@ test('private mode signs in only granted accounts and scopes photos to self, HR 
   }
 });
 
+test('private finance access follows the exact grant and revokes an existing session', async () => {
+  const { db } = await importedDatabase();
+  const owner = await idOf(db, 'a@example.test');
+  const other = await idOf(db, 'b@example.test');
+  await grantRole(db, 'a@example.test', 'hr');
+  await grantRole(db, 'b@example.test', 'hr');
+  const h = await serve(db, { dataMode: 'private', financeEmployeeId: owner });
+  try {
+    assert.equal((await (await h.get(owner, '/bootstrap')).json()).financeAccess, true);
+    assert.equal((await h.get(owner, '/finance/settings')).status, 200);
+    assert.equal((await (await h.get(other, '/bootstrap')).json()).financeAccess, false);
+    assert.equal((await h.get(other, '/finance/settings')).status, 403);
+    await db.execute('UPDATE employees SET access_role=NULL WHERE id=?', [owner]);
+    assert.equal((await h.get(owner, '/finance/settings')).status, 401);
+    assert.equal((await h.get(owner, '/bootstrap')).status, 401);
+  } finally {
+    await h.close();
+    await db.close();
+  }
+});
+
 test('synthetic mode keeps photo scope: finance cannot fetch a colleague photo', async () => {
   const db = await createDatabase();
   await ensureLocalAdmin(db);
