@@ -19,11 +19,12 @@ import {
   DOCUMENT_ORIGIN,
   PREVIEW_PAGE_CSS,
   documentAsset,
+  documentStylesheet,
   invoiceHtml,
   quoteHtml,
   statementHtml,
 } from '../../server/finance/document-html.js';
-import { completeSeller, type FinanceSeller } from '../../shared/finance.js';
+import { completeSeller, formatIban, type FinanceSeller } from '../../shared/finance.js';
 
 process.env.HR_DATA_KEY ??= randomBytes(32).toString('base64url');
 const OWNER = 'emp-finance-pdf-owner';
@@ -179,7 +180,7 @@ test('document HTML is the preview paper with the settings seller and bank detai
       app.quote.number,
       'عميل اختبار الطباعة (وهمي)',
       'إعلان بانر رقمي',
-      'SA6000000000000000001234',
+      'SA60 0000 0000 0000 0000 1234',
       'بنك تجريبي',
       '/brand/sabq-logo.svg',
       '@page finance-document',
@@ -195,6 +196,49 @@ test('document HTML is the preview paper with the settings seller and bank detai
     assert.ok(html.includes('fin-document-paper fin-statement-paper'));
     assert.ok(html.includes('@page { size: A4 landscape; margin: 10mm 12mm; }'));
     assert.ok(html.includes(app.invoice.number));
+  } finally {
+    await app.close();
+  }
+});
+
+test('formatIban groups in blocks of 4 and leaves the stored value untouched', () => {
+  assert.equal(formatIban('SA5680000305608010040444'), 'SA56 8000 0305 6080 1004 0444');
+  assert.equal(formatIban('SA56 8000 0305 6080 1004 0444'), 'SA56 8000 0305 6080 1004 0444');
+  assert.equal(formatIban(' sa5680000305608010040444 '), 'SA56 8000 0305 6080 1004 0444');
+});
+
+test('quote HTML follows the real status, groups the IBAN and right-aligns bank values', async () => {
+  const app = await serve();
+  try {
+    const full = completeSeller(app.quote.seller, seller);
+    const draft = quoteHtml(app.quote, full);
+    assert.equal(app.quote.status, 'draft');
+    assert.ok(draft.includes('مسودة عرض سعر'), 'draft badge');
+    assert.ok(!draft.includes('تم التحويل إلى فاتورة'), 'draft is not converted');
+    assert.ok(draft.includes('SA60 0000 0000 0000 0000 1234'), 'grouped IBAN');
+    assert.ok(!draft.includes('SA6000000000000000001234'), 'ungrouped IBAN stays out of the paper');
+    assert.match(
+      draft,
+      /<dd class="fin-bank-value" dir="ltr">\s*SA60 0000 0000 0000 0000 1234\s*<\/dd>/,
+    );
+    assert.match(draft, /<dd class="fin-bank-value" dir="ltr">\s*0000000000000\s*<\/dd>/);
+
+    const converted = quoteHtml({ ...app.quote, status: 'converted' }, full);
+    assert.ok(converted.includes('تم التحويل إلى فاتورة'), 'converted badge');
+    assert.ok(!converted.includes('مسودة عرض سعر'), 'converted is not a draft badge');
+
+    const invoice = invoiceHtml(app.invoice, completeSeller(app.invoice.seller, seller));
+    assert.equal(app.invoice.status, 'draft');
+    assert.ok(invoice.includes('مسودة فاتورة'), 'draft invoice badge stays');
+
+    const css = documentStylesheet();
+    assert.match(
+      css,
+      /\.fin-bank-card dd\.fin-bank-value\s*\{[^}]*text-align:\s*right/,
+      'bank values right-aligned under their labels',
+    );
+    assert.match(css, /\.fin-bank-card dd\.fin-bank-value\s*\{[^}]*unicode-bidi:\s*isolate/);
+    assert.match(css, /\.fin-bank-card dd\.fin-bank-value\s*\{[^}]*direction:\s*ltr/);
   } finally {
     await app.close();
   }
