@@ -571,18 +571,20 @@ export function PayrollPage({ actor }: Props) {
                 </div>
               </div>
               <p className="payroll-reason">{selected.reason}</p>
-              <div className="payroll-summary">
-                <span>
-                  {selected.correctionOf ? 'صافي فرق التصحيح' : 'الإجمالي المستحق'}{' '}
-                  <b>{money(selected.totals.netMinor)}</b>
-                </span>
-                <span>
-                  الإيرادات <b>{money(selected.totals.earningsMinor)}</b>
-                </span>
-                <span>
-                  الاستقطاعات <b>{money(selected.totals.deductionsMinor)}</b>
-                </span>
-              </div>
+              {selected.correctionOf && (
+                <div className="payroll-summary">
+                  <span>
+                    {selected.correctionOf ? 'صافي فرق التصحيح' : 'الإجمالي المستحق'}{' '}
+                    <b>{money(selected.totals.netMinor)}</b>
+                  </span>
+                  <span>
+                    الإيرادات <b>{money(selected.totals.earningsMinor)}</b>
+                  </span>
+                  <span>
+                    الاستقطاعات <b>{money(selected.totals.deductionsMinor)}</b>
+                  </span>
+                </div>
+              )}
               {selected.payments.length > 0 && (
                 <section className="payroll-payments" aria-label="حالات الدفع المسجلة">
                   <h3>حالة الدفع المسجلة</h3>

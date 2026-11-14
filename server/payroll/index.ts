@@ -252,6 +252,9 @@ export function createPayrollCommands(db: AsyncDb) {
       })),
       payments: payments.map((p) => ({
         employeeId: actor.role === 'auditor' ? '' : p.employee_id,
+        ...(actor.role === 'auditor' && pseudonyms.has(p.employee_id)
+          ? { employeeKey: pseudonyms.get(p.employee_id)! }
+          : {}),
         state: p.state,
         paidMinor: Number(p.paid_minor),
         reference:
@@ -284,6 +287,57 @@ export function createPayrollCommands(db: AsyncDb) {
    * category get none. Used after creating, copying or editing a draft, so an edited basic
    * salary never leaves a stale insurance amount.
    */
+  /**
+   * Every employee with lines in a primary draft gets a register snapshot before insurance is
+   * applied: someone added by hand after creation, or a draft from before migration 017.
+   * Under a rule with an insurance section, a staff member whose category cannot be resolved
+   * stops the save or submission with the reason instead of passing without insurance.
+   */
+  async function reconcilePeople(tx: AsyncDb, runId: string, gosi: GosiRule | null) {
+    const missing = await tx.read<Row>(
+      `SELECT DISTINCT l.employee_id,e.title FROM payroll_lines l JOIN employees e ON e.id=l.employee_id
+       WHERE l.run_id=? AND NOT EXISTS (SELECT 1 FROM payroll_run_people p WHERE p.run_id=l.run_id AND p.employee_id=l.employee_id)
+       ORDER BY l.employee_id`,
+      [runId],
+    );
+    for (const person of missing) {
+      const profile = await getProfileValues(tx, person.employee_id);
+      const typeValue = String(profile.payrollEmploymentType ?? '').trim();
+      if (!typeValue && gosi)
+        throw fail(
+          400,
+          'employment_type_missing',
+          `${EXCLUSION_LABEL.employment_type_missing} لموظف أضيف إلى المسير.`,
+        );
+      const employmentType = typeValue === 'contractor' ? 'contractor' : 'staff';
+      let category: { category: GosiCategory; inferred: boolean } | null = null;
+      if (gosi && employmentType === 'staff') {
+        const resolved = resolveGosiCategory(profile);
+        if (!resolved.category)
+          throw fail(
+            400,
+            resolved.problem,
+            `${GOSI_PROBLEM_LABEL[resolved.problem]} لموظف أضيف إلى المسير.`,
+          );
+        category = resolved;
+      }
+      await tx.execute(
+        'INSERT INTO payroll_run_people(run_id,employee_id,title,payment_method,employment_type,employer_contribution_minor,insurance_category,insurance_category_inferred,insured_wage_minor,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+        [
+          runId,
+          person.employee_id,
+          String(person.title ?? ''),
+          paymentMethodOf(profile.payrollPaymentMethod),
+          employmentType,
+          0,
+          category?.category ?? null,
+          category?.inferred ? 1 : 0,
+          0,
+          now(),
+        ],
+      );
+    }
+  }
   async function applyInsurance(tx: AsyncDb, runId: string, gosi: GosiRule, policyId: string) {
     const people = await tx.read<Row>(
       'SELECT employee_id,employment_type,insurance_category FROM payroll_run_people WHERE run_id=?',
@@ -789,6 +843,13 @@ export function createPayrollCommands(db: AsyncDb) {
       ) {
         next = 'rejected';
       } else throw fail(403, 'transition_forbidden', 'لا تملك صلاحية تنفيذ هذه الخطوة.');
+      // Submitting a primary draft re-applies the rule, so no recipient escapes it.
+      if (action === 'submit' && !run.correction_of) {
+        const gosi = await policyGosi(tx, run.policy_id);
+        await reconcilePeople(tx, run.id, gosi);
+        if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
+        await validateRunNet(tx, run, false);
+      }
       if (next === 'closed') {
         await validateRunNet(tx, run, true);
       }
@@ -832,6 +893,7 @@ export function createPayrollCommands(db: AsyncDb) {
     runAction,
     applyInsurance,
     addPersonFromProfile,
+    reconcilePeople,
   };
 }
 
@@ -844,6 +906,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
     runAction,
     applyInsurance,
     addPersonFromProfile,
+    reconcilePeople,
   } = createPayrollCommands(db);
   const route = (
     method: 'get' | 'post' | 'patch',
@@ -1229,6 +1292,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
       // Insurance follows the rule, not hand edits: recompute it from the edited lines.
       if (!run.correction_of) {
         const gosi = await policyGosi(tx, run.policy_id);
+        await reconcilePeople(tx, run.id, gosi);
         if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
       }
       await validateRunNet(tx, run, false);

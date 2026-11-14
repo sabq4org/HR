@@ -124,7 +124,8 @@ export function buildPayrollRegister(
     row[column(line)] += line.amountMinor;
   }
   for (const payment of run.payments) {
-    const row = payment.employeeId ? rows.get(payment.employeeId) : undefined;
+    const key = payment.employeeId || (payment.employeeKey ? `name:${payment.employeeKey}` : '');
+    const row = key ? rows.get(key) : undefined;
     if (!row || payment.state === 'pending') continue;
     row.paymentState = payment.state;
     row.paidMinor = payment.paidMinor;

@@ -354,6 +354,23 @@ test('payroll run applies the approved GOSI rule per category and snapshots the 
       current = step.body.run;
     }
     assert.equal(current.state, 'closed');
+    // Payments stay visible to auditors through the stable pseudonym.
+    const saraNet = buildPayrollRegister(current)
+      .groups.flatMap((g) => g.rows)
+      .find((r) => r.employeeId === 'emp-sara')!.netMinor;
+    const paid = await f.api<any>('finance', `/${run.id}/payments`, 'POST', {
+      version: current.version,
+      employeeId: 'emp-sara',
+      state: 'paid',
+      paidMinor: saraNet,
+      reference: 'تحويل اختبار',
+    });
+    assert.equal(paid.status, 200, JSON.stringify(paid.body));
+    const auditedClosed = buildPayrollRegister(
+      (await f.api<any>('auditor', `/${run.id}`)).body.run,
+    );
+    assert.equal(auditedClosed.paid.count, 1);
+    assert.equal(auditedClosed.paid.amountMinor, saraNet);
     await assert.rejects(
       f.db.execute('UPDATE payroll_run_people SET payment_method=? WHERE run_id=?', [
         'direct',
@@ -461,6 +478,63 @@ test('without an approved payroll rule version, creating a run explains what is 
     assert.equal(made.body.error.code, 'policy_unavailable');
     assert.match(made.body.error.message, /يعتمده المعتمد المستقل/);
     assert.deepEqual((await f.api<any>('hr', '/policies?period=2026-10')).body.policies, []);
+  } finally {
+    await f.close();
+  }
+});
+
+test('an employee added to a draft by hand gets a register snapshot and the insurance rule', async () => {
+  const f = await fixture();
+  try {
+    await f.addPolicy('payroll-test-gosi', {
+      currency: 'SAR',
+      calculation: 'profile-components',
+      gosi: fixtureRule,
+    });
+    await setProfile(f.db, 'emp-sara', {
+      nationality: 'سعودي',
+      insuranceCategory: 'unreviewed',
+      basicSalary: '10000',
+      housingAllowance: '2500',
+    });
+    const made = await f.api<any>('hr', '', 'POST', {
+      period: '2026-08',
+      policyId: 'payroll-test-gosi',
+      reason: 'مسير إضافة يدوية',
+    });
+    assert.equal(made.status, 200, JSON.stringify(made.body));
+    let run = made.body.run;
+    assert.ok(!run.lines.some((l: any) => l.employeeId === 'emp-sara'));
+    const withSara = (version: number) =>
+      f.api<any>('hr', `/${run.id}`, 'PATCH', {
+        version,
+        reason: 'إضافة موظفة',
+        lines: [
+          ...run.lines,
+          {
+            employeeId: 'emp-sara',
+            component: 'الراتب الأساسي',
+            kind: 'earning',
+            amountMinor: 1_000_000,
+          },
+        ],
+      });
+    const refused = await withSara(run.version);
+    assert.equal(refused.status, 400);
+    assert.equal(refused.body.error.code, 'category_unreviewed');
+    await setProfile(f.db, 'emp-sara', { insuranceCategory: 'new' });
+    const saved = await withSara(run.version);
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    run = saved.body.run;
+    const insurance = run.lines.find(
+      (l: any) => l.employeeId === 'emp-sara' && l.component === 'تأمين الموظف',
+    );
+    assert.equal(insurance.amountMinor, 107_500); // 10000 × 10.75% (no housing line added)
+    const person = run.people.find((p: any) => p.employeeId === 'emp-sara');
+    assert.deepEqual(
+      [person.insuranceCategory, person.employerContributionMinor],
+      ['saudi_new', 127_500],
+    );
   } finally {
     await f.close();
   }

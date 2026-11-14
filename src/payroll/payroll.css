@@ -188,7 +188,7 @@
 }
 .payroll-layout {
   display: grid;
-  grid-template-columns: minmax(240px, 290px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: 17px;
   min-width: 0;
@@ -547,7 +547,6 @@
 }
 @media (max-width: 980px) {
   .payroll-layout {
-    grid-template-columns: minmax(205px, 245px) minmax(0, 1fr);
     gap: 12px;
   }
 }
@@ -867,7 +866,7 @@
 }
 .register-table td.num {
   font-variant-numeric: tabular-nums;
-  text-align: left;
+  text-align: right;
   white-space: nowrap;
   direction: ltr;
 }
@@ -1016,4 +1015,18 @@
 .payroll-edit-note {
   color: var(--payroll-muted);
   font-size: 12px;
+}
+
+/* Full-width register: the runs list sits above the detail as a strip of cards, so the
+   register table gets the page width instead of a narrow side column. */
+.payroll-runs {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  align-items: start;
+}
+.payroll-runs h2,
+.payroll-runs .payroll-empty {
+  grid-column: 1 / -1;
+}
+.payroll-detail-title h2 {
+  white-space: nowrap;
 }

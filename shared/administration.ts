@@ -226,6 +226,8 @@ export interface PayrollLine {
 }
 export interface PayrollPayment {
   employeeId: string;
+  /** Pseudonym for auditors (matches the line pseudonym); the register keys rows on it. */
+  employeeKey?: string;
   state: 'pending' | 'paid' | 'failed' | 'partial';
   paidMinor: number;
   reference: string;
