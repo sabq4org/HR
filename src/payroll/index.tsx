@@ -574,14 +574,14 @@ export function PayrollPage({ actor }: Props) {
               {selected.correctionOf && (
                 <div className="payroll-summary">
                   <span>
-                    {selected.correctionOf ? 'صافي فرق التصحيح' : 'الإجمالي المستحق'}{' '}
+                    صافي فرق التصحيح{' '}
                     <b>{money(selected.totals.netMinor)}</b>
                   </span>
                   <span>
-                    الإيرادات <b>{money(selected.totals.earningsMinor)}</b>
+                    فرق الاستحقاقات <b>{money(selected.totals.earningsMinor)}</b>
                   </span>
                   <span>
-                    الاستقطاعات <b>{money(selected.totals.deductionsMinor)}</b>
+                    فرق الخصومات <b>{money(selected.totals.deductionsMinor)}</b>
                   </span>
                 </div>
               )}
