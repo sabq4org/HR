@@ -223,19 +223,20 @@ async function newRun(f: Awaited<ReturnType<typeof payrollHarness>>, period: str
   return created.body.run;
 }
 
-test('payroll preparer cannot add a line for their own pay', async () => {
+test('payroll preparer pay is part of the normal run (owner decision 013)', async () => {
   const f = await payrollHarness();
   try {
     const run = await newRun(f, '2026-08');
     const edited = await f.api('hr', `/${run.id}`, 'PATCH', {
       version: run.version,
       lines: [...run.lines, extraLine('emp-noura')],
-      reason: 'محاولة إضافة راتب المعد',
+      reason: 'إضافة سطر لراتب المعد',
     });
-    assert.equal(edited.status, 403);
-    assert.equal(edited.body.error.code, 'preparer_cannot_include_self');
+    assert.notEqual(edited.status, 403);
+    assert.notEqual(edited.body?.error?.code, 'preparer_cannot_include_self');
+    assert.equal(edited.status, 200, JSON.stringify(edited.body));
     const unknown = await f.api('hr', `/${run.id}`, 'PATCH', {
-      version: run.version,
+      version: edited.body.run.version,
       lines: [...run.lines, extraLine('emp-does-not-exist')],
       reason: 'موظف غير موجود',
     });
@@ -245,7 +246,7 @@ test('payroll preparer cannot add a line for their own pay', async () => {
   }
 });
 
-test('finance cannot review a run that contains its own salary', async () => {
+test('finance reviews and the approver approves a run that contains their own salary (decision 013)', async () => {
   const f = await payrollHarness();
   try {
     const run = await newRun(f, '2026-09');
@@ -264,8 +265,12 @@ test('finance cannot review a run that contains its own salary', async () => {
       version: submitted.body.run.version,
       action: 'review',
     });
-    assert.equal(reviewed.status, 403);
-    assert.equal(reviewed.body.error.code, 'subject_cannot_review');
+    assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+    const approved = await f.api('approver', `/${run.id}/actions`, 'POST', {
+      version: reviewed.body.run.version,
+      action: 'approve',
+    });
+    assert.equal(approved.status, 200, JSON.stringify(approved.body));
   } finally {
     await f.close();
   }

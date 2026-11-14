@@ -1030,3 +1030,43 @@
 .payroll-detail-title h2 {
   white-space: nowrap;
 }
+
+/* GOSI explanation under the rule version card. */
+.gosi-explainer {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.gosi-explainer summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--payroll-blue);
+}
+.gosi-explainer ol {
+  margin: 8px 0;
+  padding-inline-start: 20px;
+}
+.gosi-explainer ul {
+  margin: 4px 0;
+  padding-inline-start: 18px;
+}
+.gosi-example {
+  border-collapse: collapse;
+  min-width: 0;
+  width: 100%;
+  max-width: 520px;
+}
+.gosi-example caption {
+  text-align: start;
+  padding-bottom: 6px;
+  color: var(--payroll-muted);
+}
+.gosi-example th,
+.gosi-example td {
+  border-bottom: 1px solid var(--payroll-line);
+  padding: 4px 8px;
+  text-align: start;
+}
+.gosi-example td.num {
+  font-variant-numeric: tabular-nums;
+}

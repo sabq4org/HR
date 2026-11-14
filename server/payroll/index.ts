@@ -722,8 +722,8 @@ export function createPayrollCommands(db: AsyncDb) {
             );
         } else {
           const people = await tx.read<Row>(
-            "SELECT id,name,title FROM employee_access WHERE status='active' AND role NOT IN ('finance','approver') AND id<>? ORDER BY id",
-            [actor.id],
+            "SELECT id,name,title FROM employee_access WHERE status='active' ORDER BY id",
+            [],
           );
           for (const person of people) {
             const problem = await addPersonFromProfile(tx, {
@@ -828,18 +828,7 @@ export function createPayrollCommands(db: AsyncDb) {
         run.state === 'pending_finance' &&
         run.prepared_by !== actor.id
       ) {
-        const ownLine = (
-          await tx.read<Row>('SELECT 1 found FROM payroll_lines WHERE run_id=? AND employee_id=?', [
-            run.id,
-            actor.id,
-          ])
-        )[0];
-        if (ownLine)
-          throw fail(
-            403,
-            'subject_cannot_review',
-            'لا تراجع المالية مسيرًا يتضمن راتب المراجع نفسه؛ يراجعه زميل آخر.',
-          );
+        // The reviewer's own salary may be in the run (owner decision, decision 013).
         next = 'pending_approver';
         reviewed = actor.id;
       } else if (
@@ -849,14 +838,7 @@ export function createPayrollCommands(db: AsyncDb) {
         run.prepared_by !== actor.id &&
         run.reviewed_by !== actor.id
       ) {
-        const conflict = (
-          await tx.read<Row>('SELECT 1 found FROM payroll_lines WHERE run_id=? AND employee_id=?', [
-            run.id,
-            actor.id,
-          ])
-        )[0];
-        if (conflict)
-          throw fail(403, 'subject_cannot_approve', 'لا يمكن اعتماد مسير يتضمن راتب المعتمد.');
+        // The approver's own salary may be in the run (owner decision, decision 013).
         next = 'closed';
         approved = actor.id;
       } else if (
@@ -1073,10 +1055,10 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         "INSERT INTO payroll_runs(id,period,version,state,prepared_by,policy_id,correction_of,reason,created_at,updated_at) VALUES(?,?,1,'draft',?,?,NULL,?,?,?)",
         [id, period, actor.id, policy.id, reason.trim(), created, created],
       );
-      // On duty now, with the same exclusions as a new run (preparer, finance, approver).
+      // Everyone on duty now, the signers included (owner decision 2026-11-14, decision 013).
       const onDuty = await tx.read<Row>(
-        "SELECT id,name,title FROM employee_access WHERE status='active' AND role NOT IN ('finance','approver') AND id<>? ORDER BY id",
-        [actor.id],
+        "SELECT id,name,title FROM employee_access WHERE status='active' ORDER BY id",
+        [],
       );
       const sourcePeople = new Map(
         (await tx.read<Row>('SELECT * FROM payroll_run_people WHERE run_id=?', [source.id])).map(
@@ -1217,13 +1199,6 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
           !line.component
         )
           throw fail(400, 'invalid_line', 'سطر راتب غير صالح أو مكرر.');
-        // Separation of duties: the preparer never enters a line for their own pay.
-        if (line.employeeId === actor.id)
-          throw fail(
-            403,
-            'preparer_cannot_include_self',
-            'لا يضيف معدّ المسير سطرًا لراتبه؛ يُعدّ راتبه في مسير يعده زميل آخر.',
-          );
         const subject = (
           await tx.read<Row>('SELECT status FROM employee_access WHERE id=?', [
             String(line.employeeId),

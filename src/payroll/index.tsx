@@ -1,6 +1,7 @@
 import { money, PayslipPaper } from './PayslipPaper';
 import { PayrollRegisterPaper, PayrollRegisterView } from './PayrollRegister';
 import { PayrollPolicyForm } from './PayrollPolicyForm';
+import { GosiExplainer } from './GosiExplainer';
 import { GOSI_CATEGORIES, GOSI_CATEGORY_LABEL } from '../../shared/gosi';
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -411,7 +412,11 @@ export function PayrollPage({ actor }: Props) {
                     بحد أعلى {(selectedPolicy.gosi.maxWageMinor / 100).toLocaleString('en-US')} ريال
                   </li>
                 </ul>
-              ) : (
+              ) : null}
+              {selectedPolicy.gosi && !selectedPolicy.gosiInvalid && (
+                <GosiExplainer rule={selectedPolicy.gosi} />
+              )}
+              {selectedPolicy.gosiInvalid || selectedPolicy.gosi ? null : (
                 <span>هذا الإصدار بلا قسم تأمينات؛ لا يُحسم تأمين في المسير.</span>
               )}
               {policies.length > 1 && actor.role === 'hr' && (
