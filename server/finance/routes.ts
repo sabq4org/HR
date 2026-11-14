@@ -15,7 +15,11 @@ import type {
   FinanceSeller,
   FinanceSettings,
 } from '../../shared/finance.js';
-import { financeDocumentTypes, zeroLineDocumentTypes } from '../../shared/finance.js';
+import {
+  completeSeller,
+  financeDocumentTypes,
+  zeroLineDocumentTypes,
+} from '../../shared/finance.js';
 import { todayInRiyadh, type AsyncDb } from '../database.js';
 import type { CustomerStatement } from '../../shared/ledger.js';
 import { decryptSensitive, encryptSensitive } from '../administration/security.js';
@@ -456,9 +460,12 @@ async function getSettings(
     )
   )[0];
   return {
-    seller: row
-      ? safeJson<FinanceSeller>(row.seller_ciphertext, `finance:seller:${ownerId}`)
-      : emptySeller(),
+    // The private workspace issues for one company; its registered details back any empty field.
+    seller: ((saved) => (privateMode ? completeSeller(saved) : saved))(
+      row
+        ? safeJson<FinanceSeller>(row.seller_ciphertext, `finance:seller:${ownerId}`)
+        : emptySeller(),
+    ),
     version: row?.version ?? 1,
     mode: privateMode ? 'private' : 'preview',
     apiKeyConfigured: !!key,

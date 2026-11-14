@@ -3,6 +3,7 @@ import { Printer } from 'lucide-react';
 import type { FinanceCustomer } from '../../shared/finance';
 import type { CustomerStatement, CustomerStatementRow } from '../../shared/ledger';
 import { api, Modal } from '../lib';
+import { SellerBlock } from './SellerBlock';
 
 const amount = (halalas: number) =>
   new Intl.NumberFormat('en-SA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(
@@ -138,19 +139,7 @@ function StatementPaper({ statement }: { statement: CustomerStatement }) {
   return (
     <article className="fin-document-paper fin-statement-paper" dir="rtl" lang="ar">
       <header className="fin-doc-head">
-        <div className="fin-doc-brand">
-          <img src="/brand/sabq-logo.svg" alt="سبق" />
-          <div>
-            <b>{seller.name || 'سبق'}</b>
-            {seller.address.line || seller.address.city ? (
-              <span>{[seller.address.line, seller.address.city].filter(Boolean).join('، ')}</span>
-            ) : null}
-            {seller.vatNumber && <span>الرقم الضريبي / VAT No: {seller.vatNumber}</span>}
-            {seller.commercialRegistration && (
-              <span>السجل التجاري / CR: {seller.commercialRegistration}</span>
-            )}
-          </div>
-        </div>
+        <SellerBlock seller={seller} />
         <aside className="fin-doc-heading">
           <h1>كشف حساب العميل</h1>
           <span>Customer Statement</span>

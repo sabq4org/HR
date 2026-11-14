@@ -7,6 +7,12 @@ import type { Actor } from '../../server/administration/service.js';
 import { registerFinance, type WafeqClientLike } from '../../server/finance/routes.js';
 import { vatPeriod } from '../../server/finance/ledger.js';
 import { createDatabase, createPostgresDatabase, type AsyncDb } from '../../server/database.js';
+import {
+  companySeller,
+  completeSeller,
+  sellerAddressText,
+  type FinanceSeller,
+} from '../../shared/finance.js';
 import type {
   AccountStatement,
   AgingRow,
@@ -727,6 +733,19 @@ async function statementScenario(db: AsyncDb) {
   const h = await harness(db);
   try {
     await h.send('/api/finance/ledger/setup', {});
+    // With nothing saved yet, the private workspace prints the registered company details.
+    const seller = (await h.get<{ settings: { seller: FinanceSeller } }>('/api/finance/settings'))
+      .body.settings.seller;
+    assert.deepEqual(seller, companySeller);
+    assert.equal(
+      sellerAddressText(seller.address),
+      '6567 طريق صلاح الدين الأيوبي، حي الزهراء، الرياض 12812',
+    );
+    assert.equal(
+      completeSeller({ ...seller, name: 'اسم محفوظ', vatNumber: '' }).name,
+      'اسم محفوظ',
+      'a saved value wins over the default',
+    );
     const invoiceId = await invoice(h);
     await invoice(h); // another customer's invoice must never leak into this statement
     const customers = (await h.get<{ customers: { id: string }[] }>('/api/finance')).body.customers;
@@ -774,6 +793,7 @@ async function statementScenario(db: AsyncDb) {
         ['receipt', '2026-07-20', 0, 500_000, 650_000],
       ],
     );
+    assert.equal(paid.seller.name, companySeller.name);
     assert.equal(paid.invoicedHalalas, 1_150_000);
     assert.equal(paid.paidHalalas, 500_000);
     assert.equal(paid.closingHalalas, 650_000);
