@@ -574,7 +574,7 @@ export const formDefinitions: FormDefinition[] = [
     confidential: true,
     fields: [
       field('bankName', 'اسم البنك', 'text', { ...required, ...financial }),
-      field('iban', 'الآيبان التجريبي', 'text', { ...required, ...financial }),
+      field('iban', 'رقم الآيبان', 'text', { ...required, ...financial }),
       reason,
     ],
   },

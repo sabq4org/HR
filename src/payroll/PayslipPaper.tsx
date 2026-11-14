@@ -19,7 +19,7 @@ export function PayslipPaper({ run, employeeId }: { run: PayrollRun; employeeId:
     <section className="payroll-print-sheet" aria-label="كشف راتب الموظف">
       <header>
         <div>
-          <h1>كشف راتب تجريبي</h1>
+          <h1>كشف راتب</h1>
           <p>{printableEmployee}</p>
           <p>الفترة {run.period}</p>
         </div>

@@ -88,6 +88,8 @@ export interface IssuedDocument {
   facts: { label: string; value: string }[];
   approvedByName: string;
   version: 1;
+  /** false when issued from real private records; absent on older synthetic documents. */
+  synthetic?: boolean;
 }
 export interface WorkflowEvent {
   id: string;

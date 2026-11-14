@@ -2,18 +2,29 @@ import { dateLabel } from '../lib';
 import type { IssuedDocument } from '../../shared/administration';
 export function IssuedLetter({ document: doc }: { document: IssuedDocument }) {
   const en = doc.language === 'en';
+  const synthetic = doc.synthetic !== false;
   return (
     <article
       className="issued-letter"
       dir={en ? 'ltr' : 'rtl'}
       lang={doc.language}
-      aria-label={en ? 'Approved preview document' : 'المستند التجريبي المعتمد'}
+      aria-label={
+        en
+          ? synthetic
+            ? 'Approved preview document'
+            : 'Approved document'
+          : synthetic
+            ? 'المستند التجريبي المعتمد'
+            : 'المستند المعتمد'
+      }
     >
       <header>
         <img src="/brand/sabq-logo.svg" width="76" height="70" alt="سبق" />
         <div>
           <b>{en ? 'Sabq · People operations' : 'سبق · الشؤون الإدارية'}</b>
-          <span>{en ? 'Internal synthetic preview' : 'معاينة داخلية · بيانات اصطناعية'}</span>
+          {synthetic ? (
+            <span>{en ? 'Internal synthetic preview' : 'معاينة داخلية · بيانات اصطناعية'}</span>
+          ) : null}
         </div>
       </header>
       <div className="issued-meta">
