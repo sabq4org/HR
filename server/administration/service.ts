@@ -7,7 +7,7 @@ import { decryptSensitive, encryptSensitive } from './security.js';
 import { fault, roleFromState, validateValues } from './validation.js';
 import { serviceActorName } from '../service-api/keys.js';
 
-export type Actor = { id: string; role: Role };
+export type Actor = { id: string; role: Role; owner?: boolean };
 export type EmployeeRow = {
   id: string;
   employee_number: string;

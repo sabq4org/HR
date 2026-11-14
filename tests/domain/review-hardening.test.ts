@@ -1,6 +1,7 @@
 // Regression tests for the 2026-11-14 code-review findings.
 // Each test reproduces a confirmed gap and must keep failing if the fix is removed.
 // Context: docs/decisions/004-security-hardening.md and CHANGELOG.md.
+import { isSystemOwner } from '../../server/system-owner.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -163,10 +164,13 @@ test('HR cannot approve an attendance record it entered; the manager still can',
   }
 });
 
-const payrollIdentities: Record<string, { id: string; role: Role }> = {
+const payrollIdentities: Record<string, { id: string; role: Role; owner?: boolean }> = {
   hr: { id: 'emp-noura', role: 'hr' },
   finance: { id: 'emp-reem', role: 'finance' },
   approver: { id: 'emp-abdullah', role: 'approver' },
+  // Decision 014: a second HR account, with and without the system-owner capability.
+  owner: { id: 'emp-sara', role: 'hr', owner: true },
+  hrPeer: { id: 'emp-sara', role: 'hr' },
 };
 async function payrollHarness() {
   const db = await createDatabase();
@@ -401,5 +405,54 @@ test('hosted preview reclaims untouched workspaces so a cookieless flood cannot 
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await hosted.close();
+  }
+});
+
+test('the system owner (HR) approves a payroll run it did not prepare; plain HR cannot (decision 014)', async () => {
+  const f = await payrollHarness();
+  try {
+    const run = await newRun(f, '2026-12');
+    const submitted = await f.api('hr', `/${run.id}/actions`, 'POST', {
+      version: run.version,
+      action: 'submit',
+    });
+    assert.equal(submitted.status, 200, JSON.stringify(submitted.body));
+    const reviewed = await f.api('finance', `/${run.id}/actions`, 'POST', {
+      version: submitted.body.run.version,
+      action: 'review',
+    });
+    assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+    const plain = await f.api('hrPeer', `/${run.id}/actions`, 'POST', {
+      version: reviewed.body.run.version,
+      action: 'approve',
+    });
+    assert.equal(plain.status, 403);
+    const preparer = await f.api('hr', `/${run.id}`);
+    assert.equal(preparer.body.run.canApprove, false);
+    const seen = await f.api('owner', `/${run.id}`);
+    assert.equal(seen.body.run.canApprove, true);
+    const approved = await f.api('owner', `/${run.id}/actions`, 'POST', {
+      version: reviewed.body.run.version,
+      action: 'approve',
+    });
+    assert.equal(approved.status, 200, JSON.stringify(approved.body));
+    assert.equal(approved.body.run.state, 'closed');
+  } finally {
+    await f.close();
+  }
+});
+
+test('isSystemOwner holds only for HR accounts listed in system_owners', async () => {
+  const db = await createDatabase();
+  try {
+    assert.equal(await isSystemOwner(db, 'emp-sara', 'hr'), false);
+    await db.execute(
+      'INSERT INTO system_owners(employee_id,granted_at,granted_reason) VALUES(?,?,?)',
+      ['emp-sara', new Date().toISOString(), 'synthetic test'],
+    );
+    assert.equal(await isSystemOwner(db, 'emp-sara', 'hr'), true);
+    assert.equal(await isSystemOwner(db, 'emp-sara', 'finance'), false);
+  } finally {
+    await db.close();
   }
 });

@@ -16,6 +16,8 @@ export interface Employee {
   status: 'active' | 'on_leave' | 'suspended' | 'terminated';
   /** Id of the active profile photo document, or null. Bytes come from /api/employees/:id/photo. */
   photoId?: string | null;
+  /** Session payload only: an HR account that may also approve payroll (decision 014). */
+  systemOwner?: boolean;
 }
 export interface Balance {
   allocated: number;

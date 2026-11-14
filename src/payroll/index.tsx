@@ -976,7 +976,7 @@ export function PayrollPage({ actor }: Props) {
                     <Check size={16} /> إكمال المراجعة وإرساله للمعتمد
                   </button>
                 )}
-                {actor.role === 'approver' && selected.state === 'pending_approver' && (
+                {selected.canApprove && (
                   <button
                     className="payroll-button"
                     onClick={() => void action(selected, 'approve')}
@@ -994,7 +994,8 @@ export function PayrollPage({ actor }: Props) {
                     رفض مع السبب
                   </button>
                 )}
-                {actor.role === 'approver' && selected.state === 'pending_approver' && (
+                {(selected.canApprove ||
+                  (actor.role === 'approver' && selected.state === 'pending_approver')) && (
                   <button
                     className="payroll-button secondary"
                     onClick={() => void action(selected, 'reject')}

@@ -283,6 +283,8 @@ export interface PayrollRun {
   closedAt: string | null;
   canEdit: boolean;
   canReview: boolean;
+  /** Approver, or the system owner (decision 014), at the approval step of a run they did not prepare or review. */
+  canApprove?: boolean;
   timeline: WorkflowEvent[];
 }
 export interface AuditRecord {
