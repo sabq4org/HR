@@ -106,11 +106,12 @@ test('payroll API enforces staged roles, approval independence, employee scope, 
     const draft = made.body.run;
     assert.equal(draft.state, 'draft');
     assert.ok(draft.totals.netMinor > 0);
-    assert.ok(
-      draft.lines.every(
-        (line: any) => !['emp-noura', 'emp-reem', 'emp-abdullah'].includes(line.employeeId),
-      ),
-    );
+    // The preparer, reviewer and approver are paid in the same run (decision 013).
+    for (const signer of ['emp-noura', 'emp-reem', 'emp-abdullah'])
+      assert.ok(
+        draft.lines.some((line: any) => line.employeeId === signer),
+        `${signer} is in the run`,
+      );
     assert.ok(
       draft.lines.some(
         (line: any) =>
@@ -380,7 +381,7 @@ test('payroll commands are concurrent-safe and payload amounts are validated in 
   }
 });
 
-test('approver cannot close a run that includes their own salary', async () => {
+test('approver closes a run that includes their own salary (decision 013)', async () => {
   const f = await fixture();
   try {
     const created = await f.api<any>(
@@ -435,7 +436,7 @@ test('approver cannot close a run that includes their own salary', async () => {
       { version: 4, action: 'approve' },
       'subject-approve',
     );
-    assert.equal(decision.status, 403);
+    assert.equal(decision.status, 200, JSON.stringify(decision.body));
     assert.equal(submitted.body.run.state, 'pending_finance');
   } finally {
     await f.close();
