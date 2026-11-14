@@ -37,6 +37,8 @@ import type {
   FinanceSeller,
   FinanceSettings,
 } from '../../shared/finance';
+import { CustomerCard } from './CustomerCard';
+import { ExportPdfButton } from './ExportPdf';
 import type { InvoiceLedgerState, LedgerAccount, LedgerOverview } from '../../shared/ledger';
 import { InvoicePaymentForm } from './InvoicePaymentForm';
 import { useSearchParams } from 'react-router-dom';
@@ -197,6 +199,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
   // current settings; whatever it froze at the time stays as it was.
   const docSeller = (seller: FinanceSeller) =>
     overview ? completeSeller(seller, overview.settings.seller) : seller;
+  const [cardCustomer, setCardCustomer] = useState<FinanceCustomer | null>(null);
   const [statementCustomer, setStatementCustomer] = useState<FinanceCustomer | null>(null);
   const [customerForm, setCustomerForm] = useState<FinanceCustomerInput>(blankCustomer());
   const [quoteForm, setQuoteForm] = useState<FinanceQuoteInput>(() => ({
@@ -732,7 +735,13 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                       {overview.customers.map((c) => (
                         <tr key={c.id}>
                           <td>
-                            <b>{c.name}</b>
+                            <button
+                              className="fin-customer-link"
+                              title="عرض بيانات العميل"
+                              onClick={() => setCardCustomer(c)}
+                            >
+                              <b>{c.name}</b>
+                            </button>
                             <small>{c.email || 'لا يوجد بريد'}</small>
                           </td>
                           <td>{c.vatNumber || '—'}</td>
@@ -1813,6 +1822,22 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
             />
           ) : null;
         })()}
+      {cardCustomer && (
+        <CustomerCard
+          customer={cardCustomer}
+          quotes={overview?.quotes ?? []}
+          invoices={overview?.invoices ?? []}
+          close={() => setCardCustomer(null)}
+          edit={() => {
+            setCardCustomer(null);
+            beginCustomer(cardCustomer);
+          }}
+          statement={() => {
+            setCardCustomer(null);
+            setStatementCustomer(cardCustomer);
+          }}
+        />
+      )}
       {statementCustomer && (
         <CustomerStatementModal
           customer={statementCustomer}
@@ -1822,9 +1847,13 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
       {preview && (
         <Modal title={`معاينة عرض السعر · ${preview.number}`} close={() => setPreview(null)} wide>
           <div className="fin-preview-actions">
+            <ExportPdfButton
+              path={`/quotes/${encodeURIComponent(preview.id)}/document.pdf`}
+              filename={preview.number}
+            />
             <button className="button secondary" onClick={() => window.print()}>
               <Printer size={16} />
-              طباعة أو حفظ PDF
+              طباعة
             </button>
           </div>
           <QuotePaper quote={preview} seller={docSeller(preview.seller)} />
@@ -1838,10 +1867,16 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
         >
           <div className="fin-preview-actions">
             {['cleared', 'reported'].includes(finalInvoice.status) && finalInvoice.qrCode ? (
-              <button className="button primary" onClick={() => window.print()}>
-                <Printer size={16} />
-                طباعة فاتورة سبق
-              </button>
+              <>
+                <ExportPdfButton
+                  path={`/invoices/${encodeURIComponent(finalInvoice.id)}/document.pdf`}
+                  filename={finalInvoice.number}
+                />
+                <button className="button secondary" onClick={() => window.print()}>
+                  <Printer size={16} />
+                  طباعة فاتورة سبق
+                </button>
+              </>
             ) : (
               <Status text="معاينة داخلية غير صالحة للإصدار أو الطباعة" kind="waiting" />
             )}

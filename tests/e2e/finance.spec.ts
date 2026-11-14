@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import AxeBuilder from '@axe-core/playwright';
 import { resolve } from 'node:path';
 
@@ -109,6 +110,14 @@ test('private finance customer, quote, invoice, Wafeq readiness, and official ou
   await expect(page.locator('.fin-quote-paper .fin-bank-card')).toContainText('مستفيد اختباري');
   await expect(page.locator('.fin-quote-paper .fin-notes-box')).toContainText('بيانات اصطناعية');
   await expect(page.locator('.fin-quote-paper img[alt*="رمز"]')).toHaveCount(0);
+  // Export downloads the PDF file directly, without the browser's print dialog.
+  const [exported] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'تصدير PDF' }).click(),
+  ]);
+  expect(exported.suggestedFilename()).toMatch(/\.pdf$/);
+  const exportedPath = await exported.path();
+  expect(readFileSync(exportedPath).subarray(0, 5).toString('latin1')).toBe('%PDF-');
   if (testInfo.project.name === 'chromium') {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.screenshot({
