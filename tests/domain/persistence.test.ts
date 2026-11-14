@@ -33,7 +33,7 @@ test('SQLite adapter awaits transactions, rolls back, and reopens migrations', a
     );
     assert.equal(
       (await first.read<{ n: number }>('SELECT count(*) AS n FROM schema_migrations'))[0].n,
-      7,
+      11,
     );
   } finally {
     await first.close();
@@ -55,7 +55,7 @@ test(
             'SELECT version FROM schema_migrations ORDER BY version',
           )
         ).map((row) => row.version),
-        [1, 2, 3, 4, 5, 6, 7],
+        [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12],
       );
       const roles = await db.read<{ id: string; role: string }>(
         "SELECT id,role FROM employee_access WHERE id IN ('emp-reem','emp-abdullah','emp-hind') ORDER BY id",
@@ -124,6 +124,36 @@ test(
       );
     } finally {
       if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+      await db.close();
+    }
+  },
+);
+
+test(
+  'PostgreSQL private seed=false migrations add no synthetic policies or fixtures',
+  { skip: !pgUrl },
+  async () => {
+    const schema = `hr_preview_${randomBytes(16).toString('hex')}`;
+    const db = await createPostgresDatabase(pgUrl!, schema, { seed: false });
+    try {
+      for (const table of [
+        'employees',
+        'policy_versions',
+        'work_schedules',
+        'employment_periods',
+        'leave_requests',
+        'leave_ledger',
+        'administrative_requests',
+        'payroll_runs',
+        'administrative_policies',
+      ]) {
+        assert.equal(
+          (await db.read<{ n: string }>(`SELECT COUNT(*)::text AS n FROM ${table}`))[0].n,
+          '0',
+          `private schema should have no synthetic rows in ${table}`,
+        );
+      }
+    } finally {
       await db.close();
     }
   },

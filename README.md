@@ -4,6 +4,8 @@
 
 [المعاينة العامة](https://hr-production-90b34ef5.up.railway.app) · [حالة التنفيذ والقبول](STATE.md) · [دليل التجربة](docs/demo-guide.md) · [تغطية الحزمة المصدرية](docs/administrative-scope.md)
 
+يتضمن هذا الفرع أيضًا وحدة فوترة للنسخة الخاصة، قيد التطوير ولم تُنشر: العملاء، عروض الأسعار بهوية سبق، التحويل إلى مسودة فاتورة، وإعداد ربط وافق. [دليل الفوترة](docs/private-finance.md) · [تقرير الدفعة وحدود القبول](docs/releases/2026-11-14-private-finance.md) · [عقد واجهة وافق](docs/wafeq-api-contract.md). اكتمال المرحلة الثانية واسترجاع QR/XML الرسميين ما زالا ينتظران تأكيد المزود؛ نجاح البناء أو حفظ المفتاح لا يثبت الاعتماد الضريبي.
+
 ## التشغيل المحلي
 
 Node.js 24.13 أو أحدث وnpm:
@@ -38,12 +40,13 @@ npm test
 npm run build
 npx playwright install chromium webkit
 npm run test:e2e
+npm run test:finance
 npm run test:recovery
 ```
 
 اختبارات المتصفح تستخدم قاعدة مؤقتة مستقلة على المنفذ 4318. للتأكد من المعاينة العامة المأذون بها: `HR_TEST_HOSTED=true npm run test:e2e`؛ النطاق مثبت ولا يقبل وجهة إنتاج أخرى. `HR_TEST_DATABASE_URL` يشغّل اختبار PostgreSQL المعزول؛ وتشغيل `HR_ACCEPTANCE_POSTGRES=true node --import tsx --test tests/domain/workflows-acceptance.test.ts` يختبر مسارات الخدمات على PostgreSQL. الاستعادة تختبر SQLite دائمًا وPostgreSQL إذا توفر اتصال اختبار **محلي** وأدوات pg_dump/pg_restore. النتائج المنفذة فعلًا في [STATE.md](STATE.md).
 
-GitHub Actions يشغّل التنسيق والأنواع والاختبارات والبناء والمتصفحين مع PostgreSQL 17 تجريبيًا عند push وPR.
+GitHub Actions يشغّل التنسيق والأنواع والاختبارات والبناء والمتصفحين مع PostgreSQL 17 تجريبيًا عند الدفع إلى `main` وعند فتح PR. اختبار المالية مستقل ببيانات اصطناعية ومزود وهمي على المنفذ 4319، ولا يتصل بوافق.
 
 ## الاستضافة والحفظ
 

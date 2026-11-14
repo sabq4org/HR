@@ -37,6 +37,7 @@ import {
   WalletCards,
   Settings2,
   History,
+  ReceiptText,
 } from 'lucide-react';
 import type { Bootstrap, DemoPersona, Employee } from '../shared/contracts';
 import type { AdministrativeOverview } from '../shared/administration';
@@ -72,6 +73,7 @@ import {
 } from './administration';
 import { PayrollPage } from './payroll';
 import { EmployeeImportPage } from './imports';
+import { FinancePortal } from './finance/portal';
 
 function EmployeeFileRoute() {
   const { id } = useParams();
@@ -140,13 +142,22 @@ function Login({
   busy,
   error,
   hosted,
+  privateData,
+  privateHosted,
+  needsAccess,
+  onAccess,
 }: {
   personas: DemoPersona[];
   onSelect: (id: string) => void;
   busy: boolean;
   error: string;
   hosted: boolean;
+  privateData: boolean;
+  privateHosted: boolean;
+  needsAccess: boolean;
+  onAccess: (password: string) => void;
 }) {
+  const [password, setPassword] = useState('');
   return (
     <main className="login-page">
       <section className="login-story">
@@ -177,10 +188,48 @@ function Login({
           <Brand />
         </div>
         <div className="login-content">
-          <span className="demo-pill">معاينة تفاعلية</span>
+          <span className="demo-pill">
+            {needsAccess || privateHosted
+              ? 'بيانات خاصة · دخول محمي'
+              : privateData
+                ? 'بيانات خاصة · هذا الجهاز فقط'
+                : 'معاينة تفاعلية'}
+          </span>
           <h2>أهـلًا بك في مساحتـك</h2>
-          <p>اختر حسابًا لتستكشف التجربة من زاوية مختلفة.</p>
-          <PersonaPicker personas={personas} onSelect={onSelect} busy={busy} />
+          <p>
+            {needsAccess
+              ? 'أدخل كلمة مرور الدخول التي حددها مسؤول النظام.'
+              : privateData
+                ? personas.length
+                  ? 'اختر حسابك من الحسابات الممنوحة صلاحية.'
+                  : 'لا توجد حسابات ممنوحة بعد. امنح صلاحية الموارد البشرية لحسابك عبر أداة الصلاحيات ثم أعد التحميل.'
+                : 'اختر حسابًا لتستكشف التجربة من زاوية مختلفة.'}
+          </p>
+          {needsAccess ? (
+            <form
+              className="access-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (password) onAccess(password);
+              }}
+            >
+              <label htmlFor="access-password">كلمة المرور</label>
+              <input
+                id="access-password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                disabled={busy}
+                required
+              />
+              <button className="button primary" type="submit" disabled={busy || !password}>
+                دخول
+              </button>
+            </form>
+          ) : (
+            <PersonaPicker personas={personas} onSelect={onSelect} busy={busy} />
+          )}
           {error && (
             <div className="form-error" role="alert">
               {error}
@@ -189,9 +238,25 @@ function Login({
           <div className="login-privacy">
             <ShieldCheck size={19} />
             <p>
-              حسابات وأسماء وهمية للتجربة فقط.
-              <br />
-              لا تستخدم بيانات موظفين حقيقية.
+              {needsAccess || privateHosted ? (
+                <>
+                  بيانات موظفين حقيقية محفوظة ومشفرة.
+                  <br />
+                  لا تشارك كلمة المرور، وأغلق الجلسة على الأجهزة المشتركة.
+                </>
+              ) : privateData ? (
+                <>
+                  بيانات موظفين حقيقية محفوظة ومشفرة على هذا الجهاز فقط.
+                  <br />
+                  لا تشارك الشاشة أو ملف القاعدة أو مفتاح التشفير.
+                </>
+              ) : (
+                <>
+                  حسابات وأسماء وهمية للتجربة فقط.
+                  <br />
+                  لا تستخدم بيانات موظفين حقيقية.
+                </>
+              )}
               {hosted && (
                 <>
                   <br />
@@ -212,6 +277,9 @@ export default function App() {
   const [personas, setPersonas] = useState<DemoPersona[]>([]);
   const [loading, setLoading] = useState(true);
   const [hosted, setHosted] = useState(false);
+  const [privateData, setPrivateData] = useState(false);
+  const [privateHosted, setPrivateHosted] = useState(false);
+  const [needsAccess, setNeedsAccess] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [dialog, setDialog] = useState<
@@ -249,18 +317,34 @@ export default function App() {
       const session = await api<{
         me: Employee | null;
         personas: DemoPersona[];
-        mode?: 'synthetic-local' | 'synthetic-hosted';
+        mode?: 'synthetic-local' | 'synthetic-hosted' | 'private-local' | 'private-hosted';
       }>('/session');
+      setNeedsAccess(false);
       setPersonas(session.personas);
       setHosted(session.mode === 'synthetic-hosted');
+      setPrivateData(session.mode === 'private-local' || session.mode === 'private-hosted');
+      setPrivateHosted(session.mode === 'private-hosted');
       setData(null);
       if (session.me) await refresh();
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as { code?: string }).code === 'ACCESS_REQUIRED') setNeedsAccess(true);
+      else setError((e as Error).message);
     } finally {
       setLoading(false);
     }
   }, [refresh]);
+  const unlock = async (password: string) => {
+    setBusy(true);
+    setError('');
+    try {
+      await api('/access', { method: 'POST', body: JSON.stringify({ password }) });
+      await initialize();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   useEffect(() => {
     void initialize();
     return () => {
@@ -328,6 +412,7 @@ export default function App() {
       '/attendance': 'الحضور والعمل',
       '/documents': 'المستندات',
       '/payroll': 'الرواتب',
+      '/finance': 'النظام المالي',
       '/reports': 'التقارير',
       '/settings/policies': 'القواعد والسياسات',
       '/audit': 'سجل التدقيق',
@@ -344,7 +429,7 @@ export default function App() {
       </main>
     );
   if (!data) {
-    if (error && !personas.length)
+    if (error && !personas.length && !needsAccess)
       return (
         <main className="boot-state">
           <Brand />
@@ -362,6 +447,10 @@ export default function App() {
         busy={busy}
         error={error}
         hosted={hosted}
+        privateData={privateData}
+        privateHosted={privateHosted}
+        needsAccess={needsAccess}
+        onAccess={(password) => void unlock(password)}
       />
     );
   }
@@ -388,6 +477,7 @@ export default function App() {
       : []),
     { to: '/calendar', label: 'تقويم الفريق', Icon: CalendarDays },
     { to: '/documents', label: 'المستندات', Icon: Files },
+    ...(data.financeAccess ? [{ to: '/finance', label: 'النظام المالي', Icon: ReceiptText }] : []),
     {
       to: '/payroll',
       label: ['employee', 'manager'].includes(data.me.role) ? 'قسائم راتبي' : 'الرواتب',
@@ -479,7 +569,11 @@ export default function App() {
             </button>
             <div className="demo-caption">
               <i />
-              بيئة تجريبية · بيانات وهمية
+              {privateHosted
+                ? 'بيانات خاصة · دخول محمي'
+                : privateData
+                  ? 'بيانات خاصة · هذا الجهاز فقط'
+                  : 'بيئة تجريبية · بيانات وهمية'}
             </div>
           </div>
         </aside>
@@ -541,11 +635,13 @@ export default function App() {
                   </>
                 }
               />
-              <Route path="/profile" element={<ProfilePage self />} />
+              <Route path="/profile" element={<EmployeeFilePage title="ملفي الوظيفي" />} />
+              <Route path="/profile/overview" element={<ProfilePage self />} />
               <Route path="/profile/file" element={<EmployeeFilePage />} />
               <Route path="/employees" element={<PeoplePage />} />
               <Route path="/employees/import" element={<EmployeeImportPage />} />
-              <Route path="/employees/:id" element={<ProfilePage />} />
+              <Route path="/employees/:id" element={<EmployeeFileRoute />} />
+              <Route path="/employees/:id/overview" element={<ProfilePage />} />
               <Route path="/employees/:id/file" element={<EmployeeFileRoute />} />
               <Route path="/leaves" element={<LeavesPage />} />
               <Route
@@ -566,6 +662,7 @@ export default function App() {
               <Route path="/requests/:id" element={<RequestRoute />} />
               <Route path="/attendance" element={<AttendancePage />} />
               <Route path="/documents" element={<DocumentsPage />} />
+              <Route path="/finance" element={<FinancePortal />} />
               <Route path="/payroll" element={<PayrollPage actor={data.me} />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/settings/policies" element={<PoliciesPage />} />
@@ -576,7 +673,13 @@ export default function App() {
           <footer className="app-footer">
             <span>سبق · مساحة الفريق</span>
             <span>
-              {hosted ? 'تجربتك مستقلة · بيانات وهمية وتغييرات مؤقتة' : 'بيانات تجريبية فقط'}
+              {privateHosted
+                ? 'بيانات خاصة · دخول محمي بكلمة مرور'
+                : privateData
+                  ? 'بيانات خاصة · على هذا الجهاز فقط'
+                  : hosted
+                    ? 'تجربتك مستقلة · بيانات وهمية وتغييرات مؤقتة'
+                    : 'بيانات تجريبية فقط'}
             </span>
           </footer>
         </div>

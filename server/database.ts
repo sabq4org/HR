@@ -237,7 +237,7 @@ class PgTx implements AsyncDb {
   }
 }
 
-const SCHEMA_RE = /^hr_(?:development|test_[a-z0-9_]+|preview_[a-f0-9]{16,64})$/;
+const SCHEMA_RE = /^hr_(?:development|private|test_[a-z0-9_]+|preview_[a-f0-9]{16,64})$/;
 function quoteSchema(schema: string): string {
   if (!SCHEMA_RE.test(schema) || schema === 'hr_public')
     throw new Error('Refusing an unsafe or public PostgreSQL schema name.');
@@ -405,14 +405,27 @@ async function applyPostgresMigrations(pool: Pool, schema: string): Promise<void
   }
 }
 
-export async function createDatabase(path = ':memory:'): Promise<Db> {
+export async function createDatabase(
+  path = ':memory:',
+  options: { seed?: boolean } = {},
+): Promise<Db> {
   const connection = new DatabaseSync(path);
   connection.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;');
   await applySqliteMigrations(connection);
   const db = new SqliteAdapter(connection);
   try {
+    // Private (real-data) databases never receive synthetic personas or fixtures.
+    if (options.seed === false) {
+      const synthetic = await db.read<{ id: string }>(
+        "SELECT id FROM employees WHERE id IN ('emp-noura','emp-omar','emp-sara') LIMIT 1",
+      );
+      if (synthetic.length)
+        throw new Error('Refusing to open a synthetic demo database as a private data database.');
+      return db;
+    }
     await seed(db);
     await seedAdministrationProfiles(db);
+    await seedSyntheticPayrollPolicies(db);
     return db;
   } catch (error) {
     await db.close();
@@ -420,7 +433,11 @@ export async function createDatabase(path = ':memory:'): Promise<Db> {
   }
 }
 
-export async function createPostgresDatabase(url: string, schema = 'hr_development'): Promise<Db> {
+export async function createPostgresDatabase(
+  url: string,
+  schema = 'hr_development',
+  options: { seed?: boolean } = {},
+): Promise<Db> {
   if (!url) throw new Error('A PostgreSQL connection string is required.');
   const quoted = quoteSchema(schema);
   const dropSchema = schema.startsWith('hr_preview_');
@@ -441,13 +458,66 @@ export async function createPostgresDatabase(url: string, schema = 'hr_developme
   const db = new PostgresAdapter(url, shared, schema, dropSchema);
   try {
     await applyPostgresMigrations(shared.pool, schema);
+    // Private (real-data) schemas never receive synthetic personas or fixtures.
+    if (options.seed === false) {
+      const synthetic = await db.read<{ id: string }>(
+        "SELECT id FROM employees WHERE id IN ('emp-noura','emp-omar','emp-sara') LIMIT 1",
+      );
+      if (synthetic.length)
+        throw new Error('Refusing to open a synthetic demo schema as a private data schema.');
+      return db;
+    }
     await seed(db);
     await seedAdministrationProfiles(db);
+    await seedSyntheticPayrollPolicies(db);
     return db;
   } catch (error) {
     await db.close();
     throw error;
   }
+}
+
+/** Payroll policy examples belong to synthetic workspaces, never to private schemas. */
+async function seedSyntheticPayrollPolicies(db: Db): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(
+      `INSERT INTO administrative_policies(id,policy_key,version,name,effective_from,source,state,values_json,created_by,approved_by,created_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+      [
+        'payroll-policy-demo-v1',
+        'payroll-demo',
+        1,
+        'قواعد رواتب تجريبية',
+        '2026-01-01',
+        'قيم تجريبية للعرض فقط؛ لا تمثل نظام العمل أو التأمينات أو مدد.',
+        'synthetic_approved',
+        '{"currency":"SAR","calculation":"synthetic-profile-components"}',
+        'emp-noura',
+        'emp-abdullah',
+        '2026-01-01T00:00:00.000Z',
+      ],
+    );
+    await tx.execute(
+      `INSERT INTO administrative_policies(id,policy_key,version,name,effective_from,source,state,values_json,created_by,approved_by,created_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+      [
+        'payroll-policy-demo-v2',
+        'payroll-demo',
+        2,
+        'قواعد رواتب تجريبية من مكونات الملف',
+        '2026-01-01',
+        'مكونات ملف اصطناعي فقط؛ لا نسب نظامية أو تأمينات أو تحويل مصرفي.',
+        'synthetic_approved',
+        '{"currency":"SAR","calculation":"synthetic-profile-components"}',
+        'emp-noura',
+        'emp-abdullah',
+        '2026-11-14T00:00:00.000Z',
+      ],
+    );
+    await tx.execute(
+      "UPDATE administrative_policies SET state='retired' WHERE id='payroll-policy-demo-v1' AND values_json LIKE '%synthetic-flat-demo%'",
+    );
+  });
 }
 
 async function seed(db: Db): Promise<void> {

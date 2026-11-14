@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { X, Check, Clock3, Ban, ChevronLeft } from 'lucide-react';
 import type { Bootstrap, Employee, LeaveRequest, LeaveStatus, Role } from '../shared/contracts';
 
@@ -62,7 +62,10 @@ export async function api<T>(url: string, options?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.error?.message || 'تعذّر إكمال العملية. حاول مرة أخرى.');
+    throw Object.assign(
+      new Error(payload?.error?.message || 'تعذّر إكمال العملية. حاول مرة أخرى.'),
+      { code: payload?.error?.code as string | undefined, status: response.status },
+    );
   }
   if (response.status === 204) return undefined as T;
   if (!response.headers.get('content-type')?.includes('application/json')) {
@@ -87,16 +90,25 @@ export function Avatar({
   person,
   size = 'md',
 }: {
-  person: { initials: string; color: string };
+  person: { initials: string; color: string; id?: string; photoId?: string | null };
   size?: 'sm' | 'md' | 'lg' | 'xl';
 }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  const photo =
+    person.id && person.photoId && failed !== person.photoId
+      ? `/api/employees/${encodeURIComponent(person.id)}/photo?v=${encodeURIComponent(person.photoId)}`
+      : null;
   return (
     <span
-      className={`avatar avatar-${size}`}
+      className={`avatar avatar-${size}${photo ? ' avatar-photo' : ''}`}
       style={{ backgroundColor: person.color }}
       aria-hidden="true"
     >
-      {person.initials}
+      {photo ? (
+        <img src={photo} alt="" loading="lazy" onError={() => setFailed(person.photoId ?? null)} />
+      ) : (
+        person.initials
+      )}
     </span>
   );
 }

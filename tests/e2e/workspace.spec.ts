@@ -176,7 +176,15 @@ test('pending request can be cancelled, employee scope stays private, unsupporte
   await page.getByRole('button', { name: 'تأكيد سحب الطلب' }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.goto('/employees/emp-noura');
-  await expect(page.getByRole('heading', { name: 'الملف غير متاح' })).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('لا تملك صلاحية الاطلاع على هذا الملف.');
+  await expect(page.getByRole('button', { name: 'تقرير PDF', exact: true })).toHaveCount(0);
+  await page.goto('/employees/emp-noura?view=report');
+  await expect(page.getByRole('alert')).toContainText('لا تملك صلاحية الاطلاع على هذا الملف.');
+  await expect(page.locator('.employee-report')).toHaveCount(0);
+  const protectedProfile = await page.evaluate(
+    async () => (await fetch('/api/admin/employees/emp-noura')).status,
+  );
+  expect(protectedProfile).toBe(403);
   const forbidden = await page.evaluate(
     async () => (await fetch('/api/employees/emp-noura')).status,
   );

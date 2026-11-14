@@ -8,11 +8,15 @@ const DEFAULT_IDLE_TTL_MS = 2 * 60 * 60 * 1000;
 const ABSOLUTE_TTL_MS = 8 * 60 * 60 * 1000;
 const HARD_WORKSPACE_CAP = 50;
 const MUTATION_CAP_PER_WORKSPACE = 250;
+// A workspace that was created but never used again is reclaimable after this grace period
+// when capacity is full, so cookieless floods cannot lock out real visitors for hours.
+const DEFAULT_UNTOUCHED_GRACE_MS = 5_000;
 type HostedOptions = {
   publicOrigin: string;
   workspaceTtlMs?: number;
   maxWorkspaces?: number;
   databaseUrl?: string;
+  untouchedGraceMs?: number;
 };
 type Workspace = {
   app: Express;
@@ -20,6 +24,7 @@ type Workspace = {
   createdAt: number;
   lastSeenAt: number;
   mutations: number;
+  touched: boolean;
 };
 
 function jsonError(res: Response, status: number, code: string, message: string): void {
@@ -36,7 +41,10 @@ function tokenKey(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 function knownApi(method: string, path: string): boolean {
-  if (method === 'GET' && (path === '/api/bootstrap' || /^\/api\/employees\/[^/]+$/.test(path)))
+  if (
+    method === 'GET' &&
+    (path === '/api/bootstrap' || /^\/api\/employees\/[^/]+(\/photo)?$/.test(path))
+  )
     return true;
   if (
     method === 'POST' &&
@@ -113,6 +121,7 @@ export async function createHostedDemoApp(
   const publicHost = parsedOrigin.host.toLowerCase();
   const workspaceTtlMs = options.workspaceTtlMs ?? DEFAULT_IDLE_TTL_MS;
   const maxWorkspaces = options.maxWorkspaces ?? HARD_WORKSPACE_CAP;
+  const untouchedGraceMs = options.untouchedGraceMs ?? DEFAULT_UNTOUCHED_GRACE_MS;
   if (
     !Number.isFinite(workspaceTtlMs) ||
     workspaceTtlMs <= 0 ||
@@ -154,10 +163,22 @@ export async function createHostedDemoApp(
     for (const [key, workspace] of workspaces)
       if (expireWorkspace(workspace, now)) await closeWorkspace(key);
   };
+  // Reclaim the oldest workspace that was never used after creation (no request beyond the
+  // initial GET /api/session). Visitors who used their workspace are never evicted early.
+  const reclaimUntouched = async (now: number) => {
+    let oldest: { key: string; createdAt: number } | undefined;
+    for (const [key, workspace] of workspaces) {
+      if (!workspace.touched && now - workspace.createdAt >= untouchedGraceMs)
+        if (!oldest || workspace.createdAt < oldest.createdAt)
+          oldest = { key, createdAt: workspace.createdAt };
+    }
+    if (oldest) await closeWorkspace(oldest.key);
+  };
   const createWorkspace = async (
     now = Date.now(),
   ): Promise<{ key: string; token: string; workspace: Workspace } | undefined> => {
     await pruneExpired(now);
+    if (workspaces.size + pendingCreations >= maxWorkspaces) await reclaimUntouched(now);
     if (workspaces.size + pendingCreations >= maxWorkspaces) return undefined;
     pendingCreations += 1;
     const token = randomBytes(32).toString('base64url');
@@ -175,6 +196,7 @@ export async function createHostedDemoApp(
         createdAt: now,
         lastSeenAt: now,
         mutations: 0,
+        touched: false,
       };
       workspaces.set(key, workspace);
       return { key, token, workspace };
@@ -239,6 +261,7 @@ export async function createHostedDemoApp(
       const renewed = incomingKey ? workspaces.get(incomingKey) : undefined;
       if (renewed) {
         renewed.lastSeenAt = now;
+        renewed.touched = true;
         refreshCookie(res, renewed, now, incoming);
         return renewed.app(req, res, next);
       }
@@ -285,6 +308,7 @@ export async function createHostedDemoApp(
       workspace.mutations += 1;
     }
     workspace.lastSeenAt = now;
+    workspace.touched = true;
     refreshCookie(res, workspace, now, token);
     return workspace.app(req, res, next);
   });

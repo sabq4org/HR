@@ -51,7 +51,13 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
   async function getRun(id: string, actor: Actor, query: AsyncDb = db): Promise<PayrollRun> {
     const r = (await query.read<Row>('SELECT * FROM payroll_runs WHERE id=?', [id]))[0];
     if (!r) throw fail(404, 'not_found', 'المسير غير موجود.');
-    if (actor.role === 'approver' && !['pending_approver', 'closed'].includes(r.state))
+    // Approvers see runs that reached their step, including runs they (or a peer approver)
+    // rejected at that step; a run rejected by finance never had reviewed_by set.
+    if (
+      actor.role === 'approver' &&
+      !['pending_approver', 'closed'].includes(r.state) &&
+      !(r.state === 'rejected' && r.reviewed_by)
+    )
       throw fail(404, 'not_found', 'المسير غير موجود.');
     const lines = await query.read<Row>(
       `SELECT l.*,e.name employee_name FROM payroll_lines l JOIN employee_access e ON e.id=l.employee_id WHERE l.run_id=? ORDER BY e.name,l.id`,
@@ -487,6 +493,33 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
           !line.component
         )
           throw fail(400, 'invalid_line', 'سطر راتب غير صالح أو مكرر.');
+        // Separation of duties: the preparer never enters a line for their own pay.
+        if (line.employeeId === actor.id)
+          throw fail(
+            403,
+            'preparer_cannot_include_self',
+            'لا يضيف معدّ المسير سطرًا لراتبه؛ يُعدّ راتبه في مسير يعده زميل آخر.',
+          );
+        const subject = (
+          await tx.read<Row>('SELECT status FROM employee_access WHERE id=?', [
+            String(line.employeeId),
+          ])
+        )[0];
+        if (!subject) throw fail(400, 'invalid_employee', 'الموظف في السطر غير موجود.');
+        // Inactive employees are allowed only in a correction run, and only if they were paid
+        // in the original closed run, so historical pay stays correctable after they leave.
+        if (['terminated', 'suspended'].includes(String(subject.status))) {
+          const inOriginal = run.correction_of
+            ? (
+                await tx.read<Row>(
+                  'SELECT 1 found FROM payroll_lines WHERE run_id=? AND employee_id=? LIMIT 1',
+                  [run.correction_of, String(line.employeeId)],
+                )
+              )[0]
+            : undefined;
+          if (!inOriginal)
+            throw fail(400, 'invalid_employee', 'الموظف في السطر غير نشط في مسير جديد.');
+        }
         ids.add(identity);
         if (line.sourceRequestId) {
           if (sources.has(line.sourceRequestId))
@@ -618,6 +651,18 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         run.state === 'pending_finance' &&
         run.prepared_by !== actor.id
       ) {
+        const ownLine = (
+          await tx.read<Row>('SELECT 1 found FROM payroll_lines WHERE run_id=? AND employee_id=?', [
+            run.id,
+            actor.id,
+          ])
+        )[0];
+        if (ownLine)
+          throw fail(
+            403,
+            'subject_cannot_review',
+            'لا تراجع المالية مسيرًا يتضمن راتب المراجع نفسه؛ يراجعه زميل آخر.',
+          );
         next = 'pending_approver';
         reviewed = actor.id;
       } else if (

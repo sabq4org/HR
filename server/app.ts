@@ -1,5 +1,5 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Employee, LeaveRequest, Role } from '../shared/contracts.js';
 import {
   createDatabase,
@@ -10,6 +10,8 @@ import {
   type Db,
 } from './database.js';
 import { registerAdministration } from './administration/routes.js';
+import { decryptSensitive } from './administration/security.js';
+import { canAccessFinance, registerFinance } from './finance/routes.js';
 
 type Session = Actor & { expiresAt: number };
 type EmployeeRow = {
@@ -24,6 +26,7 @@ type EmployeeRow = {
   manager_id: string | null;
   join_date: string;
   role: Role;
+  access_role: Role | null;
   color: string;
   status: Employee['status'];
 };
@@ -80,8 +83,9 @@ async function getEmployee(
 ): Promise<EmployeeRow | undefined> {
   return (await query.read<EmployeeRow>('SELECT * FROM employee_access WHERE id=?', [id]))[0];
 }
-function toEmployee(row: EmployeeRow): Employee {
+function toEmployee(row: EmployeeRow, photos?: Map<string, string>): Employee {
   return {
+    photoId: photos?.get(row.id) ?? null,
     id: row.id,
     employeeNumber: row.employee_number,
     name: row.name,
@@ -96,6 +100,24 @@ function toEmployee(row: EmployeeRow): Employee {
     color: row.color,
     status: row.status,
   };
+}
+/** Latest active profile photo (document category 'photo') per employee; ids only, no bytes. */
+async function photoIds(query: AsyncDb, employeeIds?: string[]): Promise<Map<string, string>> {
+  const rows = await query.read<{ id: string; employee_id: string }>(
+    "SELECT id,employee_id FROM employee_documents WHERE category='photo' AND state='active' ORDER BY uploaded_at,id",
+  );
+  const wanted = employeeIds ? new Set(employeeIds) : undefined;
+  const map = new Map<string, string>();
+  for (const row of rows)
+    if (!wanted || wanted.has(row.employee_id)) map.set(row.employee_id, row.id);
+  return map;
+}
+function mayViewEmployee(actor: Actor, target: EmployeeRow): boolean {
+  return (
+    actor.role === 'hr' ||
+    target.id === actor.id ||
+    (actor.role === 'manager' && target.manager_id === actor.id)
+  );
 }
 async function toLeave(db: Db, row: LeaveRow, query: AsyncDb = db): Promise<LeaveRequest> {
   const employee = (await getEmployee(db, row.employee_id, query))!;
@@ -249,11 +271,39 @@ async function demoRules(
   };
 }
 
+function dataModeLabel(publicOrigin: string | undefined, privateData: boolean) {
+  if (privateData) return publicOrigin ? ('private-hosted' as const) : ('private-local' as const);
+  return publicOrigin ? ('synthetic-hosted' as const) : ('synthetic-local' as const);
+}
+
 export function createApp(
   database: Db,
-  options: { sessionTtlMs?: number; publicOrigin?: string } = {},
+  options: {
+    sessionTtlMs?: number;
+    publicOrigin?: string;
+    dataMode?: 'synthetic' | 'private';
+    /** Shared access password (private hosted mode). Required for private data on a public origin. */
+    accessPassword?: string;
+    /** Exact employee ID explicitly granted the financial workspace. No role-wide default. */
+    financeEmployeeId?: string;
+    /** Dependency injection for isolated tests; the runtime always uses the fixed Wafeq API. */
+    financeClientFactory?: Parameters<typeof registerFinance>[1]['createClient'];
+  } = {},
 ) {
   const db = database;
+  // 'private' = real data on the owner's own machine (loopback only, no synthetic seed).
+  // Sign-in lists only employees who were explicitly granted an access role.
+  const privateData = options.dataMode === 'private';
+  const financeOptions = {
+    privateMode: privateData,
+    allowedActorId: options.financeEmployeeId,
+  };
+  const accessPassword = options.accessPassword;
+  if (accessPassword !== undefined && accessPassword.length < 12)
+    throw new Error('The access password must be at least 12 characters.');
+  if (privateData && options.publicOrigin && !accessPassword)
+    throw new Error('Private data on a public origin requires an access password.');
+  const mode = dataModeLabel(options.publicOrigin, privateData);
   const app = express();
   const sessions = new Map<string, Session>();
   const sessionTtlMs = options.sessionTtlMs ?? 8 * 60 * 60 * 1000;
@@ -280,7 +330,16 @@ export function createApp(
   });
   app.use((req, res, next) => {
     const host = req.get('host')?.toLowerCase();
-    if (pinnedOrigin ? host !== pinnedOrigin.host.toLowerCase() : !safeHost(host))
+    const railwayHealthcheck =
+      privateData &&
+      pinnedOrigin &&
+      host === 'healthcheck.railway.app' &&
+      req.path === '/api/health' &&
+      (req.method === 'GET' || req.method === 'HEAD');
+    if (
+      !railwayHealthcheck &&
+      (pinnedOrigin ? host !== pinnedOrigin.host.toLowerCase() : !safeHost(host))
+    )
       return jsonError(
         res,
         fault(403, 'LOCAL_HOST_REQUIRED', 'يُسمح بالوصول عبر المضيف المحدد فقط.'),
@@ -320,12 +379,86 @@ export function createApp(
   );
   app.use('/api/admin/imports/employees/commit', express.json({ limit: '512kb' }));
   app.use(express.json({ limit: '64kb' }));
+
+  // Access gate (private hosted mode): one password, set as a deployment secret, must be
+  // entered before any API other than health and the gate itself answers. Interim until SSO.
+  const accessCookie = pinnedOrigin ? '__Host-sabq_hr_access' : 'sabq_hr_access';
+  const accessTtlMs = 12 * 60 * 60 * 1000;
+  const accessTokens = new Map<string, number>();
+  const failedAttempts: number[] = [];
+  const digest = (value: string) => createHash('sha256').update(value, 'utf8').digest();
+  const accessToken = (req: Request) =>
+    (req.headers.cookie ?? '')
+      .split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${accessCookie}=`))
+      ?.slice(accessCookie.length + 1);
+  const hasAccess = (req: Request) => {
+    if (!accessPassword) return true;
+    const token = accessToken(req);
+    const expires = token ? accessTokens.get(token) : undefined;
+    if (!token || !expires) return false;
+    if (expires < Date.now()) {
+      accessTokens.delete(token);
+      return false;
+    }
+    return true;
+  };
+  app.get('/api/access', (req, res) =>
+    res.json({ required: !!accessPassword, granted: hasAccess(req) }),
+  );
+  app.post('/api/access', (req, res) => {
+    if (!accessPassword) return res.json({ required: false, granted: true });
+    const now = Date.now();
+    while (failedAttempts.length && failedAttempts[0] < now - 15 * 60 * 1000)
+      failedAttempts.shift();
+    if (failedAttempts.length >= 10)
+      return jsonError(
+        res,
+        fault(429, 'ACCESS_LOCKED', 'محاولات كثيرة خاطئة. انتظر 15 دقيقة ثم أعد المحاولة.'),
+      );
+    const given = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!given || given.length > 256 || !timingSafeEqual(digest(given), digest(accessPassword))) {
+      failedAttempts.push(now);
+      return jsonError(res, fault(401, 'ACCESS_DENIED', 'كلمة المرور غير صحيحة.'));
+    }
+    for (const [token, expires] of accessTokens) if (expires < now) accessTokens.delete(token);
+    const token = randomBytes(32).toString('base64url');
+    accessTokens.set(token, now + accessTtlMs);
+    res.cookie(accessCookie, token, {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: !!pinnedOrigin,
+      path: '/',
+      maxAge: accessTtlMs,
+    });
+    res.json({ required: true, granted: true });
+  });
+  app.delete('/api/access', (req, res) => {
+    const token = accessToken(req);
+    if (token) accessTokens.delete(token);
+    res.clearCookie(accessCookie, {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: !!pinnedOrigin,
+      path: '/',
+    });
+    res.status(204).end();
+  });
+  app.use('/api', (req, res, next) => {
+    if (req.path === '/health' || hasAccess(req)) return next();
+    jsonError(res, fault(401, 'ACCESS_REQUIRED', 'أدخل كلمة مرور الدخول أولًا.'));
+  });
   const demoIds = ['emp-noura', 'emp-omar', 'emp-sara', 'emp-reem', 'emp-abdullah', 'emp-hind'];
   const personaRows = async () =>
-    db.read<EmployeeRow>(
-      `SELECT * FROM employee_access WHERE id IN (${demoIds.map((_, i) => `?`).join(',')}) ORDER BY id`,
-      demoIds,
-    );
+    privateData
+      ? db.read<EmployeeRow>(
+          "SELECT * FROM employee_access WHERE access_role IS NOT NULL AND access_role<>'employee' AND status NOT IN ('suspended','terminated') ORDER BY name,id",
+        )
+      : db.read<EmployeeRow>(
+          `SELECT * FROM employee_access WHERE id IN (${demoIds.map((_, i) => `?`).join(',')}) ORDER BY id`,
+          demoIds,
+        );
   const tokenFor = (req: Request) => {
     const value = (req.headers.cookie ?? '')
       .split(';')
@@ -343,7 +476,12 @@ export function createApp(
       return undefined;
     }
     const employee = await getEmployee(db, session.id);
-    if (!employee || employee.status === 'suspended' || employee.status === 'terminated') {
+    if (
+      !employee ||
+      employee.status === 'suspended' ||
+      employee.status === 'terminated' ||
+      (privateData && (!employee.access_role || employee.access_role === 'employee'))
+    ) {
       sessions.delete(token);
       return undefined;
     }
@@ -407,9 +545,7 @@ export function createApp(
       return value;
     });
   };
-  app.get('/api/health', (_req, res) =>
-    res.json({ status: 'ok', mode: pinnedOrigin ? 'synthetic-hosted' : 'synthetic-local' }),
-  );
+  app.get('/api/health', (_req, res) => res.json({ status: 'ok', mode }));
   app.get('/api/session', async (req, res) => {
     try {
       const actor = await actorFor(req);
@@ -418,9 +554,9 @@ export function createApp(
         .filter((e) => e.status !== 'suspended' && e.status !== 'terminated')
         .map((e) => ({ id: e.id, name: e.name, role: e.role, title: e.title }));
       res.json({
-        me: employee ? toEmployee(employee) : null,
+        me: employee ? toEmployee(employee, await photoIds(db, [employee.id])) : null,
         personas,
-        mode: pinnedOrigin ? 'synthetic-hosted' : 'synthetic-local',
+        mode,
       });
     } catch (e) {
       jsonError(res, e as ApiFault);
@@ -429,8 +565,8 @@ export function createApp(
   app.post('/api/demo/session', async (req, res) => {
     try {
       const id = req.body?.employeeId;
-      if (!demoIds.includes(id))
-        throw fault(400, 'INVALID_PERSONA', 'اختر إحدى شخصيات التجربة المتاحة.');
+      if (typeof id !== 'string' || !(await personaRows()).some((p) => p.id === id))
+        throw fault(400, 'INVALID_PERSONA', 'اختر أحد الحسابات المتاحة.');
       const employee = await getEmployee(db, id);
       if (!employee || employee.status === 'suspended' || employee.status === 'terminated')
         throw fault(400, 'INVALID_PERSONA', 'الشخصية التجريبية غير متاحة.');
@@ -476,8 +612,13 @@ export function createApp(
           : actor.role === 'manager'
             ? all.filter((e) => e.id === actor.id || e.manager_id === actor.id)
             : [me];
-      const rules = await demoRules(db, actor.id);
+      // Private data has no approved leave policy yet: the screens still load and leave
+      // creation stays refused (503) until a real policy is approved.
+      const rules = privateData
+        ? await demoRules(db, actor.id).catch(() => null)
+        : await demoRules(db, actor.id);
       const ids = new Set(visible.map((e) => e.id));
+      const photos = await photoIds(db, [...ids]);
       const rows = await db.read<LeaveRow>(
         'SELECT * FROM leave_requests ORDER BY created_at DESC,id',
       );
@@ -494,8 +635,9 @@ export function createApp(
         request_id?: string | null;
       }>('SELECT * FROM outbox WHERE recipient_id=? ORDER BY created_at DESC,id DESC', [actor.id]);
       res.json({
-        me: toEmployee(me),
-        employees: visible.map(toEmployee),
+        me: toEmployee(me, photos),
+        financeAccess: canAccessFinance(actor, financeOptions),
+        employees: visible.map((e) => toEmployee(e, photos)),
         leaves,
         balance: await balance(db, actor.id),
         notifications: notifications.map((n) => ({
@@ -513,12 +655,19 @@ export function createApp(
           role: e.role,
           title: e.title,
         })),
-        policy: {
-          name: 'سياسة الإجازة السنوية التجريبية',
-          version: rules.version,
-          description: `قاعدة محلية اصطناعية فقط؛ ${rules.source}`,
-          workingDays: rules.workingDays,
-        },
+        policy: rules
+          ? {
+              name: 'سياسة الإجازة السنوية التجريبية',
+              version: rules.version,
+              description: `قاعدة محلية اصطناعية فقط؛ ${rules.source}`,
+              workingDays: rules.workingDays,
+            }
+          : {
+              name: 'لا توجد سياسة إجازة معتمدة',
+              version: 'none',
+              description: 'طلبات الإجازة متوقفة حتى تعتمد سياسة حقيقية.',
+              workingDays: [0, 1, 2, 3, 4],
+            },
         today: todayInRiyadh(),
       });
     } catch (e) {
@@ -530,13 +679,37 @@ export function createApp(
       const actor = await requireActor(req);
       const target = await getEmployee(db, req.params.id);
       if (!target) throw fault(404, 'NOT_FOUND', 'الموظف غير موجود.');
-      if (
-        actor.role !== 'hr' &&
-        target.id !== actor.id &&
-        !(actor.role === 'manager' && target.manager_id === actor.id)
-      )
+      if (!mayViewEmployee(actor, target))
         throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية الاطلاع على هذا الملف.');
-      res.json({ employee: toEmployee(target) });
+      res.json({ employee: toEmployee(target, await photoIds(db, [target.id])) });
+    } catch (e) {
+      jsonError(res, e as ApiFault);
+    }
+  });
+  // Profile photo for the team directory. Visible to whoever may view the employee
+  // (self, HR, direct manager); identity documents stay behind the document rules.
+  app.get('/api/employees/:id/photo', async (req, res) => {
+    try {
+      const actor = await requireActor(req);
+      const target = await getEmployee(db, req.params.id);
+      if (!target || !mayViewEmployee(actor, target))
+        throw fault(404, 'NOT_FOUND', 'الصورة غير موجودة.');
+      const row = (
+        await db.read<{ id: string; mime_type: string; encrypted_content: string }>(
+          "SELECT id,mime_type,encrypted_content FROM employee_documents WHERE employee_id=? AND category='photo' AND state='active' ORDER BY uploaded_at DESC,id DESC LIMIT 1",
+          [target.id],
+        )
+      )[0];
+      if (!row || !['image/png', 'image/jpeg'].includes(row.mime_type))
+        throw fault(404, 'NOT_FOUND', 'الصورة غير موجودة.');
+      const bytes = Buffer.from(
+        decryptSensitive(row.encrypted_content, `employee-document:${row.id}`),
+        'base64',
+      );
+      res.setHeader('Content-Type', row.mime_type);
+      res.setHeader('Content-Disposition', 'inline');
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.end(bytes);
     } catch (e) {
       jsonError(res, e as ApiFault);
     }
@@ -731,15 +904,24 @@ export function createApp(
             version + 1,
             decision === 'reject' ? reason : null,
           );
-          if (next === 'pending_hr')
+          const hrRecipient =
+            next === 'pending_hr'
+              ? (
+                  await tx.read<{ id: string }>(
+                    "SELECT id FROM employee_access WHERE role='hr' AND id<>? AND status NOT IN ('suspended','terminated') ORDER BY id LIMIT 1",
+                    [owner.id],
+                  )
+                )[0]?.id
+              : undefined;
+          if (next === 'pending_hr' && hrRecipient)
             await enqueue(
               tx,
-              'emp-noura',
+              hrRecipient,
               'طلب بانتظار الموارد البشرية',
               `${owner.name} لديه طلب إجازة بانتظار المراجعة.`,
               id,
             );
-          else
+          else if (next !== 'pending_hr')
             await enqueue(
               tx,
               owner.id,
@@ -824,7 +1006,13 @@ export function createApp(
       jsonError(res, e as ApiFault);
     }
   });
-  registerAdministration(app, { db, requireActor });
+  registerAdministration(app, { db, requireActor, privateMode: privateData });
+  registerFinance(app, {
+    db,
+    requireActor,
+    ...financeOptions,
+    createClient: options.financeClientFactory,
+  });
   app.use((req, res, next) => {
     if (req.path === '/api' || req.path.startsWith('/api/'))
       return jsonError(res, fault(404, 'NOT_FOUND', 'المسار غير موجود.'));

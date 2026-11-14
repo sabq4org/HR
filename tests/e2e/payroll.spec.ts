@@ -81,8 +81,11 @@ test('payroll real workflow is independently reviewed, scoped to payslip owners,
   await expect(page.locator('.payroll-state')).toContainText('مغلق');
 
   await switchPersona(page, 'سارة القحطاني');
-  await page.goto('/payroll');
-  await page.getByRole('button', { name: new RegExp(period) }).click();
+  await page.goto('/profile/file');
+  await page.getByRole('button', { name: 'الراتب', exact: true }).click();
+  await page.getByRole('link', { name: new RegExp(`مسير ${period}`) }).click();
+  await expect(page).toHaveURL(new RegExp(`run=${runId}`));
+  await expect(page.getByRole('heading', { name: `مسير ${period}`, exact: true })).toBeVisible();
   await expect(page.locator('.payroll-table-wrap tbody tr')).toHaveCount(3);
   await expect(
     page.getByRole('cell', { name: 'سارة القحطاني', exact: true }).first(),
@@ -124,8 +127,9 @@ test('payroll real workflow is independently reviewed, scoped to payslip owners,
   await expect(page.locator('.payroll-payments p')).toContainText('مدفوع');
 
   await switchPersona(page, 'نورة العتيبي');
-  await page.goto('/payroll');
-  await page.getByRole('button', { name: new RegExp(period) }).click();
+  await page.goto(`/payroll?run=${runId}&employee=emp-sara`);
+  await expect(page.getByLabel('الموظف لطباعة كشفه')).toHaveValue('emp-sara');
+  await expect(page.locator('.payroll-print-sheet header')).toContainText('سارة القحطاني');
   await expect(page.getByRole('button', { name: 'تعديل الأسطر', exact: true })).toHaveCount(0);
   const blockedEdit = await page.evaluate(async (id) => {
     const current = await (await fetch(`/api/admin/payroll/${id}`)).json();
