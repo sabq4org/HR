@@ -54,24 +54,39 @@ const documentTypeText: Record<FinanceDocumentType, { label: string; hint: strin
     hint: 'لعميل فرد أو جهة بلا رقم ضريبي. البنود بضريبة 15٪.',
   },
   zero_rated: {
-    label: 'بدون ضريبة · 0٪',
-    hint: 'مثل الخدمات لعميل خارج المملكة. كل البنود بنسبة صفر، ويُطبع سبب الإعفاء مع كل بند.',
+    label: 'فاتورة ضريبية بنسبة صفرية (تصدير) · 0٪',
+    hint: 'خدمة لعميل خارج المملكة. تبقى فاتورة ضريبية تُرسل للهيئة، وكل البنود 0٪ مع سبب الإعفاء.',
+  },
+  out_of_scope: {
+    label: 'فاتورة غير ضريبية (خارج النطاق)',
+    hint: 'لمبلغ ليس مقابل خدمة أو بيع، مثل تعويض أو منحة. بلا ضريبة ولا QR، ولا تُرسل للهيئة.',
   },
 };
 const documentTypeShort: Record<FinanceDocumentType, string> = {
   standard: 'ضريبية B2B',
   simplified: 'مبسطة B2C',
-  zero_rated: 'بدون ضريبة',
+  zero_rated: 'نسبة صفرية',
+  out_of_scope: 'غير ضريبية',
 };
+const zeroLines = (type: FinanceDocumentType) => type === 'zero_rated' || type === 'out_of_scope';
 // Default wording only; the user can change it per line before saving.
-const defaultZeroReason = 'خدمات لعميل غير مقيم خارج المملكة';
+const defaultZeroReason = (type: FinanceDocumentType) =>
+  type === 'out_of_scope' ? 'خارج نطاق ضريبة القيمة المضافة' : 'تصدير خدمات لعميل غير مقيم';
 const blankLine = (type: FinanceDocumentType = 'standard'): FinanceLineInput => ({
   description: '',
   quantity: '1',
   unitPrice: '0.00',
-  taxRateBps: type === 'zero_rated' ? 0 : 1500,
-  taxReason: type === 'zero_rated' ? defaultZeroReason : '',
+  taxRateBps: zeroLines(type) ? 0 : 1500,
+  taxReason: zeroLines(type) ? defaultZeroReason(type) : '',
 });
+const invoiceTitle = (type: FinanceDocumentType | undefined, invoiceType?: string) =>
+  type === 'out_of_scope'
+    ? { ar: 'فاتورة', en: 'Invoice' }
+    : invoiceType === 'simplified'
+      ? { ar: 'فاتورة ضريبية مبسطة', en: 'Simplified Tax Invoice' }
+      : type === 'zero_rated'
+        ? { ar: 'فاتورة ضريبية', en: 'Tax Invoice · Zero-rated' }
+        : { ar: 'فاتورة ضريبية', en: 'Tax Invoice' };
 const blankCatalogItem = (): FinanceCatalogItemInput => ({
   description: '',
   unitPrice: '0.00',
@@ -268,9 +283,9 @@ export function FinancePage() {
       ...form,
       documentType: type,
       lines: form.lines.map((line) =>
-        type === 'zero_rated'
-          ? { ...line, taxRateBps: 0, taxReason: line.taxReason || defaultZeroReason }
-          : (form.documentType ?? 'standard') === 'zero_rated'
+        zeroLines(type)
+          ? { ...line, taxRateBps: 0, taxReason: defaultZeroReason(type) }
+          : zeroLines(form.documentType ?? 'standard')
             ? { ...line, taxRateBps: 1500, taxReason: '' }
             : line,
       ),
@@ -278,22 +293,21 @@ export function FinancePage() {
   const insertCatalogItem = () => {
     const item = overview?.catalog.find((x) => x.id === catalogPick);
     if (!item) return;
-    const line: FinanceLineInput =
-      quoteType === 'zero_rated'
-        ? {
-            description: item.description,
-            quantity: '1',
-            unitPrice: item.unitPrice,
-            taxRateBps: 0,
-            taxReason: item.taxReason || defaultZeroReason,
-          }
-        : {
-            description: item.description,
-            quantity: '1',
-            unitPrice: item.unitPrice,
-            taxRateBps: item.taxRateBps,
-            taxReason: item.taxReason,
-          };
+    const line: FinanceLineInput = zeroLines(quoteType)
+      ? {
+          description: item.description,
+          quantity: '1',
+          unitPrice: item.unitPrice,
+          taxRateBps: 0,
+          taxReason: defaultZeroReason(quoteType),
+        }
+      : {
+          description: item.description,
+          quantity: '1',
+          unitPrice: item.unitPrice,
+          taxRateBps: item.taxRateBps,
+          taxReason: item.taxReason,
+        };
     setQuoteForm((form) => {
       const lines = form.lines.filter((x, n) => !(n === form.lines.length - 1 && isBlankLine(x)));
       return { ...form, lines: [...lines, line] };
@@ -934,18 +948,21 @@ export function FinancePage() {
                                 >
                                   {busy === `invoice:${i.id}`
                                     ? 'جارٍ الإرسال…'
-                                    : i.lines.some((line) => line.taxRateBps === 0)
-                                      ? 'تحتاج ربط ضريبة صفرية'
-                                      : i.customer.type === 'individual'
-                                        ? 'العميل الفردي غير مدعوم'
-                                        : 'إصدار ومزامنة مع وافق'}
+                                    : i.documentType === 'out_of_scope'
+                                      ? 'غير ضريبية · لا تُرسل للهيئة'
+                                      : i.lines.some((line) => line.taxRateBps === 0)
+                                        ? 'تحتاج ربط ضريبة صفرية'
+                                        : i.customer.type === 'individual'
+                                          ? 'العميل الفردي غير مدعوم'
+                                          : 'إصدار ومزامنة مع وافق'}
                                 </button>
-                                {i.lines.some((line) => line.taxRateBps === 0) && (
-                                  <small className="fin-message">
-                                    تحتاج البنود ذات الضريبة الصفرية إلى رمز سبب معتمد في وافق؛ وصف
-                                    السبب الحر لا يكفي.
-                                  </small>
-                                )}
+                                {i.documentType !== 'out_of_scope' &&
+                                  i.lines.some((line) => line.taxRateBps === 0) && (
+                                    <small className="fin-message">
+                                      تحتاج البنود ذات الضريبة الصفرية إلى رمز سبب معتمد في وافق؛
+                                      وصف السبب الحر لا يكفي.
+                                    </small>
+                                  )}
                               </>
                             ) : (
                               <>
@@ -1539,7 +1556,7 @@ export function FinancePage() {
                 <Field label="الضريبة">
                   <select
                     value={line.taxRateBps}
-                    disabled={quoteType === 'zero_rated'}
+                    disabled={zeroLines(quoteType)}
                     onChange={(e) =>
                       setQuoteForm({
                         ...quoteForm,
@@ -1721,13 +1738,14 @@ export function FinancePage() {
                 documentType={preview.documentType ?? 'standard'}
               />
             </div>
-            <LineItemsTable lines={preview.lines} />
+            <LineItemsTable lines={preview.lines} noVat={preview.documentType === 'out_of_scope'} />
             <div className="fin-document-ending">
               <PaperTotals
                 subtotal={preview.subtotalHalalas}
                 tax={preview.taxHalalas}
                 total={preview.totalHalalas}
                 totalLabel="الإجمالي / Total"
+                noVat={preview.documentType === 'out_of_scope'}
               />
               <BankAccountDetails seller={preview.seller} />
               {preview.notes && <NotesBox notes={preview.notes} />}
@@ -1772,12 +1790,8 @@ export function FinancePage() {
             <DocumentHeader
               seller={finalInvoice.seller}
               kind="invoice"
-              title={
-                finalInvoice.invoiceType === 'simplified' ? 'فاتورة ضريبية مبسطة' : 'فاتورة ضريبية'
-              }
-              subtitle={
-                finalInvoice.invoiceType === 'simplified' ? 'Simplified Tax Invoice' : 'Tax Invoice'
-              }
+              title={invoiceTitle(finalInvoice.documentType, finalInvoice.invoiceType).ar}
+              subtitle={invoiceTitle(finalInvoice.documentType, finalInvoice.invoiceType).en}
               number={finalInvoice.number}
               status={statusText[finalInvoice.status]}
             />
@@ -1804,13 +1818,17 @@ export function FinancePage() {
               />
             </div>
             <h2 className="fin-document-title">{finalInvoice.title}</h2>
-            <LineItemsTable lines={finalInvoice.lines} />
+            <LineItemsTable
+              lines={finalInvoice.lines}
+              noVat={finalInvoice.documentType === 'out_of_scope'}
+            />
             <div className="fin-document-ending">
               <PaperTotals
                 subtotal={finalInvoice.subtotalHalalas}
                 tax={finalInvoice.taxHalalas}
                 total={finalInvoice.totalHalalas}
                 totalLabel="الإجمالي المستحق / Total Due"
+                noVat={finalInvoice.documentType === 'out_of_scope'}
                 aside={
                   ['cleared', 'reported'].includes(finalInvoice.status) && finalInvoice.qrCode ? (
                     <div className="fin-qr-wrap" dir="rtl">
@@ -1828,9 +1846,11 @@ export function FinancePage() {
               <BankAccountDetails seller={finalInvoice.seller} />
               {finalInvoice.notes && <NotesBox notes={finalInvoice.notes} />}
               <PaperFooter>
-                {['cleared', 'reported'].includes(finalInvoice.status) && finalInvoice.qrCode
-                  ? 'فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'
-                  : 'هذه معاينة داخلية للمسودة وليست فاتورة صادرة أو مستندًا ضريبيًا.'}
+                {finalInvoice.documentType === 'out_of_scope'
+                  ? 'مستند غير ضريبي: المبلغ خارج نطاق ضريبة القيمة المضافة.'
+                  : ['cleared', 'reported'].includes(finalInvoice.status) && finalInvoice.qrCode
+                    ? 'فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'
+                    : 'هذه معاينة داخلية للمسودة وليست فاتورة صادرة أو مستندًا ضريبيًا.'}
               </PaperFooter>
             </div>
           </article>
@@ -2007,7 +2027,7 @@ function DocumentDetails({
   );
 }
 
-function LineItemsTable({ lines }: { lines: FinanceLine[] }) {
+function LineItemsTable({ lines, noVat = false }: { lines: FinanceLine[]; noVat?: boolean }) {
   const percent = (bps: number) =>
     new Intl.NumberFormat('en-SA', { maximumFractionDigits: 2 }).format(bps / 100);
   // Table cells show plain amounts like the legacy layout; currency appears in the totals.
@@ -2028,8 +2048,8 @@ function LineItemsTable({ lines }: { lines: FinanceLine[] }) {
             </th>
             <th scope="col">الكمية / Qty</th>
             <th scope="col">السعر / Unit Price</th>
-            <th scope="col">الضريبة / VAT</th>
-            <th scope="col">مبلغ الضريبة / VAT Amt</th>
+            {!noVat && <th scope="col">الضريبة / VAT</th>}
+            {!noVat && <th scope="col">مبلغ الضريبة / VAT Amt</th>}
             <th scope="col">الإجمالي / Total</th>
           </tr>
         </thead>
@@ -2041,7 +2061,7 @@ function LineItemsTable({ lines }: { lines: FinanceLine[] }) {
               </td>
               <td className="fin-paper-description">
                 {line.description}
-                {line.taxRateBps === 0 && line.taxReason && (
+                {!noVat && line.taxRateBps === 0 && line.taxReason && (
                   <small className="fin-paper-reason">
                     سبب عدم احتساب الضريبة / VAT exemption reason: {line.taxReason}
                   </small>
@@ -2049,8 +2069,8 @@ function LineItemsTable({ lines }: { lines: FinanceLine[] }) {
               </td>
               <td dir="ltr">{line.quantity}</td>
               <td dir="ltr">{amount(Math.round(Number(line.unitPrice) * 100))}</td>
-              <td dir="ltr">{percent(line.taxRateBps)}%</td>
-              <td dir="ltr">{amount(line.taxHalalas)}</td>
+              {!noVat && <td dir="ltr">{percent(line.taxRateBps)}%</td>}
+              {!noVat && <td dir="ltr">{amount(line.taxHalalas)}</td>}
               <td dir="ltr">{amount(line.totalHalalas)}</td>
             </tr>
           ))}
@@ -2079,24 +2099,30 @@ function PaperTotals({
   total,
   totalLabel,
   aside,
+  noVat = false,
 }: {
   subtotal: number;
   tax: number;
   total: number;
   totalLabel: string;
   aside?: ReactNode;
+  noVat?: boolean;
 }) {
   return (
     <div className="fin-paper-summary" dir="ltr">
       <div className="fin-paper-summary-rows" dir="rtl">
-        <div>
-          <span>المجموع الفرعي / Subtotal</span>
-          <PaperAmount halalas={subtotal} />
-        </div>
-        <div>
-          <span>ضريبة القيمة المضافة / VAT</span>
-          <PaperAmount halalas={tax} />
-        </div>
+        {!noVat && (
+          <div>
+            <span>المجموع الفرعي / Subtotal</span>
+            <PaperAmount halalas={subtotal} />
+          </div>
+        )}
+        {!noVat && (
+          <div>
+            <span>ضريبة القيمة المضافة / VAT</span>
+            <PaperAmount halalas={tax} />
+          </div>
+        )}
         <div className="fin-paper-grand-total">
           <span>{totalLabel}</span>
           <PaperAmount halalas={total} />

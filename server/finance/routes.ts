@@ -15,7 +15,7 @@ import type {
   FinanceSeller,
   FinanceSettings,
 } from '../../shared/finance.js';
-import { financeDocumentTypes } from '../../shared/finance.js';
+import { financeDocumentTypes, zeroLineDocumentTypes } from '../../shared/finance.js';
 import type { AsyncDb } from '../database.js';
 import { decryptSensitive, encryptSensitive } from '../administration/security.js';
 import type { Actor } from '../administration/service.js';
@@ -305,11 +305,14 @@ function amounts(lines: FinanceLine[]) {
 }
 function quoteLines(input: FinanceQuoteInput): FinanceLine[] {
   const lines = lineItems(input.lines);
-  if (input.documentType === 'zero_rated' && lines.some((line) => line.taxRateBps !== 0))
+  if (
+    zeroLineDocumentTypes.includes(input.documentType ?? 'standard') &&
+    lines.some((line) => line.taxRateBps !== 0)
+  )
     throw fault(
       400,
       'ZERO_RATED_LINES_REQUIRED',
-      'المستند بدون ضريبة؛ اجعل كل البنود بنسبة صفر مع ذكر السبب.',
+      'هذا النوع بلا ضريبة؛ اجعل كل البنود بنسبة صفر مع ذكر السبب.',
     );
   return lines;
 }

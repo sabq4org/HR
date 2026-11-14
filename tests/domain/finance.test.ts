@@ -731,6 +731,36 @@ test('document type fixes line tax rules and the converted invoice type', async 
     )
   ).quote;
   assert.equal(legacy.documentType, 'standard');
+  // Out-of-scope (non-tax) documents also reject taxed lines.
+  const outTaxed = await api(
+    '/api/finance/quotes',
+    post(
+      {
+        ...quoteBody(customer.id),
+        documentType: 'out_of_scope',
+        lines: [{ ...zeroLine, taxRateBps: 1500, taxReason: '' }],
+      },
+      'out-taxed',
+    ),
+  );
+  assert.equal(outTaxed.status, 400);
+  const outOfScope = (
+    await json<{ quote: { documentType: string; taxHalalas: number } }>(
+      await api(
+        '/api/finance/quotes',
+        post(
+          {
+            ...quoteBody(customer.id),
+            documentType: 'out_of_scope',
+            lines: [{ ...zeroLine, taxReason: 'Outside VAT scope' }],
+          },
+          'out-ok',
+        ),
+      ),
+    )
+  ).quote;
+  assert.equal(outOfScope.documentType, 'out_of_scope');
+  assert.equal(outOfScope.taxHalalas, 0);
 });
 
 test('saved catalog items validate tax, keep versions, and archive instead of deleting', async () => {

@@ -56,15 +56,19 @@ export interface FinanceSettings {
 }
 /**
  * Chosen when the quote is created and carried to the invoice:
- * standard = B2B tax invoice, simplified = B2C simplified tax invoice,
- * zero_rated = every line at 0% with a stated reason (e.g. services to a non-resident).
+ * standard = B2B tax invoice at 15%, simplified = B2C simplified tax invoice at 15%,
+ * zero_rated = tax invoice with every line zero-rated (e.g. export of services),
+ * out_of_scope = non-tax invoice for amounts outside VAT scope (no VAT, no QR, not reported).
  */
-export type FinanceDocumentType = 'standard' | 'simplified' | 'zero_rated';
+export type FinanceDocumentType = 'standard' | 'simplified' | 'zero_rated' | 'out_of_scope';
 export const financeDocumentTypes: readonly FinanceDocumentType[] = [
   'standard',
   'simplified',
   'zero_rated',
+  'out_of_scope',
 ];
+/** Types whose lines must all be at 0%. */
+export const zeroLineDocumentTypes: readonly FinanceDocumentType[] = ['zero_rated', 'out_of_scope'];
 export interface FinanceLineInput {
   description: string;
   quantity: string;
