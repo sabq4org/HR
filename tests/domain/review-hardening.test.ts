@@ -198,6 +198,7 @@ async function payrollHarness() {
     return { status: response.status, body: (await response.json()) as any };
   }
   return {
+    db,
     api,
     close: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -265,6 +266,48 @@ test('finance cannot review a run that contains its own salary', async () => {
     });
     assert.equal(reviewed.status, 403);
     assert.equal(reviewed.body.error.code, 'subject_cannot_review');
+  } finally {
+    await f.close();
+  }
+});
+
+test('a departed employee stays correctable in a correction run but not in a new run', async () => {
+  const f = await payrollHarness();
+  try {
+    const run = await newRun(f, '2026-06');
+    let version = run.version;
+    for (const [as, action] of [
+      ['hr', 'submit'],
+      ['finance', 'review'],
+      ['approver', 'approve'],
+    ] as const) {
+      const step = await f.api(as, `/${run.id}/actions`, 'POST', { version, action });
+      assert.equal(step.status, 200, JSON.stringify(step.body));
+      version = step.body.run.version;
+    }
+    await f.db.execute("UPDATE employees SET employment_status='terminated' WHERE id=?", [
+      'emp-sara',
+    ]);
+    const correction = await f.api('hr', '', 'POST', {
+      period: '2026-06',
+      policyId: 'payroll-policy-demo-v1',
+      reason: 'تصحيح بعد انتهاء خدمة موظف',
+      correctionOf: run.id,
+    });
+    assert.equal(correction.status, 200, JSON.stringify(correction.body));
+    const kept = await f.api('hr', `/${correction.body.run.id}`, 'PATCH', {
+      version: correction.body.run.version,
+      lines: correction.body.run.lines,
+      reason: 'حفظ أسطر التصحيح دون تغيير',
+    });
+    assert.equal(kept.status, 200, JSON.stringify(kept.body));
+    const fresh = await newRun(f, '2026-07');
+    const added = await f.api('hr', `/${fresh.id}`, 'PATCH', {
+      version: fresh.version,
+      lines: [...fresh.lines, extraLine('emp-sara')],
+      reason: 'موظف منتهية خدمته في مسير جديد',
+    });
+    assert.equal(added.status, 400);
   } finally {
     await f.close();
   }

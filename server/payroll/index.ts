@@ -505,8 +505,21 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
             String(line.employeeId),
           ])
         )[0];
-        if (!subject || ['terminated', 'suspended'].includes(String(subject.status)))
-          throw fail(400, 'invalid_employee', 'الموظف في السطر غير موجود أو غير نشط.');
+        if (!subject) throw fail(400, 'invalid_employee', 'الموظف في السطر غير موجود.');
+        // Inactive employees are allowed only in a correction run, and only if they were paid
+        // in the original closed run, so historical pay stays correctable after they leave.
+        if (['terminated', 'suspended'].includes(String(subject.status))) {
+          const inOriginal = run.correction_of
+            ? (
+                await tx.read<Row>(
+                  'SELECT 1 found FROM payroll_lines WHERE run_id=? AND employee_id=? LIMIT 1',
+                  [run.correction_of, String(line.employeeId)],
+                )
+              )[0]
+            : undefined;
+          if (!inOriginal)
+            throw fail(400, 'invalid_employee', 'الموظف في السطر غير نشط في مسير جديد.');
+        }
         ids.add(identity);
         if (line.sourceRequestId) {
           if (sources.has(line.sourceRequestId))
