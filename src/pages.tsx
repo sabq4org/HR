@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import {
   addDays,
+  api,
   Avatar,
   canDecide,
   dateLabel,
@@ -465,18 +466,56 @@ export function ApprovalsPage() {
     </>
   );
 }
+const workStatusLabel: Record<Employee['status'], string> = {
+  active: 'على رأس العمل',
+  on_leave: 'في إجازة',
+  suspended: 'موقوف',
+  terminated: 'منتهية الخدمة',
+};
 export function PeoplePage() {
-  const { data, refresh } = useApp();
+  const { data, refresh, notify } = useApp();
   const [creating, setCreating] = useState(false);
+  const [switching, setSwitching] = useState<ReadonlySet<string>>(new Set());
+  // Quick on-duty switch (HR only). The server re-checks the permission and the status shown here.
+  async function switchDuty(e: Employee, onDuty: boolean) {
+    setSwitching((current) => new Set(current).add(e.id));
+    try {
+      await api(`/admin/employees/${encodeURIComponent(e.id)}/work-status`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({ onDuty, expectedStatus: e.status }),
+      });
+      notify(onDuty ? `${e.name}: صار على رأس العمل.` : `${e.name}: لم يعد على رأس العمل.`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'تعذّر تغيير الحالة.');
+    }
+    try {
+      await refresh();
+    } catch {
+      notify('تعذّر تحديث القائمة؛ أعد تحميل الصفحة للتأكد من الحالة.');
+    } finally {
+      setSwitching((current) => {
+        const next = new Set(current);
+        next.delete(e.id);
+        return next;
+      });
+    }
+  }
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [department, setDepartment] = useState('all');
   const departments = [...new Set(data.employees.map((e) => e.department))];
-  const people = data.employees.filter(
+  const [duty, setDuty] = useState<'on' | 'off'>('on');
+  const isOnDuty = (e: Employee) => e.status === 'active' || e.status === 'on_leave';
+  const matching = data.employees.filter(
     (e) =>
       (department === 'all' || department === e.department) &&
       `${e.name} ${e.title} ${e.employeeNumber}`.includes(query),
   );
+  const onDutyCount = matching.filter(isOnDuty).length;
+  const offDutyCount = matching.length - onDutyCount;
+  // Staff who left stay out of the default view; they live in the second tab.
+  const people = matching.filter((e) => isOnDuty(e) === (duty === 'on'));
   return (
     <>
       <PageHeading
@@ -525,38 +564,80 @@ export function PeoplePage() {
           </div>
         )}
       </section>
+      <div className="people-tabs tabs" role="group" aria-label="حالة العمل">
+        <button
+          className={duty === 'on' ? 'tab active' : 'tab'}
+          aria-pressed={duty === 'on'}
+          onClick={() => setDuty('on')}
+        >
+          على رأس العمل <span>{onDutyCount}</span>
+        </button>
+        <button
+          className={duty === 'off' ? 'tab active' : 'tab'}
+          aria-pressed={duty === 'off'}
+          onClick={() => setDuty('off')}
+        >
+          ليسوا على رأس العمل <span>{offDutyCount}</span>
+        </button>
+      </div>
       {people.length ? (
         <div className="people-grid">
-          {people.map((e) => (
-            <Link to={`/employees/${e.id}`} className="person-card" key={e.id}>
-              <div className="person-card-top">
-                <Avatar person={e} size="lg" />
-                <span className={e.status === 'active' ? 'active-dot' : 'subtle'}>
-                  {
-                    {
-                      active: 'على رأس العمل',
-                      on_leave: 'في إجازة',
-                      suspended: 'موقوف',
-                      terminated: 'منتهية الخدمة',
-                    }[e.status]
-                  }
-                </span>
-              </div>
-              <h2>{e.name}</h2>
-              <p>{e.title}</p>
-              <span className="department-tag">{e.department}</span>
-              <div className="person-card-footer">
-                <span>
-                  <MapPin size={14} />
-                  {e.location}
-                </span>
-                <ArrowUpLeft size={18} />
-              </div>
-            </Link>
-          ))}
+          {people.map((e) => {
+            const onDuty = e.status === 'active' || e.status === 'on_leave';
+            const canSwitch = data.me.role === 'hr' && e.id !== data.me.id;
+            return (
+              <article className="person-card" key={e.id}>
+                <div className="person-card-top">
+                  <Avatar person={e} size="lg" />
+                  <div className="person-card-status">
+                    <span className={e.status === 'active' ? 'active-dot' : 'subtle'}>
+                      {workStatusLabel[e.status]}
+                    </span>
+                    {canSwitch && (
+                      <button
+                        type="button"
+                        role="switch"
+                        className="duty-switch"
+                        aria-checked={onDuty}
+                        aria-label={`${e.name}: على رأس العمل`}
+                        title={onDuty ? 'اضبطه: ليس على رأس العمل' : 'اضبطه: على رأس العمل'}
+                        disabled={switching.has(e.id)}
+                        onClick={() => void switchDuty(e, !onDuty)}
+                      >
+                        <span aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <h2>
+                  <Link to={`/employees/${e.id}`} className="person-card-link">
+                    {e.name}
+                  </Link>
+                </h2>
+                <p>{e.title}</p>
+                <span className="department-tag">{e.department}</span>
+                <div className="person-card-footer">
+                  <span>
+                    <MapPin size={14} />
+                    {e.location}
+                  </span>
+                  <ArrowUpLeft size={18} />
+                </div>
+              </article>
+            );
+          })}
         </div>
       ) : (
-        <Empty title="لم نجد اسمًا مطابقًا" detail="جرّب اسمًا آخر أو اختر جميع الأقسام." />
+        <Empty
+          title={matching.length ? 'لا أحد في هذا التبويب' : 'لم نجد اسمًا مطابقًا'}
+          detail={
+            matching.length
+              ? duty === 'on'
+                ? 'كل النتائج المطابقة في تبويب «ليسوا على رأس العمل».'
+                : 'كل النتائج المطابقة على رأس العمل.'
+              : 'جرّب اسمًا آخر أو اختر جميع الأقسام.'
+          }
+        />
       )}
       {creating && (
         <EmployeeCreateDialog

@@ -1784,6 +1784,18 @@
   .people-toolbar > .subtle {
     margin-right: auto;
   }
+  .people-tabs {
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+  }
+  .people-tabs .tab {
+    padding: 10px 0;
+    font-size: 12px;
+  }
+  .people-tabs .tab.active::after {
+    bottom: -1px;
+  }
   .people-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1821,6 +1833,59 @@
     height: 5px;
     background: #71a888;
     border-radius: 50%;
+  }
+  .person-card {
+    position: relative;
+  }
+  /* The whole card opens the profile; the switch sits above the stretched link. */
+  .person-card-link::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 13px;
+  }
+  .person-card-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .duty-switch {
+    position: relative;
+    z-index: 1;
+    flex-shrink: 0;
+    width: 36px;
+    height: 24px;
+    padding: 3px;
+    border: 0;
+    border-radius: 999px;
+    background: #b6c0cb;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .duty-switch > span {
+    display: block;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: white;
+    box-shadow: 0 1px 2px #142d4840;
+    transition: margin 0.15s;
+  }
+  .duty-switch[aria-checked='true'] {
+    background: #3f8f63;
+  }
+  .duty-switch[aria-checked='true'] > span {
+    margin-inline-start: 12px;
+  }
+  .duty-switch:disabled {
+    opacity: 0.55;
+    cursor: progress;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .duty-switch,
+    .duty-switch > span {
+      transition: none;
+    }
   }
   .person-card h2 {
     font-size: 16px;
