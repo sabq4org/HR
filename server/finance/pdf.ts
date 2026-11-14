@@ -351,7 +351,7 @@ function render(p: Printable): Promise<Buffer> {
 export function quotePdf(quote: FinanceQuote): Promise<Buffer> {
   return render({
     kind: 'quote',
-    heading: 'عرض سعر',
+    heading: quote.status === 'cancelled' ? 'عرض سعر ملغي' : 'عرض سعر',
     number: quote.number,
     facts: [
       ['العنوان', quote.title],
@@ -367,16 +367,22 @@ export function quotePdf(quote: FinanceQuote): Promise<Buffer> {
     taxHalalas: quote.taxHalalas,
     totalHalalas: quote.totalHalalas,
     notes: quote.notes,
-    footer: `${quoteFooterText[quote.status]} صالح حتى ${ltr(quote.validUntil)}.`,
+    footer:
+      quote.status === 'cancelled'
+        ? quoteFooterText.cancelled
+        : `${quoteFooterText[quote.status]} صالح حتى ${ltr(quote.validUntil)}.`,
   });
 }
 
 export function invoicePdf(invoice: FinanceInvoice): Promise<Buffer> {
+  // This renderer has no stamp: a cancelled invoice says so in its heading, facts and footer.
+  const cancelled = invoice.status === 'cancelled';
   return render({
     kind: 'invoice',
-    heading: 'فاتورة — نسخة داخلية',
+    heading: cancelled ? 'فاتورة ملغاة — لا يُعتد بها' : 'فاتورة — نسخة داخلية',
     number: invoice.number,
     facts: [
+      ...(cancelled ? ([['الحالة', 'ملغاة قبل الإصدار']] as [string, string][]) : []),
       ['العنوان', invoice.title],
       ['تاريخ الإصدار', ltr(invoice.issueDate)],
       ['تاريخ الاستحقاق', ltr(invoice.dueDate)],
@@ -393,6 +399,6 @@ export function invoicePdf(invoice: FinanceInvoice): Promise<Buffer> {
     taxHalalas: invoice.taxHalalas,
     totalHalalas: invoice.totalHalalas,
     notes: invoice.notes,
-    footer: `${INTERNAL_COPY_LABEL}. الفاتورة الضريبية الرسمية تصدر عبر المزود المعتمد على /api/finance/invoices/:id/pdf.`,
+    footer: `${cancelled ? 'مسودة فاتورة ملغاة قبل الإصدار، لا يُعتد بها وليست مستندًا ضريبيًا. ' : ''}${INTERNAL_COPY_LABEL}. الفاتورة الضريبية الرسمية تصدر عبر المزود المعتمد على /api/finance/invoices/:id/pdf.`,
   });
 }
