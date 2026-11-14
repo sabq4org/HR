@@ -38,7 +38,7 @@ jobs:
       - run: npm run format:check
       - run: npm run typecheck
       - run: npm test
-      - run: HR_ACCEPTANCE_POSTGRES=true node --import tsx --test tests/domain/workflows-acceptance.test.ts
+      - run: HR_ACCEPTANCE_POSTGRES=true node --import tsx --test tests/domain/workflows-acceptance.test.ts tests/domain/leave-operations.test.ts
       - run: npm run build
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:e2e

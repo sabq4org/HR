@@ -266,6 +266,8 @@ export function LeaveRows({
         <button
           key={leave.id}
           className="leave-row"
+          data-leave-id={leave.id}
+          data-current={leave.current !== false}
           onClick={() => showLeave(leave)}
           aria-label={`تفاصيل طلب ${leave.employeeName} من ${dateLabel(leave.startDate)}`}
         >

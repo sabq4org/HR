@@ -1,6 +1,6 @@
 {
   "name": "sabq-people",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "overrides": {
     "exceljs": {
@@ -24,6 +24,8 @@
     "check": "npm run typecheck && npm test && npm run build",
     "db:backup": "tsx scripts/database-operations.ts backup",
     "db:verify": "tsx scripts/database-operations.ts verify",
+    "accounts:bootstrap": "tsx scripts/bootstrap-accounts.ts",
+    "accounts:recover": "tsx scripts/recover-account.ts",
     "format": "prettier --write src server shared scripts tests *.ts *.json index.html",
     "format:check": "prettier --check src server shared scripts tests *.ts *.json index.html"
   },
@@ -32,6 +34,7 @@
     "exceljs": "4.4.0",
     "express": "5.3.0",
     "lucide-react": "1.72.0",
+    "otplib": "13.6.0",
     "pg": "8.23.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",

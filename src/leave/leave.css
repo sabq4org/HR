@@ -1,0 +1,118 @@
+.policy-panel {
+  padding: 24px;
+  margin: 0 0 20px;
+}
+.policy-panel h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+.policy-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: end;
+  margin-top: 18px;
+}
+.policy-form select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 12px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+.policy-days {
+  min-height: 72px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.policy-days label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.policy-form > button {
+  justify-self: start;
+}
+.policy-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+}
+.policy-row p {
+  margin: 6px 0;
+}
+.policy-row small {
+  color: var(--muted);
+  line-height: 1.8;
+}
+.policy-approve {
+  display: flex;
+  gap: 8px;
+  min-width: 280px;
+}
+.policy-approve input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px 10px;
+}
+.leave-change-history,
+.leave-change-form {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.leave-change-history h4,
+.leave-change-form h4 {
+  margin: 0 0 12px;
+}
+.leave-change-item {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+}
+.leave-change-item small {
+  color: var(--muted);
+}
+.leave-change-item p {
+  margin: 4px 0;
+}
+.leave-change-form select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px;
+  background: white;
+  font: inherit;
+}
+@media (max-width: 700px) {
+  .policy-form {
+    grid-template-columns: 1fr;
+  }
+  .policy-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .policy-approve {
+    min-width: 0;
+  }
+}

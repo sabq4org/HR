@@ -128,7 +128,7 @@ export function Dashboard() {
   const pending = leaves.filter(isPending);
   const actionable = pending.filter((l) => canDecide(me, l, employees));
   const upcoming = leaves
-    .filter((l) => l.status === 'approved' && l.endDate >= today)
+    .filter((l) => l.current !== false && l.status === 'approved' && l.endDate >= today)
     .sort((a, b) => a.startDate.localeCompare(b.startDate));
   const month = dateLabel(today, { month: 'long' });
   return (
@@ -219,7 +219,7 @@ export function Dashboard() {
             <small>{me.role === 'employee' ? 'طلباتك المعتمدة' : 'بانتظار قرارك'}</small>
             <strong>
               {me.role === 'employee'
-                ? leaves.filter((l) => l.status === 'approved').length
+                ? leaves.filter((l) => l.current !== false && l.status === 'approved').length
                 : actionable.length}
               <em>{me.role === 'employee' ? 'طلب معتمد' : 'طلبات قابلة للمراجعة'}</em>
             </strong>
@@ -311,12 +311,12 @@ export function LeavesPage() {
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [mine, setMine] = useState(false);
-  const leaves = data.leaves.filter(
-    (l) =>
-      (!mine || l.employeeId === data.me.id) &&
-      (filter === 'all' || (filter === 'pending' ? isPending(l) : l.status === filter)) &&
-      `${l.employeeName} ${l.id}`.includes(query),
-  );
+  const matches = (l: (typeof data.leaves)[number]) =>
+    (!mine || l.employeeId === data.me.id) &&
+    (filter === 'all' || (filter === 'pending' ? isPending(l) : l.status === filter)) &&
+    `${l.employeeName} ${l.id}`.includes(query);
+  const leaves = data.leaves.filter((l) => l.current !== false && matches(l));
+  const historical = data.leaves.filter((l) => l.current === false && matches(l));
   return (
     <>
       <PageHeading
@@ -391,11 +391,21 @@ export function LeavesPage() {
           {leaves.length} طلبات<span>يمكنك فتح أي طلب للاطلاع على تفاصيله.</span>
         </div>
       </section>
+      {historical.length > 0 && (
+        <section className="panel" style={{ marginTop: 18, padding: 22 }}>
+          <SectionTitle title="السجل التاريخي للإجازات المعدلة" />
+          <p className="field-hint">
+            هذه نسخ اعتمدت سابقًا ثم استُبدلت بطلب تغيير مرتبط. تبقى محفوظة للتدقيق ولا تدخل في
+            التقويم أو الرصيد الحالي.
+          </p>
+          <LeaveRows leaves={historical} />
+        </section>
+      )}
     </>
   );
 }
 export function ApprovalsPage() {
-  const { data } = useApp();
+  const { data, showLeave } = useApp();
   const [filter, setFilter] = useState('actionable');
   if (data.me.role === 'employee')
     return (
@@ -414,6 +424,20 @@ export function ApprovalsPage() {
     );
   const pending = data.leaves.filter(isPending);
   const actionable = pending.filter((l) => canDecide(data.me, l, data.employees));
+  const changeItems = data.leaves.flatMap((leave) =>
+    (leave.changeHistory ?? [])
+      .filter((change) =>
+        filter === 'all'
+          ? ['pending_manager', 'pending_hr'].includes(change.status)
+          : change.status === 'pending_manager'
+            ? data.me.role === 'manager' &&
+              data.employees.some((e) => e.id === change.employeeId && e.managerId === data.me.id)
+            : change.status === 'pending_hr' &&
+              data.me.role === 'hr' &&
+              data.me.id !== change.employeeId,
+      )
+      .map((change) => ({ leave, change })),
+  );
   return (
     <>
       <PageHeading title="صندوق الموافقات" subtitle="قرار واضح، وفريق يستطيع التخطيط." />
@@ -458,6 +482,41 @@ export function ApprovalsPage() {
         </div>
         <LeaveRows leaves={filter === 'actionable' ? actionable : pending} />
       </section>
+      {changeItems.length > 0 && (
+        <section className="panel" style={{ marginTop: 18, padding: 22 }}>
+          <SectionTitle title="تغييرات الإجازات المعتمدة" />
+          <div className="leave-table">
+            {changeItems.map(({ leave, change }) => (
+              <button className="leave-row" key={change.id} onClick={() => showLeave(leave)}>
+                <span>
+                  <strong>{leave.employeeName}</strong>
+                  <small>
+                    {change.kind === 'cancel'
+                      ? 'إلغاء'
+                      : change.kind === 'extend'
+                        ? 'تمديد'
+                        : change.kind === 'early_return'
+                          ? 'عودة مبكرة'
+                          : 'تعديل'}{' '}
+                    إجازة
+                  </small>
+                </span>
+                <span>
+                  {dateLabel(change.proposed.startDate)}
+                  <small>إلى {dateLabel(change.proposed.endDate)}</small>
+                </span>
+                <span>
+                  {change.proposed.days} أيام
+                  <small>
+                    {change.status === 'pending_manager' ? 'بانتظار المدير' : 'بانتظار HR'}
+                  </small>
+                </span>
+                <span className="status-pill pending">مراجعة</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
       <div className="inline-note">
         <ShieldCheck size={18} />
         كل قرار مرتبط بصاحب الصلاحية ونسخة الطلب. لا يمكن اعتماد طلبك الشخصي.
@@ -760,7 +819,7 @@ export function CalendarPage() {
   const last = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
   const cellCount = Math.ceil((offset + last) / 7) * 7;
   const leaves = data.leaves.filter(
-    (l) => l.status === 'approved' && (!mine || l.employeeId === data.me.id),
+    (l) => l.current !== false && l.status === 'approved' && (!mine || l.employeeId === data.me.id),
   );
   const onDay = (day: string) =>
     leaves.filter(

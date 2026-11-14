@@ -8,8 +8,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
+import { generate } from 'otplib';
 import { createApp } from '../server/app.js';
 import { createDatabase, createPostgresDatabase, type Db } from '../server/database.js';
+import { provisionEmployeeAccount } from '../server/access/index.js';
+import { decryptSensitive } from '../server/administration/security.js';
+import { runMaintenance } from '../server/operations/index.js';
 
 if (existsSync('.env.pg-test')) process.loadEnvFile('.env.pg-test');
 const command = promisify(execFile);
@@ -18,6 +22,14 @@ const png = Buffer.from(
   'base64',
 );
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+const accountPassword = 'Synthetic-Recovery-Account-2026!';
+type AccountRecoveryFixture = {
+  employeeId: string;
+  loginName: string;
+  recoveryCode: string;
+  encryptedTotp: string;
+  totpSecret: string;
+};
 const temp = mkdtempSync(join(tmpdir(), 'sabq-hr-recovery-'));
 async function withApi<T>(
   db: Db,
@@ -91,13 +103,132 @@ async function verify(db: Db, id: string) {
     assert.ok(!raw.includes('0500000123') && !raw.includes('12345.67'));
   });
 }
+async function verifyOperationsState(db: Db, runId: string) {
+  const run = (
+    await db.read<{ status: string; failure_code: string | null }>(
+      'SELECT status,failure_code FROM operations_job_runs WHERE id=?',
+      [runId],
+    )
+  )[0];
+  assert.equal(run?.status, 'succeeded', 'Maintenance run state did not survive recovery');
+  assert.equal(run.failure_code, null, 'Successful maintenance run contains a failure code');
+}
+async function withAccountApi<T>(
+  db: Db,
+  work: (call: (path: string, body?: unknown, cookie?: string) => Promise<Response>) => Promise<T>,
+): Promise<T> {
+  const server = createServer(createApp(db, { authMode: 'accounts' }));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const origin = `http://127.0.0.1:${address.port}`;
+  try {
+    return await work((path, body, cookie = '') =>
+      fetch(`${origin}/api${path}`, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: {
+          origin,
+          cookie,
+          'content-type': 'application/json',
+          'idempotency-key': randomUUID(),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+async function provisionAndActivateAccount(db: Db): Promise<AccountRecoveryFixture> {
+  const employeeId = 'emp-sara';
+  const loginName = 'synthetic-recovery@example.test';
+  const activation = await provisionEmployeeAccount(db, { employeeId, loginName });
+  return withAccountApi(db, async (call) => {
+    const setupResponse = await call('/auth/activation/setup', {
+      token: activation.activationToken,
+    });
+    assert.equal(setupResponse.status, 200, await setupResponse.clone().text());
+    const setup = (await setupResponse.json()) as { secret: string };
+    const completed = await call('/auth/activation/complete', {
+      token: activation.activationToken,
+      password: accountPassword,
+      otp: await generate({ secret: setup.secret, epoch: Date.now() / 1000 }),
+    });
+    assert.equal(completed.status, 200, await completed.clone().text());
+    const activationResult = (await completed.json()) as { recoveryCodes: string[] };
+    const account = (
+      await db.read<{ totp_secret_ciphertext: string }>(
+        'SELECT totp_secret_ciphertext FROM employee_accounts WHERE employee_id=?',
+        [employeeId],
+      )
+    )[0];
+    assert.ok(account?.totp_secret_ciphertext);
+    assert.equal(
+      decryptSensitive(account.totp_secret_ciphertext, `employee-account:${employeeId}:totp:v1`),
+      setup.secret,
+    );
+    return {
+      employeeId,
+      loginName,
+      recoveryCode: activationResult.recoveryCodes[0],
+      encryptedTotp: account.totp_secret_ciphertext,
+      totpSecret: setup.secret,
+    };
+  });
+}
+async function verifyAccountRecovery(db: Db, fixture: AccountRecoveryFixture) {
+  const account = (
+    await db.read<{ totp_secret_ciphertext: string }>(
+      'SELECT totp_secret_ciphertext FROM employee_accounts WHERE employee_id=?',
+      [fixture.employeeId],
+    )
+  )[0];
+  assert.equal(account?.totp_secret_ciphertext, fixture.encryptedTotp);
+  assert.equal(
+    decryptSensitive(
+      account.totp_secret_ciphertext,
+      `employee-account:${fixture.employeeId}:totp:v1`,
+    ),
+    fixture.totpSecret,
+  );
+  await withAccountApi(db, async (call) => {
+    const logged = await call('/auth/login', {
+      loginName: fixture.loginName,
+      password: accountPassword,
+      otp: fixture.recoveryCode,
+    });
+    assert.equal(logged.status, 200, await logged.clone().text());
+    const cookie = logged.headers.get('set-cookie')?.split(';')[0];
+    assert.ok(cookie);
+    const session = await call('/auth/session', undefined, cookie);
+    assert.equal(session.status, 200);
+    assert.equal(((await session.json()) as { me: { id: string } }).me.id, fixture.employeeId);
+    const replay = await call('/auth/login', {
+      loginName: fixture.loginName,
+      password: accountPassword,
+      otp: fixture.recoveryCode,
+    });
+    assert.equal(
+      replay.status,
+      401,
+      'a restored one-time recovery code must still be consumed once',
+    );
+  });
+}
 try {
   const original = join(temp, 'original.sqlite');
   const backupPath = join(temp, 'restored.sqlite');
   const first = await createDatabase(original);
   let docId: string;
+  let sqliteMaintenanceRunId: string;
+  let sqliteAccount: AccountRecoveryFixture;
   try {
     docId = await populate(first);
+    sqliteAccount = await provisionAndActivateAccount(first);
+    const maintenance = await runMaintenance(first);
+    assert.equal(maintenance.status, 'succeeded');
+    await verifyOperationsState(first, maintenance.runId);
+    sqliteMaintenanceRunId = maintenance.runId;
   } finally {
     await first.close();
   }
@@ -111,11 +242,13 @@ try {
   const restored = await createDatabase(backupPath);
   try {
     await verify(restored, docId!);
+    await verifyOperationsState(restored, sqliteMaintenanceRunId!);
+    await verifyAccountRecovery(restored, sqliteAccount!);
   } finally {
     await restored.close();
   }
   process.stdout.write(
-    'SQLite backup/reopen: employee fields and encrypted private document verified.\n',
+    'SQLite backup/reopen: employee fields, private document, maintenance state, and MFA recovery login verified.\n',
   );
 
   const value = process.env.HR_TEST_DATABASE_URL;
@@ -142,6 +275,9 @@ try {
   try {
     db = await createPostgresDatabase(value, schema);
     const pgDoc = await populate(db);
+    const pgAccount = await provisionAndActivateAccount(db);
+    const pgMaintenance = await runMaintenance(db);
+    assert.equal(pgMaintenance.status, 'succeeded');
     await db.close();
     db = undefined;
     db = await createPostgresDatabase(value, schema);
@@ -170,8 +306,10 @@ try {
     cloneUrl.pathname = `/${cloneName}`;
     clone = await createPostgresDatabase(cloneUrl.toString(), schema);
     await verify(clone, pgDoc);
+    await verifyOperationsState(clone, pgMaintenance.runId);
+    await verifyAccountRecovery(clone, pgAccount);
     process.stdout.write(
-      'PostgreSQL pg_dump/pg_restore: restored isolated database, fields and encrypted document verified.\n',
+      'PostgreSQL pg_dump/pg_restore: restored isolated database, private data, maintenance state, and MFA recovery login verified.\n',
     );
   } finally {
     await clone?.close();

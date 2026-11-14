@@ -5,40 +5,55 @@ import express from 'express';
 import { createApp } from './app.js';
 import { createDatabase, createPostgresDatabase } from './database.js';
 import { createHostedDemoApp } from './hosted-demo.js';
+import { readRuntimeConfig } from './runtime-config.js';
+import { startOperations } from './operations/index.js';
 
 const envFile = resolve('.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
-const production = process.env.NODE_ENV === 'production';
-const hostedDemo = process.env.HR_MODE === 'hosted-demo';
-if (process.env.HR_MODE && !hostedDemo) {
-  throw new Error('Unsupported HR_MODE. Only hosted-demo is available for public previews.');
-}
-if (hostedDemo && !production) throw new Error('Hosted previews require NODE_ENV=production.');
-if (production && !hostedDemo && process.env.LOCAL_DEMO !== 'true') {
-  throw new Error('Select HR_MODE=hosted-demo or explicitly enable LOCAL_DEMO=true.');
-}
-if (hostedDemo && process.env.HR_DB_PATH) {
-  throw new Error('Hosted previews use isolated temporary databases; HR_DB_PATH is not allowed.');
-}
-if (process.env.HR_DB_DRIVER && !['sqlite', 'postgres'].includes(process.env.HR_DB_DRIVER)) {
-  throw new Error('HR_DB_DRIVER must be sqlite or postgres.');
-}
+const config = readRuntimeConfig();
+const { production } = config;
+const hostedDemo = config.mode === 'hosted-demo';
+const operational = config.mode === 'operational';
 const runtime = hostedDemo
   ? await createHostedDemoApp({
-      publicOrigin: process.env.HR_PUBLIC_ORIGIN ?? '',
-      databaseUrl: process.env.DATABASE_URL,
+      publicOrigin: config.publicOrigin ?? '',
+      databaseUrl: config.databaseUrl,
     })
   : await (async () => {
       const defaultDataDir = resolve('.data');
       mkdirSync(defaultDataDir, { recursive: true });
       const db =
-        process.env.HR_DB_DRIVER === 'postgres'
-          ? await createPostgresDatabase(process.env.DATABASE_URL ?? '', 'hr_development')
-          : await createDatabase(
-              process.env.HR_DB_PATH ?? resolve(defaultDataDir, 'hr-local.sqlite'),
-            );
-      return { app: createApp(db), close: () => db.close() };
+        config.driver === 'postgres'
+          ? await createPostgresDatabase(config.databaseUrl ?? '', config.schema, {
+              seed: config.seed,
+            })
+          : await createDatabase(config.databasePath, { seed: config.seed });
+      if (
+        operational &&
+        !config.seed &&
+        (
+          await db.read(
+            "SELECT id FROM employees WHERE id IN ('emp-noura','emp-omar','emp-sara') LIMIT 1",
+          )
+        ).length
+      ) {
+        await db.close();
+        throw new Error(
+          'Operational storage contains demo fixtures. Select a separate database; no data was removed.',
+        );
+      }
+      const jobs = operational ? startOperations(db) : undefined;
+      return {
+        app: createApp(db, {
+          authMode: operational ? 'accounts' : 'demo',
+          publicOrigin: config.publicOrigin,
+        }),
+        close: async () => {
+          await jobs?.close();
+          await db.close();
+        },
+      };
     })();
 const { app } = runtime;
 app.use((_req, res, next) => {
@@ -60,14 +75,10 @@ if (production) {
   app.use(vite.middlewares);
 }
 
-const port = Number(process.env.PORT ?? 4317);
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT.');
+const { port, host } = config;
 const server = createServer(app);
-const host = hostedDemo ? '0.0.0.0' : '127.0.0.1';
 server.listen(port, host, () => {
-  process.stdout.write(
-    `Sabq HR synthetic ${hostedDemo ? 'hosted' : 'local'} app listening on ${host}:${port}\n`,
-  );
+  process.stdout.write(`Sabq HR ${config.mode} app listening on ${host}:${port}\n`);
 });
 let stopping = false;
 function shutdown() {

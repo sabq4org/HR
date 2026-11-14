@@ -36,6 +36,25 @@ function tokenKey(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 function knownApi(method: string, path: string): boolean {
+  if (method === 'GET' && path === '/api/leave-policy-assignments') return true;
+  if (
+    method === 'POST' &&
+    /^\/api\/leave-policy-assignments\/[^/]+\/(approve|decision)$/.test(path)
+  )
+    return true;
+  if (
+    method === 'GET' &&
+    (path === '/api/leave-policies' || /^\/api\/leave-changes\/[^/]+$/.test(path))
+  )
+    return true;
+  if (
+    method === 'POST' &&
+    (path === '/api/leave-policies' ||
+      /^\/api\/leave-policies\/[^/]+\/(approve|assign)$/.test(path) ||
+      /^\/api\/leaves\/[^/]+\/changes$/.test(path) ||
+      /^\/api\/leave-changes\/[^/]+\/(decision|cancel)$/.test(path))
+  )
+    return true;
   if (method === 'GET' && (path === '/api/bootstrap' || /^\/api\/employees\/[^/]+$/.test(path)))
     return true;
   if (

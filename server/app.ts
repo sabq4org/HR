@@ -10,6 +10,10 @@ import {
   type Db,
 } from './database.js';
 import { registerAdministration } from './administration/routes.js';
+import { createAccountAccess } from './access/index.js';
+import { registerPilotStatus } from './pilot-status.js';
+import { currentPolicy, leaveChangesFor, registerLeaveRoutes } from './leave/routes.js';
+import { annualLeaveDays } from '../shared/leave.js';
 
 type Session = Actor & { expiresAt: number };
 type EmployeeRow = {
@@ -42,6 +46,10 @@ type LeaveRow = {
   decision_reason: string | null;
   policy_version_id: string | null;
   work_schedule_id: string | null;
+  calculation_snapshot_json?: string | null;
+  current_flag?: number;
+  parent_leave_id?: string | null;
+  change_id?: string | null;
 };
 export type Actor = { id: string; role: Role };
 export type RequireActor = (req: Request) => Promise<Actor>;
@@ -118,6 +126,11 @@ async function toLeave(db: Db, row: LeaveRow, query: AsyncDb = db): Promise<Leav
     managerDecisionAt: row.manager_decision_at,
     hrDecisionAt: row.hr_decision_at,
     decisionReason: row.decision_reason,
+    policyVersionId: row.policy_version_id,
+    snapshot: row.calculation_snapshot_json ? JSON.parse(row.calculation_snapshot_json) : undefined,
+    current: row.current_flag !== 0,
+    parentLeaveId: row.parent_leave_id ?? null,
+    changeId: row.change_id ?? null,
   };
 }
 async function scopedLeave(
@@ -127,6 +140,7 @@ async function scopedLeave(
   query: AsyncDb = db,
 ): Promise<LeaveRequest> {
   const value = await toLeave(db, row, query);
+  value.changeHistory = await leaveChangesFor(db, row.id, actor, query);
   if (actor.role === 'manager' && row.employee_id !== actor.id) value.note = '';
   return value;
 }
@@ -251,9 +265,10 @@ async function demoRules(
 
 export function createApp(
   database: Db,
-  options: { sessionTtlMs?: number; publicOrigin?: string } = {},
+  options: { sessionTtlMs?: number; publicOrigin?: string; authMode?: 'demo' | 'accounts' } = {},
 ) {
   const db = database;
+  const authMode = options.authMode ?? 'demo';
   const app = express();
   const sessions = new Map<string, Session>();
   const sessionTtlMs = options.sessionTtlMs ?? 8 * 60 * 60 * 1000;
@@ -320,12 +335,17 @@ export function createApp(
   );
   app.use('/api/admin/imports/employees/commit', express.json({ limit: '512kb' }));
   app.use(express.json({ limit: '64kb' }));
+  const accountAccess =
+    authMode === 'accounts' ? createAccountAccess(db, { secure: !!pinnedOrigin }) : undefined;
+  accountAccess?.register(app);
   const demoIds = ['emp-noura', 'emp-omar', 'emp-sara', 'emp-reem', 'emp-abdullah', 'emp-hind'];
   const personaRows = async () =>
-    db.read<EmployeeRow>(
-      `SELECT * FROM employee_access WHERE id IN (${demoIds.map((_, i) => `?`).join(',')}) ORDER BY id`,
-      demoIds,
-    );
+    authMode === 'accounts'
+      ? []
+      : db.read<EmployeeRow>(
+          `SELECT * FROM employee_access WHERE id IN (${demoIds.map((_, i) => `?`).join(',')}) ORDER BY id`,
+          demoIds,
+        );
   const tokenFor = (req: Request) => {
     const value = (req.headers.cookie ?? '')
       .split(';')
@@ -334,6 +354,7 @@ export function createApp(
     return value?.slice(cookieName.length + 1);
   };
   const actorFor = async (req: Request): Promise<Actor | undefined> => {
+    if (accountAccess) return accountAccess.actorFor(req);
     const token = tokenFor(req);
     if (!token) return undefined;
     const session = sessions.get(token);
@@ -351,7 +372,7 @@ export function createApp(
   };
   const requireActor: RequireActor = async (req) => {
     const actor = await actorFor(req);
-    if (!actor) throw fault(401, 'AUTH_REQUIRED', 'سجّل الدخول إلى مساحة التجربة.');
+    if (!actor) throw fault(401, 'AUTH_REQUIRED', 'سجّل الدخول إلى مساحة الفريق.');
     return actor;
   };
   const addAudit = async (
@@ -388,6 +409,19 @@ export function createApp(
       throw fault(400, 'IDEMPOTENCY_KEY_REQUIRED', 'أرسل مفتاح منع التكرار.');
     const hash = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
     return db.transaction(async (tx) => {
+      if (action.startsWith('decision:')) {
+        const scope = (
+          await tx.read<{ employee_id: string; manager_id: string | null }>(
+            'SELECT l.employee_id,e.manager_id FROM leave_requests l JOIN employee_access e ON e.id=l.employee_id WHERE l.id=?',
+            [action.slice('decision:'.length)],
+          )
+        )[0];
+        if (!scope) throw fault(404, 'NOT_FOUND', 'الطلب غير موجود.');
+        if (scope.employee_id === actor.id)
+          throw fault(403, 'SELF_APPROVAL', 'لا يمكن اعتماد طلبك أو رفضه.');
+        if (!(actor.role === 'hr' || (actor.role === 'manager' && scope.manager_id === actor.id)))
+          throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية مراجعة هذا الطلب حاليًا.');
+      }
       const prior = (
         await tx.read<{ payload_hash: string; response_json: string }>(
           'SELECT payload_hash,response_json FROM idempotency WHERE actor_id=? AND action=? AND key=?',
@@ -407,9 +441,16 @@ export function createApp(
       return value;
     });
   };
-  app.get('/api/health', (_req, res) =>
-    res.json({ status: 'ok', mode: pinnedOrigin ? 'synthetic-hosted' : 'synthetic-local' }),
-  );
+  const runtimeMode =
+    authMode === 'accounts' ? 'operational' : pinnedOrigin ? 'synthetic-hosted' : 'synthetic-local';
+  app.get('/api/health', async (_req, res) => {
+    try {
+      await db.read('SELECT 1 AS healthy');
+      res.json({ status: 'ok', mode: runtimeMode });
+    } catch {
+      res.status(503).json({ status: 'unavailable', mode: runtimeMode });
+    }
+  });
   app.get('/api/session', async (req, res) => {
     try {
       const actor = await actorFor(req);
@@ -420,7 +461,7 @@ export function createApp(
       res.json({
         me: employee ? toEmployee(employee) : null,
         personas,
-        mode: pinnedOrigin ? 'synthetic-hosted' : 'synthetic-local',
+        mode: runtimeMode,
       });
     } catch (e) {
       jsonError(res, e as ApiFault);
@@ -428,6 +469,7 @@ export function createApp(
   });
   app.post('/api/demo/session', async (req, res) => {
     try {
+      if (accountAccess) throw fault(404, 'NOT_FOUND', 'المسار غير موجود.');
       const id = req.body?.employeeId;
       if (!demoIds.includes(id))
         throw fault(400, 'INVALID_PERSONA', 'اختر إحدى شخصيات التجربة المتاحة.');
@@ -454,7 +496,16 @@ export function createApp(
       jsonError(res, e as ApiFault);
     }
   });
-  app.delete('/api/session', (req, res) => {
+  app.delete('/api/session', async (req, res) => {
+    if (accountAccess) {
+      try {
+        await accountAccess.logout(req, res);
+        res.status(204).end();
+      } catch {
+        jsonError(res, fault(503, 'LOGOUT_UNAVAILABLE', 'تعذر إنهاء الجلسة. أعد المحاولة.'));
+      }
+      return;
+    }
     const token = tokenFor(req);
     if (token) sessions.delete(token);
     res.clearCookie(cookieName, {
@@ -476,7 +527,6 @@ export function createApp(
           : actor.role === 'manager'
             ? all.filter((e) => e.id === actor.id || e.manager_id === actor.id)
             : [me];
-      const rules = await demoRules(db, actor.id);
       const ids = new Set(visible.map((e) => e.id));
       const rows = await db.read<LeaveRow>(
         'SELECT * FROM leave_requests ORDER BY created_at DESC,id',
@@ -493,6 +543,48 @@ export function createApp(
         leave_id: string | null;
         request_id?: string | null;
       }>('SELECT * FROM outbox WHERE recipient_id=? ORDER BY created_at DESC,id DESC', [actor.id]);
+      let policyConfigured = false;
+      let policySummary = {
+        name: 'سياسة الإجازة السنوية غير مسندة',
+        version: 'غير متاحة',
+        description: 'يجب اعتماد سياسة وإسنادها قبل طلب الإجازة.',
+        workingDays: [] as number[],
+        holidayDates: [] as string[],
+      };
+      if (authMode === 'demo') {
+        const rules = await demoRules(db, actor.id);
+        policyConfigured = true;
+        policySummary = {
+          name: 'سياسة الإجازة السنوية التجريبية',
+          version: rules.version,
+          description: `قاعدة محلية اصطناعية فقط؛ ${rules.source}`,
+          workingDays: rules.workingDays,
+          holidayDates: [],
+        };
+      }
+      if (authMode === 'accounts') {
+        const assigned = await db.read<any>(
+          `SELECT p.* FROM leave_policy_assignments a JOIN policy_versions p ON p.id=a.policy_version_id
+          WHERE a.employee_id=? AND a.approval_status='approved' AND a.effective_from<=? AND (a.effective_to IS NULL OR a.effective_to>=?) AND p.approval_status='approved' AND p.effective_from<=? AND (p.effective_to IS NULL OR p.effective_to>=?) ORDER BY a.effective_from DESC LIMIT 1`,
+          [actor.id, todayInRiyadh(), todayInRiyadh(), todayInRiyadh(), todayInRiyadh()],
+        );
+        policyConfigured = !!assigned[0];
+        policySummary = assigned[0]
+          ? {
+              name: 'سياسة الإجازة السنوية المعتمدة',
+              version: assigned[0].version,
+              description: assigned[0].source,
+              workingDays: JSON.parse(assigned[0].working_days_json),
+              holidayDates: JSON.parse(assigned[0].holiday_dates_json ?? '[]'),
+            }
+          : {
+              name: 'لا توجد سياسة مسندة',
+              version: 'غير متاحة',
+              description: 'اطلب من الموارد البشرية اعتماد سياسة وإسنادها مع رصيد افتتاحي معتمد.',
+              workingDays: [],
+              holidayDates: [],
+            };
+      }
       res.json({
         me: toEmployee(me),
         employees: visible.map(toEmployee),
@@ -513,12 +605,9 @@ export function createApp(
           role: e.role,
           title: e.title,
         })),
-        policy: {
-          name: 'سياسة الإجازة السنوية التجريبية',
-          version: rules.version,
-          description: `قاعدة محلية اصطناعية فقط؛ ${rules.source}`,
-          workingDays: rules.workingDays,
-        },
+        policy: policySummary,
+        policyConfigured,
+        authMode,
         today: todayInRiyadh(),
       });
     } catch (e) {
@@ -570,17 +659,28 @@ export function createApp(
           'APPROVAL_ROUTE_UNCONFIGURED',
           'تعذر إرسال الطلب: مسار الاعتماد غير مكتمل أو لا يتضمن معتمدًا مستقلًا. سجّل المسار الناقص لدى مالك النظام قبل المتابعة.',
         );
-      const rules = await demoRules(db, actor.id);
+      const rules =
+        authMode === 'demo'
+          ? await demoRules(db, actor.id)
+          : await currentPolicy(db, actor.id, startDate, authMode);
       if (
-        startDate < rules.effectiveFrom ||
-        (rules.effectiveTo !== null && endDate > rules.effectiveTo)
+        authMode === 'demo' &&
+        (startDate < rules.effectiveFrom ||
+          (rules.effectiveTo !== null && endDate > rules.effectiveTo))
       )
         throw fault(
           503,
           'DEMO_POLICY_CONFIGURATION_INVALID',
           'تعذر إرسال الطلب: السياسة التجريبية لا تغطي الفترة المحددة.',
         );
-      const days = workDays(startDate, endDate, rules.workingDays);
+      if (startDate < rules.effectiveFrom || (rules.effectiveTo && endDate > rules.effectiveTo))
+        throw fault(
+          409,
+          'LEAVE_POLICY_DATE_RANGE',
+          'فترة الإجازة خارج مدة سريان السياسة المسندة؛ راجع HR.',
+        );
+      const holidays = 'holidayDates' in rules ? rules.holidayDates : [];
+      const days = annualLeaveDays(startDate, endDate, rules.workingDays, holidays);
       if (!days) throw fault(400, 'NO_WORK_DAYS', 'الفترة لا تحتوي على أيام عمل وفق جدول التجربة.');
       const leave = await idempotent(
         actor,
@@ -593,15 +693,38 @@ export function createApp(
             throw fault(409, 'INSUFFICIENT_BALANCE', 'الرصيد المتاح لا يكفي للفترة المحددة.');
           const overlap = (
             await tx.read<{ id: string }>(
-              "SELECT id FROM leave_requests WHERE employee_id=? AND status IN ('pending_manager','pending_hr','approved') AND NOT(end_date<? OR start_date>?) LIMIT 1",
+              "SELECT id FROM leave_requests WHERE employee_id=? AND current_flag=1 AND status IN ('pending_manager','pending_hr','approved') AND NOT(end_date<? OR start_date>?) LIMIT 1",
               [actor.id, startDate, endDate],
             )
           )[0];
           if (overlap) throw fault(409, 'LEAVE_OVERLAP', 'تتداخل الفترة مع طلب قائم.');
+          const pendingChanges = await tx.read(
+            "SELECT id FROM leave_change_requests WHERE employee_id=? AND kind<>'cancel' AND status IN ('pending_manager','pending_hr') AND NOT(proposed_end_date<? OR proposed_start_date>?) LIMIT 1",
+            [actor.id, startDate, endDate],
+          );
+          if (pendingChanges.length)
+            throw fault(409, 'LEAVE_OVERLAP', 'تتداخل الفترة مع تعديل إجازة قيد المراجعة.');
           const id = randomUUID();
           const createdAt = new Date().toISOString();
+          const policyId =
+            authMode === 'demo'
+              ? (rules as DemoRules).policyVersion
+              : (rules as Awaited<ReturnType<typeof currentPolicy>>).id;
+          const snapshot = {
+            startDate,
+            endDate,
+            days,
+            policyVersionId: policyId,
+            policyVersion: rules.version,
+            policySource: rules.source,
+            workingDays: rules.workingDays,
+            holidayDates: holidays,
+            effectiveFrom: rules.effectiveFrom,
+            effectiveTo: rules.effectiveTo,
+            calculatedAt: createdAt,
+          };
           await tx.execute(
-            'INSERT INTO leave_requests(id,employee_id,start_date,end_date,days,note,status,created_at,policy_version_id,work_schedule_id) VALUES(?,?,?,?,?, ?,?, ?,?,?)',
+            'INSERT INTO leave_requests(id,employee_id,start_date,end_date,days,note,status,created_at,policy_version_id,work_schedule_id,calculation_snapshot_json) VALUES(?,?,?,?,?, ?,?, ?,?,?,?)',
             [
               id,
               actor.id,
@@ -611,8 +734,11 @@ export function createApp(
               note,
               'pending_manager',
               createdAt,
-              rules.policyVersion,
-              rules.scheduleId,
+              authMode === 'demo'
+                ? (rules as DemoRules).policyVersion
+                : (rules as Awaited<ReturnType<typeof currentPolicy>>).id,
+              authMode === 'demo' ? (rules as DemoRules).scheduleId : null,
+              JSON.stringify(snapshot),
             ],
           );
           await tx.execute(
@@ -669,21 +795,11 @@ export function createApp(
           const hrStep = actor.role === 'hr' && row.status === 'pending_hr';
           if (!managerStep && !hrStep)
             throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية اتخاذ هذا القرار في هذه المرحلة.');
-          const rules = await demoRules(
-            db,
-            row.employee_id,
-            row.policy_version_id ?? undefined,
-            row.work_schedule_id ?? undefined,
-            tx,
-          );
-          if (
-            row.start_date < rules.effectiveFrom ||
-            (rules.effectiveTo !== null && row.end_date > rules.effectiveTo)
-          )
+          if (decision === 'approve' && !row.calculation_snapshot_json)
             throw fault(
-              503,
-              'DEMO_POLICY_CONFIGURATION_INVALID',
-              'تعذر اعتماد الطلب: نسخة السياسة المثبتة لا تغطي الفترة المحددة.',
+              409,
+              'SNAPSHOT_MISSING',
+              'تعذر القرار: لا توجد لقطة حساب محفوظة لهذا الطلب.',
             );
           const now = new Date().toISOString();
           const next = decision === 'reject' ? 'rejected' : managerStep ? 'pending_hr' : 'approved';
@@ -731,15 +847,26 @@ export function createApp(
             version + 1,
             decision === 'reject' ? reason : null,
           );
-          if (next === 'pending_hr')
-            await enqueue(
-              tx,
-              'emp-noura',
-              'طلب بانتظار الموارد البشرية',
-              `${owner.name} لديه طلب إجازة بانتظار المراجعة.`,
-              id,
+          if (next === 'pending_hr') {
+            const reviewers = await tx.read<{ id: string }>(
+              "SELECT id FROM employee_access WHERE role='hr' AND status IN ('active','on_leave') AND id<>?",
+              [owner.id],
             );
-          else
+            if (!reviewers.length)
+              throw fault(
+                409,
+                'NEXT_APPROVER_UNAVAILABLE',
+                'يلزم مراجع موارد بشرية مستقل قبل إحالة الطلب.',
+              );
+            for (const reviewer of reviewers)
+              await enqueue(
+                tx,
+                reviewer.id,
+                'طلب بانتظار الموارد البشرية',
+                'لديك طلب إجازة بانتظار المراجعة.',
+                id,
+              );
+          } else
             await enqueue(
               tx,
               owner.id,
@@ -812,6 +939,7 @@ export function createApp(
       jsonError(res, e as ApiFault);
     }
   });
+  registerLeaveRoutes(app, { db, requireActor, authMode });
   app.post('/api/notifications/read', async (req, res) => {
     try {
       const actor = await requireActor(req);
@@ -824,6 +952,26 @@ export function createApp(
       jsonError(res, e as ApiFault);
     }
   });
+  if (accountAccess) {
+    registerPilotStatus(app, db, requireActor);
+    // Account pilot approval covers employee files and annual leave. The financial
+    // preview must never become an operational calculator merely by changing auth.
+    app.use('/api/admin/payroll', async (req, res) => {
+      try {
+        await requireActor(req);
+        jsonError(
+          res,
+          fault(
+            409,
+            'PAYROLL_NOT_ACTIVATED',
+            'تشغيل الرواتب يحتاج اعتماد قواعده ومطابقته مع المالية.',
+          ),
+        );
+      } catch (error) {
+        jsonError(res, error as ApiFault);
+      }
+    });
+  }
   registerAdministration(app, { db, requireActor });
   app.use((req, res, next) => {
     if (req.path === '/api' || req.path.startsWith('/api/'))

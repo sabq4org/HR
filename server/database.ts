@@ -237,7 +237,7 @@ class PgTx implements AsyncDb {
   }
 }
 
-const SCHEMA_RE = /^hr_(?:development|test_[a-z0-9_]+|preview_[a-f0-9]{16,64})$/;
+const SCHEMA_RE = /^hr_(?:development|operational|test_[a-z0-9_]+|preview_[a-f0-9]{16,64})$/;
 function quoteSchema(schema: string): string {
   if (!SCHEMA_RE.test(schema) || schema === 'hr_public')
     throw new Error('Refusing an unsafe or public PostgreSQL schema name.');
@@ -405,14 +405,21 @@ async function applyPostgresMigrations(pool: Pool, schema: string): Promise<void
   }
 }
 
-export async function createDatabase(path = ':memory:'): Promise<Db> {
+export type DatabaseOptions = { seed?: boolean };
+
+export async function createDatabase(
+  path = ':memory:',
+  options: DatabaseOptions = {},
+): Promise<Db> {
   const connection = new DatabaseSync(path);
   connection.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;');
   await applySqliteMigrations(connection);
   const db = new SqliteAdapter(connection);
   try {
-    await seed(db);
-    await seedAdministrationProfiles(db);
+    if (options.seed !== false) {
+      await seed(db);
+      await seedAdministrationProfiles(db);
+    }
     return db;
   } catch (error) {
     await db.close();
@@ -420,7 +427,11 @@ export async function createDatabase(path = ':memory:'): Promise<Db> {
   }
 }
 
-export async function createPostgresDatabase(url: string, schema = 'hr_development'): Promise<Db> {
+export async function createPostgresDatabase(
+  url: string,
+  schema = 'hr_development',
+  options: DatabaseOptions = {},
+): Promise<Db> {
   if (!url) throw new Error('A PostgreSQL connection string is required.');
   const quoted = quoteSchema(schema);
   const dropSchema = schema.startsWith('hr_preview_');
@@ -441,8 +452,10 @@ export async function createPostgresDatabase(url: string, schema = 'hr_developme
   const db = new PostgresAdapter(url, shared, schema, dropSchema);
   try {
     await applyPostgresMigrations(shared.pool, schema);
-    await seed(db);
-    await seedAdministrationProfiles(db);
+    if (options.seed !== false) {
+      await seed(db);
+      await seedAdministrationProfiles(db);
+    }
     return db;
   } catch (error) {
     await db.close();

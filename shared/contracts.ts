@@ -40,6 +40,61 @@ export interface LeaveRequest {
   managerDecisionAt: string | null;
   hrDecisionAt: string | null;
   decisionReason: string | null;
+  policyVersionId?: string | null;
+  policyVersion?: string | null;
+  policySource?: string | null;
+  snapshot?: LeaveSnapshot;
+  current?: boolean;
+  parentLeaveId?: string | null;
+  changeId?: string | null;
+  changeHistory?: LeaveChangeRequest[];
+}
+export interface LeaveSnapshot {
+  startDate: string;
+  endDate: string;
+  days: number;
+  policyVersionId: string;
+  policyVersion: string;
+  policySource: string;
+  workingDays: number[];
+  holidayDates: string[];
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  calculatedAt: string;
+}
+export type LeaveChangeKind = 'cancel' | 'extend' | 'early_return' | 'amend';
+export type LeaveChangeStatus =
+  'pending_manager' | 'pending_hr' | 'approved' | 'rejected' | 'cancelled';
+export interface LeaveChangeRequest {
+  id: string;
+  leaveId: string;
+  employeeId: string;
+  kind: LeaveChangeKind;
+  status: LeaveChangeStatus;
+  version: number;
+  originalVersion: number;
+  original: LeaveSnapshot;
+  proposed: LeaveSnapshot;
+  reason: string;
+  createdAt: string;
+  managerDecisionAt: string | null;
+  hrDecisionAt: string | null;
+  decisionReason: string | null;
+  reserveDays: number;
+  replacementLeaveId: string | null;
+}
+export interface LeavePolicy {
+  id: string;
+  version: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  approvalStatus: 'draft' | 'approved' | 'synthetic-demo-only';
+  source: string;
+  sourceReference: string;
+  approvalReference: string | null;
+  allocatedDays: number;
+  workingDays: number[];
+  holidayDates: string[];
 }
 export interface Notification {
   id: string;
@@ -61,6 +116,7 @@ export interface DemoPolicy {
   version: string;
   description: string;
   workingDays: number[];
+  holidayDates?: string[];
 }
 export interface Bootstrap {
   me: Employee;
@@ -71,6 +127,8 @@ export interface Bootstrap {
   personas: DemoPersona[];
   policy: DemoPolicy;
   today: string;
+  authMode?: 'demo' | 'accounts';
+  policyConfigured?: boolean;
 }
 export interface CreateLeaveInput {
   startDate: string;
