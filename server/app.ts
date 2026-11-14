@@ -11,6 +11,7 @@ import {
 } from './database.js';
 import { registerAdministration } from './administration/routes.js';
 import { decryptSensitive } from './administration/security.js';
+import { canAccessFinance, registerFinance } from './finance/routes.js';
 
 type Session = Actor & { expiresAt: number };
 type EmployeeRow = {
@@ -25,6 +26,7 @@ type EmployeeRow = {
   manager_id: string | null;
   join_date: string;
   role: Role;
+  access_role: Role | null;
   color: string;
   status: Employee['status'];
 };
@@ -282,12 +284,20 @@ export function createApp(
     dataMode?: 'synthetic' | 'private';
     /** Shared access password (private hosted mode). Required for private data on a public origin. */
     accessPassword?: string;
+    /** Exact employee ID explicitly granted the financial workspace. No role-wide default. */
+    financeEmployeeId?: string;
+    /** Dependency injection for isolated tests; the runtime always uses the fixed Wafeq API. */
+    financeClientFactory?: Parameters<typeof registerFinance>[1]['createClient'];
   } = {},
 ) {
   const db = database;
   // 'private' = real data on the owner's own machine (loopback only, no synthetic seed).
   // Sign-in lists only employees who were explicitly granted an access role.
   const privateData = options.dataMode === 'private';
+  const financeOptions = {
+    privateMode: privateData,
+    allowedActorId: options.financeEmployeeId,
+  };
   const accessPassword = options.accessPassword;
   if (accessPassword !== undefined && accessPassword.length < 12)
     throw new Error('The access password must be at least 12 characters.');
@@ -466,7 +476,12 @@ export function createApp(
       return undefined;
     }
     const employee = await getEmployee(db, session.id);
-    if (!employee || employee.status === 'suspended' || employee.status === 'terminated') {
+    if (
+      !employee ||
+      employee.status === 'suspended' ||
+      employee.status === 'terminated' ||
+      (privateData && (!employee.access_role || employee.access_role === 'employee'))
+    ) {
       sessions.delete(token);
       return undefined;
     }
@@ -621,6 +636,7 @@ export function createApp(
       }>('SELECT * FROM outbox WHERE recipient_id=? ORDER BY created_at DESC,id DESC', [actor.id]);
       res.json({
         me: toEmployee(me, photos),
+        financeAccess: canAccessFinance(actor, financeOptions),
         employees: visible.map((e) => toEmployee(e, photos)),
         leaves,
         balance: await balance(db, actor.id),
@@ -991,6 +1007,12 @@ export function createApp(
     }
   });
   registerAdministration(app, { db, requireActor, privateMode: privateData });
+  registerFinance(app, {
+    db,
+    requireActor,
+    ...financeOptions,
+    createClient: options.financeClientFactory,
+  });
   app.use((req, res, next) => {
     if (req.path === '/api' || req.path.startsWith('/api/'))
       return jsonError(res, fault(404, 'NOT_FOUND', 'المسار غير موجود.'));

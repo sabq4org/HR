@@ -13,7 +13,7 @@ Sensitive profile values, medical/request fields, file contents, history values/
 
 ## Schema upgrades
 
-Eight numbered migrations exist for each database dialect. Versions are recorded in `schema_migrations`; each migration and its version entry commit together. SQLite uses `BEGIN IMMEDIATE`, PostgreSQL uses transactions and an advisory lock.
+Nine numbered migrations exist for each database dialect. Versions are recorded in `schema_migrations`; each migration and its version entry commit together. SQLite uses `BEGIN IMMEDIATE`, PostgreSQL uses transactions and an advisory lock.
 
 1. Core employees, leave requests, decisions, append-only ledger and audit.
 2. Synthetic policy versions, schedules and employment periods.
@@ -25,6 +25,8 @@ Eight numbered migrations exist for each database dialect. Versions are recorded
 7. Pin new payroll runs to profile-components policy version 2; retain and retire only the intermediate local flat-salary version 1 without rewriting its values. Reject a policy whose calculator does not match the implemented synthetic engine.
 
 8. Append-only approved leave opening balances, including explicit zero, and exact ledger links for new balance corrections. Unique employee/request constraints prevent repeated opening allocations.
+
+9. Private finance settings and encrypted provider credentials, customers, versioned document snapshots, document counters, idempotency records, leased provider operations, private artifacts and audit. Unique source-quote and document-number constraints prevent duplicate conversion and numbering. No HR records or synthetic finance customers are created by this migration.
 
 Seeds insert missing reference profiles/personas only; reopening never resets existing requests, ledgers, profiles, decisions or audit. All fixture values are fictional. Private deployments bypass synthetic seeding. Use the separate private operation guides for authorized real-data import; never seed synthetic policies or balances into the private database.
 
@@ -50,6 +52,8 @@ For recovery, stop the process, preserve the whole current `.data` directory, cr
 `npm run test:recovery` creates a temporary employee profile and private attachment, backs up/restores SQLite, and verifies decryption and bytes. With `HR_TEST_DATABASE_URL` targeting localhost plus PostgreSQL binaries, it also tests pg_dump/pg_restore into an isolated temporary database and verifies the same encrypted content. Generated recovery resources are removed. It deliberately refuses remote PostgreSQL recovery targets. Production backup cadence, RPO/RTO and restore access remain unapproved.
 
 ## Permissions and financial boundaries
+
+The private finance module requires private data mode and an exact `HR_FINANCE_EMPLOYEE_ID` grant; public previews deny it. Wafeq API keys are entered through `/finance?tab=settings` and encrypted with the existing data key, never returned to the browser. Accounting status is not a ZATCA verdict. The current adapter only recognizes documented `PENDING`; unverified final states and QR/XML artifacts fail closed. No real invoice has been submitted by this implementation. See [private finance setup and rollback](../docs/private-finance.md) and [release evidence](../docs/releases/2026-11-14-private-finance.md).
 
 The server resolves current role/status, checks ownership or team scope, and hides confidential values outside permitted roles. Decisions, their side effects, audit and notifications occur in one transaction with idempotency keys and versions. No creator/subject self approval. Closed payroll and ledger events are not overwritten. Corrections use separate linked runs.
 

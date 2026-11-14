@@ -1,0 +1,1010 @@
+.finance-page {
+  --fin-ink: #18384b;
+  --fin-muted: #687f8b;
+  --fin-line: #dbe5e8;
+  --fin-blue: #1264a3;
+  --fin-paper: #fff;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px 30px 64px;
+  color: var(--fin-ink);
+}
+.finance-page .page-heading {
+  margin-bottom: 22px;
+}
+.fin-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 17px 20px;
+  background: #eef5f7;
+  border-right: 4px solid #1264a3;
+  border-radius: 8px;
+  margin-bottom: 22px;
+}
+.fin-banner > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+.fin-banner b {
+  font-weight: 700;
+}
+.fin-banner span,
+.fin-connection {
+  font-size: 12px;
+  color: #526d79;
+}
+.fin-connection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.fin-connection-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #a9b7bd;
+}
+.fin-connection-dot.ready {
+  background: #21805d;
+}
+.fin-tabs {
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  border-bottom: 1px solid var(--fin-line);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.fin-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  padding: 13px 16px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #59717e;
+  font-size: 13px;
+}
+.fin-tabs button:hover {
+  background: #f4f8f9;
+}
+.fin-tabs button.active {
+  color: #0d578d;
+  border-color: #1264a3;
+  font-weight: 700;
+}
+.fin-section {
+  padding-top: 24px;
+}
+.fin-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.fin-section-head h2 {
+  font-family: 'Year of Handicrafts', serif;
+  font-size: 22px;
+  color: #18384b;
+}
+.fin-section-head p {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--fin-muted);
+}
+.fin-table-wrap {
+  border: 1px solid var(--fin-line);
+  border-radius: 9px;
+  overflow: auto;
+  background: #fff;
+}
+.fin-table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 760px;
+  text-align: right;
+  font-size: 13px;
+}
+.fin-table th {
+  background: #f5f8f9;
+  color: #526d79;
+  font-size: 11px;
+  font-weight: 600;
+}
+.fin-table td,
+.fin-table th {
+  padding: 13px 15px;
+  border-bottom: 1px solid #e7edef;
+  vertical-align: middle;
+}
+.fin-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.fin-table tbody tr:hover {
+  background: #fafcfc;
+}
+.fin-table td:first-child small,
+.fin-message {
+  display: block;
+  margin-top: 4px;
+  color: var(--fin-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.fin-table .num {
+  direction: ltr;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.fin-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 165px;
+}
+.finance-page .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: none;
+  color: #135f94;
+  padding: 4px 0;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.finance-page .text-button:hover {
+  text-decoration: underline;
+}
+.finance-page .text-button:disabled {
+  color: #82969f;
+  text-decoration: none;
+}
+.fin-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #d9e2e5;
+  border-radius: 20px;
+  padding: 5px 9px;
+  font-size: 11px;
+  color: #506672;
+  line-height: 1.35;
+  max-width: 250px;
+}
+.fin-status i {
+  width: 7px;
+  height: 7px;
+  border-radius: 100%;
+  background: #8899a1;
+}
+.fin-status.good {
+  border-color: #b8dfcf;
+  background: #f0faf5;
+  color: #176445;
+}
+.fin-status.good i {
+  background: #26946a;
+}
+.fin-status.bad {
+  border-color: #edc2bd;
+  background: #fff5f3;
+  color: #a33427;
+}
+.fin-status.bad i {
+  background: #ca4537;
+}
+.fin-status.waiting {
+  border-color: #ecd7a8;
+  background: #fffaf0;
+  color: #876316;
+}
+.fin-status.waiting i {
+  background: #c49321;
+}
+.fin-empty {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 54px 18px;
+  border: 1px dashed #cbdadd;
+  border-radius: 9px;
+  background: #fafcfc;
+}
+.fin-empty > span {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  background: #edf4f6;
+  color: #477083;
+  border-radius: 50%;
+}
+.fin-empty b {
+  font-size: 15px;
+}
+.fin-empty p {
+  font-size: 12px;
+  color: var(--fin-muted);
+}
+.fin-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: #9d3528;
+  background: #fff3f0;
+  border: 1px solid #ebc3bc;
+  border-radius: 8px;
+  padding: 11px 13px;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 12px 0;
+}
+.fin-alert svg {
+  margin-top: 2px;
+}
+.fin-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  min-height: 220px;
+  color: var(--fin-muted);
+  font-size: 13px;
+}
+.finance-page .spin {
+  animation: fin-spin 1s linear infinite;
+}
+@keyframes fin-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.finance-page .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 7px;
+  padding: 9px 14px;
+  font-size: 12px;
+  min-height: 38px;
+}
+.finance-page .button.primary {
+  color: white;
+  background: #1264a3;
+  border: 1px solid #1264a3;
+}
+.finance-page .button.primary:hover {
+  background: #0c548c;
+}
+.finance-page .button.secondary {
+  color: #23495d;
+  background: #fff;
+  border: 1px solid #cbd9de;
+}
+.finance-page .button.secondary:hover {
+  background: #f4f8f9;
+}
+.finance-page .button.small {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+.fin-settings {
+  max-width: 900px;
+}
+.fin-settings fieldset {
+  border: 1px solid var(--fin-line);
+  padding: 18px;
+  border-radius: 8px;
+  margin: 0 0 18px;
+}
+.fin-settings legend {
+  padding: 0 8px;
+  font-family: 'Year of Handicrafts', serif;
+  font-size: 17px;
+}
+.fin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
+}
+.fin-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #395462;
+  font-size: 12px;
+}
+.fin-field > span {
+  font-weight: 600;
+}
+.fin-field small {
+  color: #71858e;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.fin-field input,
+.fin-field select,
+.fin-field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #c7d6db;
+  border-radius: 6px;
+  padding: 9px 10px;
+  background: white;
+  color: #203d4d;
+  outline: 0;
+  font-size: 13px;
+}
+.fin-field input:focus,
+.fin-field select:focus,
+.fin-field textarea:focus {
+  border-color: #1264a3;
+  box-shadow: 0 0 0 3px #1264a326;
+}
+.fin-field input:disabled {
+  background: #f1f4f5;
+}
+.fin-form-actions {
+  display: flex;
+  justify-content: flex-start;
+  gap: 9px;
+  margin-top: 18px;
+}
+.fin-provider {
+  max-width: 900px;
+  border-top: 1px solid var(--fin-line);
+  padding: 20px 0;
+  margin-top: 24px;
+}
+.fin-provider h3,
+.fin-subheading {
+  font-family: 'Year of Handicrafts', serif;
+  font-size: 17px;
+  margin-bottom: 10px;
+}
+.fin-provider > p {
+  font-size: 12px;
+  color: var(--fin-muted);
+  margin: 6px 0 12px;
+}
+.fin-key-form {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  max-width: 600px;
+  margin: 16px 0;
+}
+.fin-key-form .fin-field {
+  flex: 1;
+}
+.fin-dialog-form {
+  padding: 18px 22px 22px;
+  max-height: 75vh;
+  overflow: auto;
+}
+.fin-dialog-form > .fin-grid {
+  margin-bottom: 20px;
+}
+.fin-dialog-form .fin-alert {
+  margin-top: 16px;
+}
+.fin-line {
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 2fr) minmax(70px, 0.65fr) minmax(120px, 1fr) minmax(110px, 0.8fr)
+    auto;
+  align-items: end;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid #e7edef;
+}
+.fin-line:has(.fin-field:nth-of-type(5)) {
+  grid-template-columns:
+    minmax(150px, 1.5fr) minmax(70px, 0.55fr) minmax(110px, 0.9fr) minmax(95px, 0.7fr)
+    minmax(140px, 1.2fr) auto;
+}
+.fin-remove {
+  margin-bottom: 3px;
+}
+.fin-quote-totals {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 14px 16px;
+  margin: 14px 0;
+  background: #f4f8f9;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.fin-quote-totals span,
+.fin-quote-totals strong {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  min-width: 245px;
+}
+.fin-quote-totals strong {
+  border-top: 1px solid #d5e1e4;
+  padding-top: 9px;
+  color: #155d91;
+}
+.fin-quote-totals b {
+  direction: ltr;
+  font-variant-numeric: tabular-nums;
+}
+.fin-convert-note {
+  font-size: 13px;
+  line-height: 1.8;
+  color: #4e6875;
+  margin-bottom: 16px;
+}
+.fin-convert-note b {
+  color: #775616;
+}
+.fin-preview-actions {
+  display: flex;
+  justify-content: flex-start;
+  padding: 14px 24px 0;
+}
+.fin-document-paper {
+  page: finance-document;
+  --paper-blue: #5c8db9;
+  --paper-ink: #24374a;
+  --paper-muted: #718197;
+  --paper-line: #dce5ee;
+  width: min(100%, 850px);
+  margin: 14px auto 28px;
+  padding: 38px 44px;
+  background: #fff;
+  color: var(--paper-ink);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.fin-doc-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  direction: rtl;
+  min-height: 92px;
+}
+.fin-doc-brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  min-width: 0;
+}
+.fin-doc-brand img {
+  width: 86px;
+  height: 78px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+.fin-doc-brand > div {
+  display: grid;
+  gap: 2px;
+  padding-top: 3px;
+}
+.fin-doc-brand b {
+  color: #3f709f;
+  font-size: 19px;
+}
+.fin-doc-brand span {
+  color: var(--paper-muted);
+  font-size: 10px;
+}
+.fin-doc-heading {
+  display: grid;
+  justify-items: start;
+  align-content: start;
+  gap: 3px;
+  min-width: 140px;
+  text-align: left;
+}
+.fin-doc-heading h1 {
+  margin: 0;
+  color: #416f9b;
+  font-family: 'Year of Handicrafts', serif;
+  font-size: 22px;
+}
+.fin-doc-heading > span:not(.fin-status) {
+  color: #6d7887;
+  font-size: 12px;
+  direction: ltr;
+}
+.fin-doc-heading .fin-status {
+  margin-top: 4px;
+}
+.fin-doc-number {
+  color: var(--paper-blue);
+  font-size: 12px;
+}
+.fin-document-rule {
+  height: 3px;
+  background: var(--paper-blue);
+  margin: 17px 0 23px;
+}
+.fin-document-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  direction: ltr;
+  gap: 16px;
+  margin-bottom: 19px;
+}
+.fin-detail-card {
+  direction: rtl;
+  min-width: 0;
+  padding: 15px 17px;
+  border: 1px solid #e3eaf0;
+  border-radius: 7px;
+  background: #f5f7f9;
+  break-inside: avoid-page;
+}
+.fin-detail-card > header,
+.fin-bank-card > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #d6dfe7;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  color: #416f9b;
+}
+.fin-detail-card > header span,
+.fin-bank-card > header span {
+  direction: ltr;
+  font-weight: 600;
+}
+.fin-detail-card dl,
+.fin-bank-card dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+.fin-detail-card dl > div,
+.fin-bank-card dl > div {
+  min-width: 0;
+}
+.fin-detail-card dt,
+.fin-bank-card dt {
+  color: var(--paper-muted);
+  font-size: 10px;
+}
+.fin-detail-card dd,
+.fin-bank-card dd {
+  margin: 1px 0 0;
+  color: var(--paper-ink);
+  overflow-wrap: anywhere;
+}
+.fin-detail-card dd .fin-status {
+  margin-top: 2px;
+}
+.fin-document-title {
+  margin: 3px 0 11px;
+  color: #416f9b;
+  font-family: 'Year of Handicrafts', serif;
+  font-size: 18px;
+}
+.fin-paper-table-wrap {
+  width: 100%;
+  overflow: visible;
+  margin: 0 0 17px;
+}
+.fin-paper-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 9px;
+  line-height: 1.55;
+}
+.fin-paper-table thead {
+  display: table-header-group;
+}
+.fin-paper-table th {
+  background: var(--paper-blue);
+  color: white;
+  font-weight: 700;
+}
+.fin-paper-table td,
+.fin-paper-table th {
+  padding: 9px 5px;
+  border: 0;
+  border-bottom: 1px solid #e0e6eb;
+  text-align: center;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+.fin-paper-table tbody tr:nth-child(odd) {
+  background: #f4f6f8;
+}
+.fin-paper-table tr {
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
+.fin-paper-number {
+  width: 5%;
+}
+.fin-paper-description {
+  width: 32%;
+  text-align: right !important;
+}
+.fin-paper-summary {
+  display: flex;
+  justify-content: flex-start;
+  margin: 2px 0 15px;
+  direction: ltr;
+}
+.fin-paper-summary-rows {
+  width: min(100%, 330px);
+  display: grid;
+  gap: 4px;
+  direction: rtl;
+}
+.fin-paper-summary-rows > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 5px 8px;
+}
+.fin-paper-summary-rows > div > span {
+  color: var(--paper-muted);
+  font-size: 10px;
+}
+.fin-paper-summary-rows b {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.fin-paper-summary-rows .fin-paper-grand-total {
+  border-radius: 4px;
+  background: var(--paper-blue);
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+}
+.fin-paper-summary-rows .fin-paper-grand-total > span,
+.fin-paper-summary-rows .fin-paper-grand-total b {
+  color: white;
+  font-size: 12px;
+}
+.fin-document-ending {
+  display: grid;
+  gap: 13px;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
+.fin-bank-card {
+  width: 100%;
+  padding: 13px 16px;
+  border: 1px solid #d5e8f5;
+  border-radius: 6px;
+  background: #f1f7fb;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
+.fin-bank-card > header {
+  margin-bottom: 9px;
+  border: 0;
+  padding: 0;
+  color: #1672ae;
+}
+.fin-bank-card dl {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.fin-bank-card dd[dir='ltr'] {
+  font-weight: 600;
+  overflow-wrap: normal;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.fin-notes-box {
+  padding: 12px 15px;
+  border: 1px solid #efb12c;
+  border-radius: 6px;
+  background: #fffaf0;
+  color: #a44e05;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
+.fin-notes-box b {
+  display: block;
+  margin-bottom: 4px;
+}
+.fin-notes-box p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.fin-paper-footer {
+  padding-top: 9px;
+  border-top: 1px solid var(--paper-line);
+  color: var(--paper-muted);
+  font-size: 9px;
+  text-align: center;
+  break-before: avoid-page;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
+.fin-qr {
+  width: 104px;
+  height: 104px;
+  object-fit: contain;
+  border: 1px solid #dce6e9;
+  padding: 5px;
+}
+.fin-qr-wrap {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-top: 4px;
+  break-inside: avoid-page;
+}
+.fin-qr-wrap small {
+  display: block;
+  color: #657d89;
+  max-width: 230px;
+}
+.fin-final-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #146446;
+  background: #effaf4;
+  border: 1px solid #c4e4d3;
+  padding: 9px 12px;
+  margin: 15px 0;
+  border-radius: 6px;
+}
+@media (max-width: 700px) {
+  .finance-page {
+    padding: 18px 14px 44px;
+  }
+  .fin-banner {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+  }
+  .fin-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .fin-grid {
+    grid-template-columns: 1fr;
+  }
+  .fin-line,
+  .fin-line:has(.fin-field:nth-of-type(5)) {
+    grid-template-columns: 1fr 1fr;
+    align-items: end;
+  }
+  .fin-line .fin-field:first-child {
+    grid-column: 1/-1;
+  }
+  .fin-remove {
+    justify-self: start;
+  }
+  .fin-dialog-form {
+    padding: 15px;
+    max-height: 78vh;
+  }
+  .fin-key-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .fin-tabs button {
+    padding: 12px 11px;
+  }
+  .fin-document-paper {
+    padding: 20px 15px;
+    margin: 12px auto 20px;
+  }
+  .fin-doc-head {
+    gap: 10px;
+  }
+  .fin-doc-brand {
+    gap: 7px;
+  }
+  .fin-doc-brand img {
+    width: 52px;
+    height: 50px;
+  }
+  .fin-doc-brand b {
+    font-size: 14px;
+  }
+  .fin-doc-brand span {
+    font-size: 9px;
+  }
+  .fin-doc-heading {
+    min-width: 100px;
+  }
+  .fin-doc-heading h1 {
+    font-size: 18px;
+  }
+  .fin-document-cards {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
+  .fin-paper-table-wrap {
+    overflow-x: auto;
+  }
+  .fin-paper-table {
+    min-width: 650px;
+  }
+  .fin-paper-summary {
+    justify-content: flex-start;
+  }
+  .fin-bank-card dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .fin-table {
+    min-width: 760px;
+  }
+  .fin-paper-total {
+    margin-right: auto;
+  }
+  .fin-status {
+    white-space: normal;
+  }
+  .fin-connection {
+    white-space: normal;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+}
+@page finance-document {
+  size: A4;
+  margin: 12mm;
+}
+@media print {
+  body:has(.fin-quote-paper) * {
+    visibility: hidden !important;
+  }
+  body:has(.fin-quote-paper) .fin-quote-paper,
+  body:has(.fin-quote-paper) .fin-quote-paper * {
+    visibility: visible !important;
+  }
+  body:has(.fin-quote-paper) .dialog,
+  body:has(.fin-invoice-paper) .dialog {
+    position: static;
+    inset: auto;
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    overflow: visible;
+    box-shadow: none;
+  }
+  body:has(.fin-quote-paper) .fin-quote-paper {
+    position: static;
+    width: 100%;
+    max-width: none;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+  body:has(.fin-invoice-paper) * {
+    visibility: hidden !important;
+  }
+  body:has(.fin-invoice-paper) .fin-invoice-paper,
+  body:has(.fin-invoice-paper) .fin-invoice-paper * {
+    visibility: visible !important;
+  }
+  body:has(.fin-invoice-paper) .fin-invoice-paper {
+    position: static;
+    width: 100%;
+    max-width: none;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+  body:has(.fin-quote-paper) .dialog-header,
+  body:has(.fin-quote-paper) .fin-preview-actions,
+  body:has(.fin-invoice-paper) .dialog-header,
+  body:has(.fin-invoice-paper) .fin-preview-actions {
+    display: none !important;
+  }
+  body:has(.fin-quote-paper) .dialog:has(.fin-quote-paper),
+  body:has(.fin-invoice-paper) .dialog:has(.fin-invoice-paper) {
+    display: block !important;
+    visibility: visible !important;
+    appearance: none !important;
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-width: none !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    border: 0 !important;
+    outline: 0 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+  }
+  body:has(.fin-quote-paper) .dialog:has(.fin-quote-paper)::backdrop,
+  body:has(.fin-invoice-paper) .dialog:has(.fin-invoice-paper)::backdrop {
+    display: none !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+  }
+  body:has(.fin-quote-paper) .dialog:has(.fin-quote-paper),
+  body:has(.fin-invoice-paper) .dialog:has(.fin-invoice-paper) {
+    scrollbar-width: none !important;
+    overscroll-behavior: none !important;
+  }
+  body:has(.fin-quote-paper) .dialog:has(.fin-quote-paper)::-webkit-scrollbar,
+  body:has(.fin-invoice-paper) .dialog:has(.fin-invoice-paper)::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+  body:has(.fin-quote-paper) .dialog:has(.fin-quote-paper) *,
+  body:has(.fin-invoice-paper) .dialog:has(.fin-invoice-paper) * {
+    visibility: visible !important;
+  }
+  body:has(.fin-quote-paper) .dialog:has(.fin-quote-paper) .dialog-header,
+  body:has(.fin-quote-paper) .dialog:has(.fin-quote-paper) .fin-preview-actions,
+  body:has(.fin-invoice-paper) .dialog:has(.fin-invoice-paper) .dialog-header,
+  body:has(.fin-invoice-paper) .dialog:has(.fin-invoice-paper) .fin-preview-actions {
+    display: none !important;
+  }
+  .fin-document-paper {
+    color: #182638;
+    font-size: 10pt;
+  }
+  .fin-paper-table tr,
+  .fin-detail-card,
+  .fin-bank-card,
+  .fin-notes-box,
+  .fin-paper-footer {
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+  }
+  .fin-document-ending {
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+  .fin-paper-table th {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .fin-paper-grand-total,
+  .fin-bank-card,
+  .fin-detail-card,
+  .fin-notes-box {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .finance-page .spin {
+    animation: none;
+  }
+}
+.fin-draft-watermark {
+  margin: 15px 0;
+  padding: 9px 12px;
+  border: 1px solid #ebd8aa;
+  border-radius: 6px;
+  background: #fffaf0;
+  color: #846319;
+  font-weight: 700;
+  text-align: center;
+}

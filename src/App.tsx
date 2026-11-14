@@ -37,6 +37,7 @@ import {
   WalletCards,
   Settings2,
   History,
+  ReceiptText,
 } from 'lucide-react';
 import type { Bootstrap, DemoPersona, Employee } from '../shared/contracts';
 import type { AdministrativeOverview } from '../shared/administration';
@@ -72,6 +73,7 @@ import {
 } from './administration';
 import { PayrollPage } from './payroll';
 import { EmployeeImportPage } from './imports';
+import { FinancePage } from './finance';
 
 function EmployeeFileRoute() {
   const { id } = useParams();
@@ -410,6 +412,7 @@ export default function App() {
       '/attendance': 'الحضور والعمل',
       '/documents': 'المستندات',
       '/payroll': 'الرواتب',
+      '/finance': 'النظام المالي',
       '/reports': 'التقارير',
       '/settings/policies': 'القواعد والسياسات',
       '/audit': 'سجل التدقيق',
@@ -474,6 +477,7 @@ export default function App() {
       : []),
     { to: '/calendar', label: 'تقويم الفريق', Icon: CalendarDays },
     { to: '/documents', label: 'المستندات', Icon: Files },
+    ...(data.financeAccess ? [{ to: '/finance', label: 'النظام المالي', Icon: ReceiptText }] : []),
     {
       to: '/payroll',
       label: ['employee', 'manager'].includes(data.me.role) ? 'قسائم راتبي' : 'الرواتب',
@@ -658,6 +662,7 @@ export default function App() {
               <Route path="/requests/:id" element={<RequestRoute />} />
               <Route path="/attendance" element={<AttendancePage />} />
               <Route path="/documents" element={<DocumentsPage />} />
+              <Route path="/finance" element={<FinancePage />} />
               <Route path="/payroll" element={<PayrollPage actor={data.me} />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/settings/policies" element={<PoliciesPage />} />

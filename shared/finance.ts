@@ -1,0 +1,149 @@
+/** Private finance contract. Provider acceptance is never inferred from local state. */
+export interface FinanceAddress {
+  line: string;
+  city: string;
+  postalCode: string;
+  country: 'SA';
+  district?: string;
+  buildingNumber?: string;
+  additionalNumber?: string;
+}
+export interface FinanceCustomerInput {
+  name: string;
+  email: string;
+  vatNumber: string;
+  address: FinanceAddress;
+  nameEnglish?: string;
+  type?: 'business' | 'individual';
+  commercialRegistration?: string;
+  phone?: string;
+  mobile?: string;
+  notes?: string;
+}
+export interface FinanceCustomer extends FinanceCustomerInput {
+  id: string;
+  version: number;
+  createdAt: string;
+  wafeqId: string | null;
+  syncStatus: 'not_synced' | 'synced' | 'error';
+  syncMessage?: string;
+}
+export interface FinanceSeller {
+  name: string;
+  vatNumber: string;
+  commercialRegistration: string;
+  address: FinanceAddress;
+  /** Display-only bank details, encrypted with and frozen into the seller snapshot. */
+  bankAccount?: {
+    beneficiaryName: string;
+    bankName: string;
+    accountNumber: string;
+    iban: string;
+  };
+}
+export interface FinanceSettings {
+  seller: FinanceSeller;
+  version: number;
+  mode: 'preview' | 'private';
+  apiKeyConfigured: boolean;
+  canStoreApiKey: boolean;
+  canSync: boolean;
+  connectionMessage: string;
+  organization: { id: string; name: string } | null;
+  revenueAccountId: string;
+  standardTaxRateId: string;
+  zeroTaxRateId: string;
+}
+export interface FinanceLineInput {
+  description: string;
+  quantity: string;
+  unitPrice: string;
+  taxRateBps: number;
+  taxReason: string;
+}
+export interface FinanceLine extends FinanceLineInput {
+  subtotalHalalas: number;
+  taxHalalas: number;
+  totalHalalas: number;
+}
+export interface FinanceQuoteInput {
+  customerId: string;
+  title: string;
+  issueDate: string;
+  validUntil: string;
+  notes: string;
+  lines: FinanceLineInput[];
+}
+export interface FinanceQuote extends FinanceQuoteInput {
+  id: string;
+  number: string;
+  version: number;
+  status: 'draft' | 'converted';
+  currency: 'SAR';
+  customer: FinanceCustomerInput;
+  seller: FinanceSeller;
+  lines: FinanceLine[];
+  subtotalHalalas: number;
+  taxHalalas: number;
+  totalHalalas: number;
+  invoiceId: string | null;
+  createdAt: string;
+}
+export interface FinanceInvoice {
+  id: string;
+  number: string;
+  quoteId: string;
+  quoteNumber: string;
+  title: string;
+  version: number;
+  issueDate: string;
+  dueDate: string;
+  status:
+    | 'draft'
+    | 'syncing'
+    | 'pending'
+    | 'cleared'
+    | 'reported'
+    | 'rejected'
+    | 'reconciliation_required';
+  invoiceType?: 'standard' | 'simplified';
+  purchaseOrder?: string;
+  currency: 'SAR';
+  customer: FinanceCustomerInput;
+  seller: FinanceSeller;
+  lines: FinanceLine[];
+  notes: string;
+  subtotalHalalas: number;
+  taxHalalas: number;
+  totalHalalas: number;
+  wafeqId: string | null;
+  zatcaStatus: 'not_submitted' | 'pending' | 'cleared' | 'reported' | 'rejected' | 'unknown';
+  qrCode: string | null;
+  syncMessage?: string;
+  canDownload: boolean;
+  /** Official artifact availability; never generated from local draft fields. */
+  canDownloadXml?: boolean;
+  createdAt: string;
+}
+export interface FinanceOverview {
+  customers: FinanceCustomer[];
+  quotes: FinanceQuote[];
+  invoices: FinanceInvoice[];
+  settings: FinanceSettings;
+}
+
+// All mutations require Idempotency-Key; authenticated, explicitly granted finance access.
+// GET /api/finance -> FinanceOverview
+// GET /api/finance/settings -> {settings: FinanceSettings}
+// PATCH /api/finance/settings {version,seller,revenueAccountId,standardTaxRateId,zeroTaxRateId} -> {settings: FinanceSettings}
+// POST /api/finance/customers FinanceCustomerInput -> {customer: FinanceCustomer}
+// PATCH /api/finance/customers/:id {version,...FinanceCustomerInput} -> {customer: FinanceCustomer}
+// POST /api/finance/quotes FinanceQuoteInput -> {quote: FinanceQuote}
+// PATCH /api/finance/quotes/:id {version,...FinanceQuoteInput} -> {quote: FinanceQuote}
+// POST /api/finance/quotes/:id/convert {version,issueDate,dueDate,invoiceType?,purchaseOrder?} -> {invoice: FinanceInvoice}
+// POST /api/finance/customers/:id/sync {version} -> {customer: FinanceCustomer}
+// POST /api/finance/invoices/:id/sync {version} -> {invoice: FinanceInvoice}
+// POST /api/finance/invoices/:id/refresh {} -> {invoice: FinanceInvoice}
+// GET /api/finance/invoices/:id/pdf -> private provider PDF, only cleared.
+// POST /api/finance/settings/api-key {apiKey} -> {settings: FinanceSettings}, private only.
+// POST /api/finance/settings/test {} -> {settings: FinanceSettings}, read-only connection test.

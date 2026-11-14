@@ -65,6 +65,7 @@ export interface DemoPolicy {
   workingDays: number[];
 }
 export interface Bootstrap {
+  financeAccess: boolean;
   me: Employee;
   employees: Employee[];
   leaves: LeaveRequest[];
