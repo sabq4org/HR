@@ -46,6 +46,10 @@ import { decryptSensitive, encryptSensitive, sha256 } from './security.js';
 import { reportCsv, type ReportExportType } from './report-export.js';
 import { fault, roleFromState, stateForRole, validateValues } from './validation.js';
 import { approvesPayroll } from '../system-owner.js';
+import {
+  LEAVE_ENTITLEMENT_POLICY_KEY,
+  parseLeaveEntitlementValues,
+} from '../../shared/leave-entitlement.js';
 
 const at = () => new Date().toISOString();
 const isRole = (value: string): value is Role =>
@@ -1715,6 +1719,10 @@ function registerPolicyRoutes(
     const effectiveTo = typeof b.effectiveTo === 'string' ? b.effectiveTo : null;
     const source = requiredString(b.source, 'SOURCE_REQUIRED', 'اذكر مصدر القاعدة وحالتها.', 500);
     const values = requireRecord(b.values);
+    if (key === LEAVE_ENTITLEMENT_POLICY_KEY) {
+      const parsed = parseLeaveEntitlementValues(values);
+      if (!parsed.ok) throw fault(400, 'INVALID_POLICY', parsed.message);
+    }
     if (
       !validIsoDate(effectiveFrom) ||
       (effectiveTo && !validIsoDate(effectiveTo)) ||

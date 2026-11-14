@@ -13,6 +13,7 @@ import { registerAdministration } from './administration/routes.js';
 import { createAccountAccess } from './access/index.js';
 import { registerPilotStatus } from './pilot-status.js';
 import { currentPolicy, leaveChangesFor, registerLeaveRoutes } from './leave/routes.js';
+import { registerEntitlementRoutes } from './leave/entitlement.js';
 import { annualLeaveDays } from '../shared/leave.js';
 import { isSystemOwner } from './system-owner.js';
 import { decryptSensitive } from './administration/security.js';
@@ -1225,6 +1226,7 @@ export function createApp(
     }
   });
   registerLeaveRoutes(app, { db, requireActor, authMode });
+  registerEntitlementRoutes(app, { db, requireActor });
   app.post('/api/notifications/read', async (req, res) => {
     try {
       const actor = await requireActor(req);
