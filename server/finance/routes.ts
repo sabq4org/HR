@@ -168,15 +168,21 @@ export function optionalText(value: unknown, max: number): string {
     throw fault(400, 'INVALID_INPUT', 'تحقق من الحقول النصية.');
   return value.trim();
 }
-function addressValue(value: unknown): FinanceAddress {
+function addressValue(value: unknown, saudiOnly = false): FinanceAddress {
   const a = requireRecord(value);
-  if (a.country !== 'SA')
-    throw fault(400, 'INVALID_ADDRESS', 'الدولة المدعومة في المعاينة هي السعودية.');
+  const country = a.country === undefined ? 'SA' : a.country;
+  if (typeof country !== 'string' || !/^[A-Z]{2}$/.test(country) || (saudiOnly && country !== 'SA'))
+    throw fault(
+      400,
+      'INVALID_ADDRESS',
+      saudiOnly ? 'عنوان المنشأة يكون في السعودية.' : 'اختر دولة صحيحة للعنوان.',
+    );
   return {
     line: text(a.line, 200),
     city: text(a.city, 100),
-    postalCode: text(a.postalCode, 20),
-    country: 'SA',
+    // Saudi addresses carry a postal code; many countries have none.
+    postalCode: country === 'SA' ? text(a.postalCode, 20) : optionalText(a.postalCode, 20),
+    country,
     ...(a.district === undefined ? {} : { district: optionalText(a.district, 100) }),
     ...(a.buildingNumber === undefined
       ? {}
@@ -201,11 +207,16 @@ function customerInput(value: unknown): FinanceCustomerInput {
   const email = text(x.email, 254);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
     throw fault(400, 'INVALID_EMAIL', 'أدخل بريدًا إلكترونيًا صحيحًا.');
+  const address = addressValue(x.address);
+  if (x.language !== undefined && x.language !== 'ar' && x.language !== 'en')
+    throw fault(400, 'INVALID_LANGUAGE', 'لغة المستندات غير صالحة.');
   return {
     name: text(x.name, 200),
     email,
-    vatNumber: validateVat(x.vatNumber),
-    address: addressValue(x.address),
+    // A Saudi VAT number has a fixed shape; a foreign tax ID is kept as written.
+    vatNumber: address.country === 'SA' ? validateVat(x.vatNumber) : optionalText(x.vatNumber, 30),
+    address,
+    ...(x.language === undefined ? {} : { language: x.language }),
     ...(x.nameEnglish === undefined ? {} : { nameEnglish: optionalText(x.nameEnglish, 200) }),
     ...(x.type === undefined
       ? {}
@@ -244,7 +255,11 @@ function sellerInput(value: unknown): FinanceSeller {
     name: text(x.name, 200),
     vatNumber: validateVat(x.vatNumber),
     commercialRegistration: optionalText(x.commercialRegistration, 30),
-    address: addressValue(x.address),
+    address: addressValue(x.address, true),
+    ...(x.nameEnglish === undefined ? {} : { nameEnglish: optionalText(x.nameEnglish, 200) }),
+    ...(x.addressEnglish === undefined
+      ? {}
+      : { addressEnglish: optionalText(x.addressEnglish, 300) }),
     ...(bankAccount === undefined ? {} : { bankAccount }),
   };
 }
@@ -347,9 +362,12 @@ function quoteInput(value: unknown): FinanceQuoteInput {
   const documentType = x.documentType === undefined ? 'standard' : x.documentType;
   if (!financeDocumentTypes.includes(documentType as FinanceDocumentType))
     throw fault(400, 'INVALID_DOCUMENT_TYPE', 'نوع المستند غير صالح.');
+  if (x.language !== undefined && x.language !== 'ar' && x.language !== 'en')
+    throw fault(400, 'INVALID_LANGUAGE', 'لغة المستند غير صالحة.');
   return {
     customerId: text(x.customerId, 80),
     documentType: documentType as FinanceDocumentType,
+    ...(x.language === undefined ? {} : { language: x.language }),
     title: text(x.title, 200),
     issueDate,
     validUntil,
@@ -1006,6 +1024,13 @@ export function registerFinance(
   // transaction and extended as rows are inserted, so one request cannot add the same name or
   // VAT number twice.
   const saudi = (country: string) => !country || /^(sa|sau|saudi arabia)$/i.test(country);
+  /** ISO alpha-2 code of a provider country, or null when it cannot be read as one. */
+  const countryCode = (country: string) =>
+    saudi(country)
+      ? 'SA'
+      : /^[a-z]{2}$/i.test(country.trim())
+        ? country.trim().toUpperCase()
+        : null;
   const localCoverage = async (reader: AsyncDb, ownerId: string) => {
     const rows = await reader.read<CustomerRow>(
       'SELECT * FROM finance_customers WHERE owner_id=?',
@@ -1054,7 +1079,7 @@ export function registerFinance(
       .filter((c) => !seen.has(c.id) && seen.add(c.id))
       .map((contact) => ({
         contact,
-        status: (!saudi(contact.country)
+        status: (!countryCode(contact.country)
           ? 'unsupported'
           : covered.has(contact)
             ? 'exists'
@@ -1113,7 +1138,7 @@ export function registerFinance(
               line: contact.address.line,
               city: contact.address.city,
               postalCode: contact.address.postalCode,
-              country: 'SA',
+              country: countryCode(contact.country) ?? 'SA',
               ...(contact.address.district ? { district: contact.address.district } : {}),
               ...(contact.address.buildingNumber
                 ? { buildingNumber: contact.address.buildingNumber }
@@ -1123,6 +1148,7 @@ export function registerFinance(
                 : {}),
             },
             type: 'business',
+            ...(countryCode(contact.country) === 'SA' ? {} : { language: 'en' as const }),
             ...(contact.nameEnglish ? { nameEnglish: contact.nameEnglish } : {}),
             ...(contact.phone ? { phone: contact.phone } : {}),
           };
@@ -1343,6 +1369,7 @@ export function registerFinance(
         const snapshot: FinanceQuote = {
           ...input,
           documentType: input.documentType ?? 'standard',
+          language: input.language ?? customer.language ?? 'ar',
           id,
           number,
           version: 1,
@@ -1409,6 +1436,7 @@ export function registerFinance(
         const snapshot: FinanceQuote = {
           ...input,
           documentType: input.documentType ?? 'standard',
+          language: input.language ?? customer.language ?? 'ar',
           id: row.id,
           number: row.number,
           version: next,
@@ -1523,6 +1551,7 @@ export function registerFinance(
           status: 'draft',
           invoiceType,
           documentType: q.documentType,
+          ...(q.language ? { language: q.language } : {}),
           ...(purchaseOrder ? { purchaseOrder } : {}),
           currency: 'SAR',
           customer: q.customer,
