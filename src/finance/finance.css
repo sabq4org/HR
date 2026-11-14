@@ -737,7 +737,10 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
-.fin-bank-card dd[dir='ltr'] {
+.fin-bank-card dd.fin-bank-value {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: right;
   font-weight: 600;
   overflow-wrap: normal;
   white-space: nowrap;
@@ -809,6 +812,24 @@
   margin: 0 0 10px;
   border-radius: 5px;
   font-size: 10px;
+}
+.fin-internal-copy-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 4px 10px;
+  border: 1px solid #d7b36a;
+  border-radius: 5px;
+  background: #fff6e5;
+  color: #7a4b08;
+  font-size: 10px;
+  font-weight: 700;
+}
+.fin-internal-copy-banner span {
+  font-weight: 600;
+  direction: ltr;
 }
 @media (max-width: 700px) {
   .finance-page {
