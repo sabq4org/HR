@@ -309,6 +309,33 @@ async function journey(open: () => Promise<AsyncDb>) {
     await setProfile(db, 'emp-sara', { payrollEmploymentType: 'contractor' });
     const contractor = await api('hr', '/leave-entitlement/employees/emp-sara?asOf=2025-06-30');
     assert.equal(contractor.body.statement.eligible, false);
+    // A later version that includes contractors applies from its own date only.
+    await db.execute(
+      `INSERT INTO administrative_policies(id,policy_key,version,name,effective_from,source,state,values_json,created_by,approved_by,created_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        'leave-rule-test-v2',
+        LEAVE_ENTITLEMENT_POLICY_KEY,
+        2,
+        'قاعدة استحقاق اختبار 2',
+        '2025-07-01',
+        'قيم اختبار فقط',
+        'synthetic_approved',
+        JSON.stringify({ ...ruleValues, excludeContractors: false }),
+        'emp-noura',
+        'emp-abdullah',
+        '2026-11-14T00:00:00.000Z',
+      ],
+    );
+    const included = await api('hr', '/leave-entitlement/employees/emp-sara?asOf=2025-07-30');
+    assert.equal(included.body.statement.eligible, true);
+    assert.equal(included.body.statement.accrualStart, '2025-07-01');
+    // The idempotency cache never holds decrypted wage details.
+    const cached = await db.read<any>(
+      "SELECT response_json FROM idempotency WHERE action LIKE 'leave_settlement%'",
+    );
+    assert.ok(cached.length >= 3);
+    for (const row of cached) assert.doesNotMatch(row.response_json, /Wage|components|amount/i);
   } finally {
     await f.close();
   }

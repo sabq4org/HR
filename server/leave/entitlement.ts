@@ -171,26 +171,27 @@ export async function entitlementStatement(
     segments: [],
   };
   const type = String(profile.payrollEmploymentType ?? '').trim();
-  const firstRule = rules[0];
-  const problem = !firstRule
+  const applicable = rulesForEmploymentType(rules, type);
+  const firstRule = applicable[0];
+  const problem = !rules.length
     ? 'no_rule'
     : !joinDate
       ? 'join_date_missing'
       : type === '' && rules.some((r) => r.values.excludeContractors)
         ? 'employment_type_missing'
-        : type === 'contractor' && rules.some((r) => r.values.excludeContractors)
+        : !firstRule
           ? 'contractor'
           : null;
   if (problem) return { ...base, problem: PROBLEMS[problem]! };
   const ruleNow =
-    rules
-      .filter((r) => r.effectiveFrom <= asOf && (!r.effectiveTo || r.effectiveTo >= asOf))
-      .pop() ?? rules[rules.length - 1]!;
+    ruleCovering(applicable, asOf) ??
+    applicable.filter((r) => r.effectiveFrom <= asOf).pop() ??
+    firstRule!;
   const seniorFrom = anniversary(joinDate!, ruleNow.values.seniorAfterYears);
   const starts = [joinDate!, firstRule!.effectiveFrom];
   if (opening) starts.push(addDays(opening, 1));
   const accrualStart = starts.sort().pop()!;
-  const accrual = accrueLeave(joinDate!, accrualStart, asOf, rules);
+  const accrual = accrueLeave(joinDate!, accrualStart, asOf, applicable);
   return {
     ...base,
     eligible: true,
@@ -203,6 +204,14 @@ export async function entitlementStatement(
     segments: accrual.segments,
   };
 }
+
+/** Versions that apply to this employment type: a version excluding contractors grants them nothing. */
+export function rulesForEmploymentType(rules: LeaveEntitlementRule[], type: string) {
+  return type === 'contractor' ? rules.filter((r) => !r.values.excludeContractors) : rules;
+}
+const ruleCovering = (rules: LeaveEntitlementRule[], day: string) =>
+  rules.filter((r) => r.effectiveFrom <= day && (!r.effectiveTo || r.effectiveTo >= day)).pop() ??
+  null;
 
 /** Posts accrual through `through` for every on-duty eligible employee. Idempotent per date. */
 export async function postAccruals(tx: AsyncDb, actor: Actor, through: string) {
@@ -307,11 +316,17 @@ export async function calculateSettlement(
       'LEAVE_AFTER_LAST_DAY',
       'توجد إجازة معتمدة تمتد بعد آخر يوم عمل؛ عدّلها أو ألغها قبل التصفية.',
     );
-  const rule =
-    rules
-      .filter((r) => r.effectiveFrom <= lastDay && (!r.effectiveTo || r.effectiveTo >= lastDay))
-      .pop() ?? rules[rules.length - 1]!;
   const profile = await getProfileValues(q, employeeId);
+  const rule = ruleCovering(
+    rulesForEmploymentType(rules, String(profile.payrollEmploymentType ?? '').trim()),
+    lastDay,
+  );
+  if (!rule)
+    throw fail(
+      409,
+      'NO_RULE_ON_LAST_DAY',
+      'لا يوجد إصدار قاعدة معتمد يسري في آخر يوم عمل؛ اعتمد إصدارًا يغطيه قبل التصفية.',
+    );
   const components = rule.values.wageComponents.map((key) => {
     const raw = profile[key];
     const blank = raw === undefined || raw === null || String(raw).trim() === '';
@@ -428,6 +443,10 @@ function canonical(value: unknown): string {
       .join(',')}}`;
   return JSON.stringify(value) ?? 'null';
 }
+/**
+ * Idempotent command. The cached response must hold no decrypted wage data, so settlement
+ * commands cache only `{ settlementId }` and rebuild the caller's view on every reply.
+ */
 async function idem<T>(
   db: Db,
   actor: Actor,
@@ -435,7 +454,7 @@ async function idem<T>(
   req: Request,
   body: unknown,
   work: (tx: AsyncDb) => Promise<T>,
-) {
+): Promise<T> {
   const key = req.get('idempotency-key') ?? '';
   if (!key || key.length > 200)
     throw fail(400, 'IDEMPOTENCY_KEY_REQUIRED', 'أرسل مفتاح منع التكرار.');
@@ -459,6 +478,11 @@ async function idem<T>(
     );
     return result;
   });
+}
+async function settlementView(q: AsyncDb, id: string, actor: Actor) {
+  const row = (await q.read<Row>('SELECT * FROM leave_settlements WHERE id=?', [id]))[0];
+  if (!row) throw fail(404, 'NOT_FOUND', 'التصفية غير موجودة.');
+  return mapSettlement(row, actor);
 }
 
 export function registerEntitlementRoutes(
@@ -636,12 +660,9 @@ export function registerEntitlementRoutes(
           ],
         );
         await addEvent(tx, actor, id, 'prepared', null, 1);
-        return mapSettlement(
-          (await tx.read<Row>('SELECT * FROM leave_settlements WHERE id=?', [id]))[0]!,
-          actor,
-        );
+        return { settlementId: id };
       });
-      return { settlement };
+      return { settlement: await settlementView(db, settlement.settlementId, actor) };
     }, 201),
   );
 
@@ -751,13 +772,10 @@ export function registerEntitlementRoutes(
                   ? 'reviewed'
                   : 'approved';
           await addEvent(tx, actor, id, action, reason || null, Number(row.version) + 1);
-          return mapSettlement(
-            (await tx.read<Row>('SELECT * FROM leave_settlements WHERE id=?', [id]))[0]!,
-            actor,
-          );
+          return { settlementId: id };
         },
       );
-      return { settlement };
+      return { settlement: await settlementView(db, settlement.settlementId, actor) };
     }),
   );
 }
