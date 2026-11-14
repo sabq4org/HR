@@ -1784,6 +1784,18 @@
   .people-toolbar > .subtle {
     margin-right: auto;
   }
+  .people-tabs {
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+  }
+  .people-tabs .tab {
+    padding: 10px 0;
+    font-size: 12px;
+  }
+  .people-tabs .tab.active::after {
+    bottom: -1px;
+  }
   .people-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
