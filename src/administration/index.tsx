@@ -16,7 +16,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { api, Avatar, Modal, PageHeading, useApp } from '../lib';
+import { api, Avatar, ConfirmDialog, Modal, PageHeading, useApp } from '../lib';
 import { EmployeeProfileReport } from './EmployeeProfileReport';
 import {
   isProfileFieldVisible,
@@ -947,15 +947,17 @@ export function EmployeeCreateDialog({
   };
   return (
     <Modal title="إضافة موظف" close={close} wide className="admin-dialog">
-      <EmployeeWizard
-        fields={employeeFields as FormField[]}
-        values={values}
-        setValues={setValues}
-        busy={busy}
-        error={error}
-        onSubmit={submit}
-        submitLabel="إنشاء الملف"
-      />
+      <div className="dialog-body">
+        <EmployeeWizard
+          fields={employeeFields as FormField[]}
+          values={values}
+          setValues={setValues}
+          busy={busy}
+          error={error}
+          onSubmit={submit}
+          submitLabel="إنشاء الملف"
+        />
+      </div>
     </Modal>
   );
 }
@@ -1042,66 +1044,68 @@ export function ServicesPage() {
       {!visible.length && <Empty>لا توجد خدمات مطابقة</Empty>}
       {kind && (
         <Modal title={requestTitle(kind)} close={() => setKind(null)} wide>
-          <p className="adm-note">{formByKind[kind].description}</p>
-          <p className="adm-note">
-            مسار المراجعة:{' '}
-            {(formByKind[kind].stepsByInitiator?.[data.me.role] ?? formByKind[kind].steps)
-              .map((role) => roleNames[role])
-              .join(' ← ') || 'لا يحتاج موافقة إضافية'}
-          </p>
-          <form className="adm-form" onSubmit={submit}>
-            {['hr', 'manager'].includes(data.me.role) && (
-              <label className="adm-field">
-                <span>الموظف المعني بالطلب</span>
-                <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
-                  <option value={data.me.id}>أنا</option>
-                  {data.employees
-                    .filter(
-                      (e) =>
-                        e.id !== data.me.id &&
-                        (data.me.role === 'hr' || e.managerId === data.me.id),
-                    )
-                    .map((e) => (
-                      <option key={e.id} value={e.id}>
-                        {e.name} · {e.employeeNumber}
-                      </option>
-                    ))}
-                </select>
-              </label>
-            )}
-            <div className="adm-fields">
-              {formByKind[kind].fields.map((f) => (
-                <Field
-                  key={f.key}
-                  field={f}
-                  value={values[f.key]}
-                  onChange={(v) => setValues((x) => ({ ...x, [f.key]: v }))}
-                />
-              ))}
-            </div>
-            {error && <p className="adm-error">{error}</p>}
-            <div className="adm-actions">
-              <button
-                className="adm-button secondary"
-                type="submit"
-                disabled={busy}
-                onClick={() => {
-                  submitIntent.current = false;
-                }}
-              >
-                حفظ كمسودة
-              </button>
-              <ActionButton
-                type="submit"
-                disabled={busy}
-                onClick={() => {
-                  submitIntent.current = true;
-                }}
-              >
-                {busy ? 'جارٍ الحفظ…' : 'إرسال للمراجعة'}
-              </ActionButton>
-            </div>
-          </form>
+          <div className="dialog-body">
+            <p className="adm-note">{formByKind[kind].description}</p>
+            <p className="adm-note">
+              مسار المراجعة:{' '}
+              {(formByKind[kind].stepsByInitiator?.[data.me.role] ?? formByKind[kind].steps)
+                .map((role) => roleNames[role])
+                .join(' ← ') || 'لا يحتاج موافقة إضافية'}
+            </p>
+            <form className="adm-form" onSubmit={submit}>
+              {['hr', 'manager'].includes(data.me.role) && (
+                <label className="adm-field">
+                  <span>الموظف المعني بالطلب</span>
+                  <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
+                    <option value={data.me.id}>أنا</option>
+                    {data.employees
+                      .filter(
+                        (e) =>
+                          e.id !== data.me.id &&
+                          (data.me.role === 'hr' || e.managerId === data.me.id),
+                      )
+                      .map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {e.name} · {e.employeeNumber}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
+              <div className="adm-fields">
+                {formByKind[kind].fields.map((f) => (
+                  <Field
+                    key={f.key}
+                    field={f}
+                    value={values[f.key]}
+                    onChange={(v) => setValues((x) => ({ ...x, [f.key]: v }))}
+                  />
+                ))}
+              </div>
+              {error && <p className="adm-error">{error}</p>}
+              <div className="adm-actions">
+                <button
+                  className="adm-button secondary"
+                  type="submit"
+                  disabled={busy}
+                  onClick={() => {
+                    submitIntent.current = false;
+                  }}
+                >
+                  حفظ كمسودة
+                </button>
+                <ActionButton
+                  type="submit"
+                  disabled={busy}
+                  onClick={() => {
+                    submitIntent.current = true;
+                  }}
+                >
+                  {busy ? 'جارٍ الحفظ…' : 'إرسال للمراجعة'}
+                </ActionButton>
+              </div>
+            </form>
+          </div>
         </Modal>
       )}
     </Shell>
@@ -1220,37 +1224,39 @@ export function RequestsPage({ openRequest }: { openRequest?: (id: string) => vo
       )}
       {detail && (
         <Modal title={requestTitle(detail.kind)} close={() => setDetail(null)}>
-          <p className="adm-note">
-            {detail.employeeName} · {detail.number} · {stateNames[detail.state]}
-          </p>
-          <dl className="adm-details">
-            {Object.entries(detail.values).map(([k, v]) => (
-              <div key={k}>
-                <dt>{formByKind[detail.kind].fields.find((f) => f.key === k)?.label || k}</dt>
-                <dd>{String(v ?? '—')}</dd>
-              </div>
-            ))}
-          </dl>
-          {detail.canEdit && detail.state === 'draft' && (
-            <>
-              <label className="adm-field">
-                <span>سبب الإرسال (اختياري)</span>
-                <textarea value={reason} onChange={(e) => setReason(e.target.value)} />
-              </label>
-              <div className="adm-actions">
-                <ActionButton onClick={() => void act('submit')} disabled={busy}>
-                  إرسال للمراجعة
-                </ActionButton>
-                <button
-                  className="adm-button danger"
-                  disabled={busy}
-                  onClick={() => void act('cancel')}
-                >
-                  إلغاء المسودة
-                </button>
-              </div>
-            </>
-          )}
+          <div className="dialog-body">
+            <p className="adm-note">
+              {detail.employeeName} · {detail.number} · {stateNames[detail.state]}
+            </p>
+            <dl className="adm-details">
+              {Object.entries(detail.values).map(([k, v]) => (
+                <div key={k}>
+                  <dt>{formByKind[detail.kind].fields.find((f) => f.key === k)?.label || k}</dt>
+                  <dd>{String(v ?? '—')}</dd>
+                </div>
+              ))}
+            </dl>
+            {detail.canEdit && detail.state === 'draft' && (
+              <>
+                <label className="adm-field">
+                  <span>سبب الإرسال (اختياري)</span>
+                  <textarea value={reason} onChange={(e) => setReason(e.target.value)} />
+                </label>
+                <div className="adm-actions">
+                  <ActionButton onClick={() => void act('submit')} disabled={busy}>
+                    إرسال للمراجعة
+                  </ActionButton>
+                  <button
+                    className="adm-button danger"
+                    disabled={busy}
+                    onClick={() => void act('cancel')}
+                  >
+                    إلغاء المسودة
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </Modal>
       )}
     </Shell>
@@ -1621,44 +1627,46 @@ export function AttendancePage() {
       )}
       {show && (
         <Modal title="تسجيل حضور" close={() => setShow(false)}>
-          <form className="adm-form" onSubmit={create}>
-            {[
-              ['date', 'التاريخ', 'date'],
-              ['checkIn', 'وقت الحضور', 'time'],
-              ['checkOut', 'وقت الانصراف', 'time'],
-            ].map(([k, l, t]) => (
-              <label className="adm-field" key={k}>
-                <span>{l}</span>
-                <input
-                  type={t}
-                  required
-                  value={form[k as keyof typeof form]}
-                  onChange={(e) => setForm({ ...form, [k]: e.target.value })}
+          <div className="dialog-body">
+            <form className="adm-form" onSubmit={create}>
+              {[
+                ['date', 'التاريخ', 'date'],
+                ['checkIn', 'وقت الحضور', 'time'],
+                ['checkOut', 'وقت الانصراف', 'time'],
+              ].map(([k, l, t]) => (
+                <label className="adm-field" key={k}>
+                  <span>{l}</span>
+                  <input
+                    type={t}
+                    required
+                    value={form[k as keyof typeof form]}
+                    onChange={(e) => setForm({ ...form, [k]: e.target.value })}
+                  />
+                </label>
+              ))}
+              <label className="adm-field">
+                <span>نمط العمل</span>
+                <select
+                  value={form.workMode}
+                  onChange={(e) => setForm({ ...form, workMode: e.target.value })}
+                >
+                  <option value="office">المكتب</option>
+                  <option value="remote">عن بعد</option>
+                  <option value="field">ميداني</option>
+                </select>
+              </label>
+              <label className="adm-field">
+                <span>ملاحظة</span>
+                <textarea
+                  value={form.note}
+                  onChange={(e) => setForm({ ...form, note: e.target.value })}
                 />
               </label>
-            ))}
-            <label className="adm-field">
-              <span>نمط العمل</span>
-              <select
-                value={form.workMode}
-                onChange={(e) => setForm({ ...form, workMode: e.target.value })}
-              >
-                <option value="office">المكتب</option>
-                <option value="remote">عن بعد</option>
-                <option value="field">ميداني</option>
-              </select>
-            </label>
-            <label className="adm-field">
-              <span>ملاحظة</span>
-              <textarea
-                value={form.note}
-                onChange={(e) => setForm({ ...form, note: e.target.value })}
-              />
-            </label>
-            <ActionButton type="submit" disabled={busy}>
-              حفظ السجل
-            </ActionButton>
-          </form>
+              <ActionButton type="submit" disabled={busy}>
+                حفظ السجل
+              </ActionButton>
+            </form>
+          </div>
         </Modal>
       )}
     </Shell>
@@ -1844,7 +1852,14 @@ export function DocumentsPage() {
         <Empty>لا توجد وثائق مطابقة</Empty>
       )}
       {archiveDoc && (
-        <Modal title="أرشفة وثيقة" close={() => setArchiveDoc(null)}>
+        <ConfirmDialog
+          title="أرشفة وثيقة"
+          close={() => setArchiveDoc(null)}
+          confirmLabel="أرشفة الوثيقة"
+          cancelLabel="إلغاء"
+          confirmDisabled={!archiveReason.trim()}
+          onConfirm={() => void archive()}
+        >
           <p className="adm-note">ستبقى النسخة محفوظة في سجل الوثائق.</p>
           <label className="adm-field">
             <span>سبب الأرشفة *</span>
@@ -1854,15 +1869,7 @@ export function DocumentsPage() {
               onChange={(e) => setArchiveReason(e.target.value)}
             />
           </label>
-          <div className="adm-actions">
-            <ActionButton disabled={!archiveReason.trim()} onClick={() => void archive()}>
-              أرشفة الوثيقة
-            </ActionButton>
-            <button className="adm-button secondary" onClick={() => setArchiveDoc(null)}>
-              إلغاء
-            </button>
-          </div>
-        </Modal>
+        </ConfirmDialog>
       )}
     </Shell>
   );
@@ -2008,44 +2015,52 @@ export function PoliciesPage() {
       )}
       {show && (
         <Modal title="إضافة سياسة" close={() => setShow(false)}>
-          <form className="adm-form" onSubmit={create}>
-            {[
-              ['key', 'مفتاح السياسة'],
-              ['name', 'اسم السياسة'],
-              ['effectiveFrom', 'تاريخ السريان', 'date'],
-              ['effectiveTo', 'تاريخ الانتهاء', 'date'],
-              ['source', 'المصدر'],
-            ].map(([k, l, t]) => (
-              <label key={k} className="adm-field">
-                <span>{l}</span>
-                <input
-                  required={k !== 'effectiveTo'}
-                  type={t || 'text'}
-                  value={form[k as keyof typeof form]}
-                  onChange={(e) => setForm({ ...form, [k]: e.target.value })}
+          <div className="dialog-body">
+            <form className="adm-form" onSubmit={create}>
+              {[
+                ['key', 'مفتاح السياسة'],
+                ['name', 'اسم السياسة'],
+                ['effectiveFrom', 'تاريخ السريان', 'date'],
+                ['effectiveTo', 'تاريخ الانتهاء', 'date'],
+                ['source', 'المصدر'],
+              ].map(([k, l, t]) => (
+                <label key={k} className="adm-field">
+                  <span>{l}</span>
+                  <input
+                    required={k !== 'effectiveTo'}
+                    type={t || 'text'}
+                    value={form[k as keyof typeof form]}
+                    onChange={(e) => setForm({ ...form, [k]: e.target.value })}
+                  />
+                </label>
+              ))}
+              <label className="adm-field">
+                <span>وصف مختصر</span>
+                <textarea
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
                 />
               </label>
-            ))}
-            <label className="adm-field">
-              <span>وصف مختصر</span>
-              <textarea
-                value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-              />
-            </label>
-            <p className="adm-note">
-              ستسجل السياسة كمسودة اصطناعية. لا تعتمد قيمة قانونية دون مراجعة مختص.
-            </p>
-            <ActionButton type="submit" disabled={busy}>
-              حفظ المسودة
-            </ActionButton>
-          </form>
+              <p className="adm-note">
+                ستسجل السياسة كمسودة اصطناعية. لا تعتمد قيمة قانونية دون مراجعة مختص.
+              </p>
+              <ActionButton type="submit" disabled={busy}>
+                حفظ المسودة
+              </ActionButton>
+            </form>
+          </div>
         </Modal>
       )}
       {confirm && (
-        <Modal
+        <ConfirmDialog
           title={confirm.action === 'approve' ? 'اعتماد السياسة للمعاينة' : 'إيقاف السياسة'}
           close={() => setConfirm(null)}
+          confirmLabel={busy ? 'جارٍ الحفظ…' : 'تأكيد'}
+          cancelLabel="إلغاء"
+          danger={confirm.action === 'retire'}
+          busy={busy}
+          confirmDisabled={!actionReason.trim()}
+          onConfirm={() => void action()}
         >
           <p className="adm-note">
             {confirm.action === 'approve'
@@ -2060,15 +2075,7 @@ export function PoliciesPage() {
               onChange={(e) => setActionReason(e.target.value)}
             />
           </label>
-          <div className="adm-actions">
-            <ActionButton disabled={busy || !actionReason.trim()} onClick={() => void action()}>
-              {busy ? 'جارٍ الحفظ…' : 'تأكيد'}
-            </ActionButton>
-            <button className="adm-button secondary" onClick={() => setConfirm(null)}>
-              إلغاء
-            </button>
-          </div>
-        </Modal>
+        </ConfirmDialog>
       )}
     </Shell>
   );
