@@ -43,7 +43,8 @@ import {
   type EmployeeRow,
 } from './service.js';
 import { decryptSensitive, encryptSensitive, sha256 } from './security.js';
-import { csvCell, fault, roleFromState, stateForRole, validateValues } from './validation.js';
+import { reportCsv, type ReportExportType } from './report-export.js';
+import { fault, roleFromState, stateForRole, validateValues } from './validation.js';
 
 const at = () => new Date().toISOString();
 const isRole = (value: string): value is Role =>
@@ -1875,46 +1876,9 @@ function registerReportRoutes(app: Express, ctx: { db: AsyncDb; requireActor: Re
     const type = String(req.query.type ?? '');
     if (!['employees', 'requests', 'attendance'].includes(type))
       throw fault(400, 'INVALID_EXPORT', 'حدد نوع تقرير صالحًا.');
-    let csv = '';
-    if (type === 'employees') {
-      if (actor.role !== 'hr' && actor.role !== 'auditor')
-        throw fault(403, 'FORBIDDEN', 'تصدير ملفات الموظفين متاح للشؤون الإدارية أو المراجع.');
-      const rows = await db.read<any>(
-        'SELECT employee_number,name,title,department,status FROM employee_access ORDER BY employee_number',
-      );
-      csv = [
-        'employee_number,name,title,department,status',
-        ...rows.map((r) =>
-          [
-            r.employee_number,
-            actor.role === 'auditor' ? 'موظف' : r.name,
-            r.title,
-            actor.role === 'auditor' ? 'محجوب' : r.department,
-            r.status,
-          ]
-            .map(csvCell)
-            .join(','),
-        ),
-      ].join('\r\n');
-    } else if (type === 'requests') {
-      const rows = await db.read<any>(
-        'SELECT request_number,kind,state,created_at,updated_at FROM administrative_requests ORDER BY created_at',
-      );
-      csv = [
-        'number,kind,state,created_at,updated_at',
-        ...rows.map((r) =>
-          [r.request_number, r.kind, r.state, r.created_at, r.updated_at].map(csvCell).join(','),
-        ),
-      ].join('\r\n');
-    } else {
-      const rows = await db.read<any>(
-        'SELECT work_date,state,COUNT(*) AS count FROM attendance_records GROUP BY work_date,state ORDER BY work_date',
-      );
-      csv = [
-        'date,state,count',
-        ...rows.map((r) => [r.work_date, r.state, r.count].map(csvCell).join(',')),
-      ].join('\r\n');
-    }
+    if (type === 'employees' && actor.role !== 'hr' && actor.role !== 'auditor')
+      throw fault(403, 'FORBIDDEN', 'تصدير ملفات الموظفين متاح للشؤون الإدارية أو المراجع.');
+    const csv = await reportCsv(db, type as ReportExportType, actor.role === 'auditor');
     res
       .type('text/csv; charset=utf-8')
       .attachment(`${type}.csv`)
