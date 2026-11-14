@@ -13,6 +13,7 @@ import {
   sellerAddressText,
   type FinanceSeller,
 } from '../../shared/finance.js';
+import { acceptFinanceInvoice } from '../support/accept-invoice.js';
 import type {
   AccountStatement,
   AgingRow,
@@ -136,6 +137,9 @@ async function invoice(h: Harness, lines?: unknown[], documentType = 'standard')
   assert.equal(converted.status, 201);
   return converted.body.invoice.id;
 }
+async function accept(h: Harness, invoiceId: string) {
+  await acceptFinanceInvoice(h.db, invoiceId);
+}
 
 async function scenario(db: AsyncDb) {
   const h = await harness(db);
@@ -146,6 +150,7 @@ async function scenario(db: AsyncDb) {
     h.actor.current = { id: 'finance-owner', role: 'employee' };
     const empty = await h.get<LedgerOverview>('/api/finance/ledger');
     assert.equal(empty.body.initialized, false);
+    h.actor.current = { id: 'finance-owner', role: 'hr' };
     assert.equal(empty.body.accounts.length, 0);
     assert.equal(
       (await h.get<Fail>('/api/finance/ledger/entries')).body.error.code,
@@ -230,6 +235,7 @@ async function scenario(db: AsyncDb) {
       ).body.error.code,
       'INVOICE_NOT_POSTED',
     );
+    await accept(h, invoiceId);
     const posted = await h.send<{ voucher: LedgerVoucher }>(
       `/api/finance/ledger/invoices/${invoiceId}/post`,
       { revenueAccountCode: '4101' },
@@ -680,6 +686,7 @@ test('ledger: mixed 0% lines need an explicit VAT treatment, and reversal frees 
         taxReason: 'خارج النطاق',
       },
     ]);
+    await accept(h, invoiceId);
     assert.equal(
       (
         await h.send<Fail>(`/api/finance/ledger/invoices/${invoiceId}/post`, {
@@ -712,6 +719,84 @@ test('ledger: mixed 0% lines need an explicit VAT treatment, and reversal frees 
     assert.equal(balanceOf(overview, '1110'), 155_000);
     assert.equal(balanceOf(overview, '4101'), 0);
     assert.equal(balanceOf(overview, '4103'), 140_000);
+  } finally {
+    await h.close();
+  }
+});
+
+test('ledger: draft posting is rejected, only an admin may approve and post, and receipts use the payment date', async () => {
+  process.env.HR_DATA_KEY ??= Buffer.alloc(32, 7).toString('base64url');
+  const h = await harness(await createDatabase());
+  try {
+    await h.send('/api/finance/ledger/setup', {});
+    const invoiceId = await invoice(h);
+
+    const draft = await h.send<Fail>(`/api/finance/ledger/invoices/${invoiceId}/post`, {
+      revenueAccountCode: '4101',
+    });
+    assert.equal(draft.status, 409);
+    assert.equal(draft.body.error.code, 'INVOICE_NOT_ISSUED');
+
+    await accept(h, invoiceId);
+    h.actor.current = { id: 'finance-owner', role: 'employee' };
+    const denied = await h.send<Fail>(`/api/finance/ledger/invoices/${invoiceId}/post`, {
+      revenueAccountCode: '4101',
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.error.code, 'FORBIDDEN');
+
+    h.actor.current = { id: 'finance-owner', role: 'hr' };
+    const posted = await h.send<{ voucher: LedgerVoucher }>(
+      `/api/finance/ledger/invoices/${invoiceId}/post`,
+      { revenueAccountCode: '4101' },
+    );
+    assert.equal(posted.status, 201);
+    assert.equal(posted.body.voucher.date, '2026-07-10');
+    const journal = await h.get<{ entries: JournalEntry[] }>('/api/finance/ledger/entries');
+    const invoiceEntry = journal.body.entries.find(
+      (item) => item.id === posted.body.voucher.entryId,
+    );
+    assert.ok(invoiceEntry);
+    assert.equal(invoiceEntry.date, '2026-07-10');
+    assert.equal(invoiceEntry.kind, 'invoice');
+    const events = await h.db.read<{ action: string }>(
+      "SELECT action FROM administration_events WHERE resource_type='finance_invoice' AND resource_id=? AND action='approved_and_posted'",
+      [invoiceId],
+    );
+    assert.equal(events.length, 1);
+
+    const receipt = await h.send<{ voucher: LedgerVoucher }>(
+      `/api/finance/ledger/invoices/${invoiceId}/receipts`,
+      {
+        date: '2026-07-15',
+        amount: '4000.00',
+        cashAccountCode: '1102',
+        reference: 'TRF-BACKDATED',
+      },
+    );
+    assert.equal(receipt.status, 201);
+    assert.equal(receipt.body.voucher.date, '2026-07-15');
+    const afterReceipt = await h.get<{ entries: JournalEntry[] }>('/api/finance/ledger/entries');
+    const receiptEntry = afterReceipt.body.entries.find(
+      (item) => item.id === receipt.body.voucher.entryId,
+    );
+    assert.ok(receiptEntry);
+    assert.equal(receiptEntry.date, '2026-07-15');
+    assert.equal(receiptEntry.kind, 'receipt');
+
+    const locked = await h.send('/api/finance/ledger/periods', {
+      year: 2026,
+      month: 7,
+      locked: true,
+    });
+    assert.equal(locked.status, 200);
+    const closed = await h.send<Fail>(`/api/finance/ledger/invoices/${invoiceId}/receipts`, {
+      date: '2026-07-20',
+      amount: '1000.00',
+      cashAccountCode: '1102',
+    });
+    assert.equal(closed.status, 409);
+    assert.equal(closed.body.error.code, 'PERIOD_LOCKED');
   } finally {
     await h.close();
   }
@@ -753,11 +838,12 @@ async function statementScenario(db: AsyncDb) {
     const posted = await Promise.all(
       (
         await h.get<{ invoices: { id: string; quoteId: string }[] }>('/api/finance')
-      ).body.invoices.map((item) =>
-        h.send<{ voucher: LedgerVoucher }>(`/api/finance/ledger/invoices/${item.id}/post`, {
+      ).body.invoices.map(async (item) => {
+        await accept(h, item.id);
+        return h.send<{ voucher: LedgerVoucher }>(`/api/finance/ledger/invoices/${item.id}/post`, {
           revenueAccountCode: '4101',
-        }),
-      ),
+        });
+      }),
     );
     assert.ok(posted.every((item) => item.status === 201));
     assert.equal(

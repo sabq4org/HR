@@ -30,26 +30,34 @@ HR_FINANCE_API_KEY_HASHES="sha256:…" npm run finance:sandbox
 
 ## المسارات
 
-| العملية                                 | المسار                                                                                           |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| قراءة العملاء والبنود والعروض والفواتير | `GET /api/finance`                                                                               |
-| العملاء                                 | `POST /api/finance/customers`، `PATCH /api/finance/customers/:id`                                |
-| بنود الأسعار                            | `POST /api/finance/catalog`، `PATCH /api/finance/catalog/:id`                                    |
-| عرض السعر                               | `POST /api/finance/quotes`، `PATCH /api/finance/quotes/:id`                                      |
-| PDF عرض السعر                           | `GET /api/finance/quotes/:id/document.pdf`                                                       |
-| الفاتورة                                | `POST /api/finance/quotes/:id/convert`                                                           |
-| PDF نسخة الفاتورة                       | `GET /api/finance/invoices/:id/document.pdf` (نسخة داخلية، ليست فاتورة ضريبية)                   |
-| PDF كشف حساب العميل                     | `GET /api/finance/customers/:id/statement.pdf?from=YYYY-MM-DD&to=YYYY-MM-DD` (أفقي)              |
-| PDF الرسمي                              | `GET /api/finance/invoices/:id/pdf` (من المزود بعد القبول فقط)                                   |
-| تهيئة الدفاتر                           | `POST /api/finance/ledger/setup` (مرة واحدة)                                                     |
-| ترحيل الفاتورة وتسجيل الدفع             | `POST /api/finance/ledger/invoices/:id/post`، `POST /api/finance/ledger/invoices/:id/receipts`   |
-| إيراد ومصروف                            | `POST /api/finance/ledger/revenues`، `POST /api/finance/ledger/expenses`                         |
-| القيد اليومي والأستاذ                   | `GET/POST /api/finance/ledger/entries`، `GET /api/finance/ledger/reports/account/:code`          |
-| ميزان المراجعة والميزانية               | `GET /api/finance/ledger/reports/trial-balance`، `GET /api/finance/ledger/reports/balance-sheet` |
-| الموازنة                                | `GET /api/finance/ledger/reports/budget?year=`، `PATCH /api/finance/ledger/budgets/:year`        |
-| ضريبة القيمة المضافة الربعية            | `GET /api/finance/ledger/vat?start=YYYY-MM-DD`                                                   |
+| العملية                                 | المسار                                                                                                                                                |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| قراءة العملاء والبنود والعروض والفواتير | `GET /api/finance`                                                                                                                                    |
+| العملاء                                 | `POST /api/finance/customers`، `PATCH /api/finance/customers/:id`                                                                                     |
+| بنود الأسعار                            | `POST /api/finance/catalog`، `PATCH /api/finance/catalog/:id`                                                                                         |
+| عرض السعر                               | `POST /api/finance/quotes`، `PATCH /api/finance/quotes/:id`                                                                                           |
+| PDF عرض السعر                           | `GET /api/finance/quotes/:id/document.pdf`                                                                                                            |
+| الفاتورة                                | `POST /api/finance/quotes/:id/convert`                                                                                                                |
+| PDF نسخة الفاتورة                       | `GET /api/finance/invoices/:id/document.pdf` (نسخة داخلية، ليست فاتورة ضريبية)                                                                        |
+| PDF كشف حساب العميل                     | `GET /api/finance/customers/:id/statement.pdf?from=YYYY-MM-DD&to=YYYY-MM-DD` (أفقي)                                                                   |
+| PDF الرسمي                              | `GET /api/finance/invoices/:id/pdf` (من المزود بعد القبول فقط)                                                                                        |
+| تهيئة الدفاتر                           | `POST /api/finance/ledger/setup` (مرة واحدة)                                                                                                          |
+| اعتماد الفاتورة وترحيلها                | `POST /api/finance/ledger/invoices/:id/post` (مسؤول النظام فقط؛ `403 FORBIDDEN` لغيره. تُرفض المسودة وغير المقبولة ضريبيًا بـ `409 INVOICE_NOT_ISSUED`) |
+| تسجيل دفعة على فاتورة مرحّلة             | `POST /api/finance/ledger/invoices/:id/receipts` (تاريخ السداد، مبلغ جزئي، حساب بنكي، مرجع. فترة مقفلة: `409 PERIOD_LOCKED`)                          |
+| إيراد ومصروف                            | `POST /api/finance/ledger/revenues`، `POST /api/finance/ledger/expenses`                                                                              |
+| القيد اليومي والأستاذ                   | `GET/POST /api/finance/ledger/entries`، `GET /api/finance/ledger/reports/account/:code`                                                               |
+| ميزان المراجعة والميزانية               | `GET /api/finance/ledger/reports/trial-balance`، `GET /api/finance/ledger/reports/balance-sheet`                                                      |
+| الموازنة                                | `GET /api/finance/ledger/reports/budget?year=`، `PATCH /api/finance/ledger/budgets/:year`                                                             |
+| ضريبة القيمة المضافة الربعية            | `GET /api/finance/ledger/vat?start=YYYY-MM-DD`                                                                                                        |
 
-المبالغ في الردود بالهللة. الاختبارات في `tests/domain/finance-service-api.test.ts` و`tests/domain/finance-document-pdf.test.ts`.
+المبالغ في الردود بالهللة. الاختبارات في `tests/domain/finance-service-api.test.ts` و`tests/domain/finance-document-pdf.test.ts` و`tests/domain/finance-ledger.test.ts`.
+
+## ترحيل الفواتير وتسجيل الدفعات
+
+- لا يُرحَّل إيراد فاتورة وهي مسودة. الترحيل اليدوي (`/post`) بعد قبول ضريبي (`cleared` أو `reported` من وافق أو الهيئة)، وبصلاحية مسؤول النظام (دور `hr`) فقط. مفتاح المحاسب يعمل بدور موظف فيُرفض بـ `403`.
+- عند قبول الفاتورة في مسار المزامنة أو تحديث الحالة، يحاول الخادم الترحيل تلقائيًا إذا كانت الدفاتر مهيأة وحساب الإيراد الافتراضي معيّنًا، ويكتب `auto_posted` في سجل التدقيق. الترحيل اليدوي يكتب `approved_and_posted`.
+- القيد بتاريخ الفاتورة: مدين الذمم 1110، دائن الإيراد 4101، دائن ضريبة المخرجات 2110.
+- سند القبض من `/receipts` بتاريخ السداد المختار، لا بتاريخ الإدخال. تاريخ في فترة مقفلة يُرفض بـ `409 PERIOD_LOCKED`. المبلغ لا يتجاوز المتبقي.
 
 ## ملفات PDF
 

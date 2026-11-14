@@ -231,21 +231,14 @@ test('an accountant key runs the whole finance cycle and is refused everywhere e
       404,
     );
 
-    // Ledger: post the invoice, mark it paid, revenue, expense
+    // Ledger: the accountant key may set up the books and record revenue, but it acts as an
+    // employee and cannot approve-and-post an invoice.
     assert.equal((await app.call(key, 'POST', '/api/finance/ledger/setup', {})).status, 201);
     const posted = await app.call(key, 'POST', `/api/finance/ledger/invoices/${invoiceId}/post`, {
       revenueAccountCode: '4101',
     });
-    assert.equal(posted.status, 201);
-    const paid = await app.call(key, 'POST', `/api/finance/ledger/invoices/${invoiceId}/receipts`, {
-      date: '2026-07-20',
-      amount: '11500.00',
-      cashAccountCode: '1102',
-      reference: 'حوالة',
-    });
-    assert.equal(paid.status, 201);
-    const vouchers = await app.call(key, 'GET', '/api/finance/ledger/vouchers?kind=invoice');
-    assert.equal(vouchers.body.vouchers[0].outstandingHalalas, 0);
+    assert.equal(posted.status, 403);
+    assert.equal(posted.body.error.code, 'FORBIDDEN');
     assert.equal(
       (
         await app.call(key, 'POST', '/api/finance/ledger/revenues', {
@@ -298,7 +291,7 @@ test('an accountant key runs the whole finance cycle and is refused everywhere e
     assert.equal(sheet.body.balanced, true);
     const vat = await app.call(key, 'GET', '/api/finance/ledger/vat?start=2026-07-01');
     assert.equal(vat.status, 200);
-    assert.equal(vat.body.computation.outputVatHalalas, 150_000 + 15_000);
+    assert.equal(vat.body.computation.outputVatHalalas, 15_000);
     assert.equal(vat.body.computation.inputVatHalalas, 15_000);
   } finally {
     await app.close();

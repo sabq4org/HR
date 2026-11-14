@@ -2,6 +2,7 @@
  * Accounting ledger contract for the private finance workspace.
  * All money is integer halalas. Journal entries are append-only; corrections are reversals.
  */
+import type { Role } from './contracts.js';
 import type { FinanceCustomerInput, FinanceSeller } from './finance.js';
 
 export type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
@@ -19,6 +20,10 @@ export type TaxRole = 'base' | 'output' | 'input';
 export const salesTaxCodes: readonly TaxCode[] = ['S', 'ZD', 'ZE', 'E', 'O'];
 export const purchaseTaxCodes: readonly TaxCode[] = ['S', 'ND', 'RC', 'IMP', 'ZD', 'E', 'O'];
 export const VAT_RATE_BPS = 1500;
+/** Manual approve-and-post is limited to the system administrator (HR role). */
+export function canApproveAndPost(role: Role): boolean {
+  return role === 'hr';
+}
 export const taxCodeLabel: Record<TaxCode, string> = {
   S: 'خاضع 15٪',
   ZD: 'نسبة صفرية محلية',
@@ -551,6 +556,7 @@ export const defaultChart: readonly ChartSeedAccount[] = [
 // GET   /api/finance/ledger/vouchers?kind -> {vouchers: LedgerVoucher[]}
 // GET   /api/finance/ledger/invoices -> {invoices: InvoiceLedgerState[]}
 // POST  /api/finance/ledger/invoices/:id/post InvoicePostingInput -> {voucher}
+//   Admin (HR) only. 403 FORBIDDEN otherwise. 409 INVOICE_NOT_ISSUED unless tax-accepted.
 // POST  /api/finance/ledger/invoices/:id/receipts SettlementInput -> {voucher}
 // POST  /api/finance/ledger/invoices/:id/credit-notes CreditNoteInput -> {voucher}
 // POST  /api/finance/ledger/revenues RevenueInput -> {voucher}
