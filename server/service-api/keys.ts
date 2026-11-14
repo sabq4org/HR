@@ -7,9 +7,10 @@
  * - The key acts as a fixed service account, not as an employee: every audit entry it leaves
  *   names «محاسب سبق». It has no role, so no existing session route accepts it.
  * - Scopes are explicit (HR_SERVICE_API_KEY_SCOPES). Phase 1 wired the read scopes; phase 2
- *   wires profile edits (hr.employees.write), payroll drafts (hr.payroll.write) and submitting a
- *   draft for review (hr.payroll.submit). hr.leave.write stays declared but refused at boot.
- *   Approving or closing a payroll run is never grantable to a key.
+ *   wires profile edits (hr.employees.write), payroll drafts (hr.payroll.write), submitting a
+ *   draft for review (hr.payroll.submit), and drafting a payroll rules version (hr.policy.draft).
+ *   hr.leave.write stays declared but refused at boot. Approving or closing a payroll run, and
+ *   approving, activating or retiring a policy version, are never grantable to a key.
  * - Writes need a stored actor row for the existing foreign keys (profile history, payroll
  *   preparer). See server/service-api/service-account.ts and docs/hr-service-api.md.
  */
@@ -43,11 +44,18 @@ export const HR_WRITE_SCOPES = [
   'hr.employees.write',
   'hr.payroll.write',
   'hr.payroll.submit',
+  'hr.policy.draft',
 ] as const;
 /** Declared but not wired yet: configuring any of these is refused at boot. */
 export const HR_DEFERRED_SCOPES = ['hr.leave.write'] as const;
-/** Never grantable to a machine key: payroll approval and closing stay with a human approver. */
-export const HR_FORBIDDEN_SCOPES = ['hr.payroll.approve', 'hr.payroll.close'] as const;
+/** Never grantable to a machine key: payroll/policy approval stay with a human approver. */
+export const HR_FORBIDDEN_SCOPES = [
+  'hr.payroll.approve',
+  'hr.payroll.close',
+  'hr.policy.approve',
+  'hr.policy.activate',
+  'hr.policy.retire',
+] as const;
 
 export type HrReadScope = (typeof HR_READ_SCOPES)[number];
 export type HrWriteScope = (typeof HR_WRITE_SCOPES)[number];
@@ -114,10 +122,12 @@ const SERVICE_WRITE_PATHS: ReadonlyArray<[string, RegExp]> = [
   ['PATCH', /^\/api\/service\/hr\/employees\/[^/]+$/],
   ['POST', /^\/api\/service\/hr\/payroll$/],
   ['POST', /^\/api\/service\/hr\/payroll\/[^/]+\/actions$/],
+  ['POST', /^\/api\/service\/hr\/policies$/],
+  ['POST', /^\/api\/service\/hr\/policies\/[^/]+\/actions$/],
 ];
 
 /**
- * Paths an HR service key may call: health, the read API, and the three phase-2 write routes.
+ * Paths an HR service key may call: health, the read API, and the phase-2 write routes.
  * Each route still checks its own scope; this is the outer allowlist.
  */
 export function inHrServiceScope(method: string, path: string): boolean {

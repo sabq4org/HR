@@ -135,8 +135,14 @@ test('scopes: phase-2 writes wired; leave.write deferred; approve/close never gr
   assert.ok(!inHrServiceScope('DELETE', '/api/service/hr/employees/emp-sara'));
   assert.ok(inHrServiceScope('POST', '/api/service/hr/payroll'));
   assert.ok(inHrServiceScope('POST', '/api/service/hr/payroll/run-1/actions'));
+  assert.ok(inHrServiceScope('POST', '/api/service/hr/policies'));
+  assert.ok(inHrServiceScope('GET', '/api/service/hr/policies'));
+  assert.ok(inHrServiceScope('GET', '/api/service/hr/policies/pol-1'));
+  assert.ok(inHrServiceScope('POST', '/api/service/hr/policies/pol-1/actions'));
   assert.ok(!inHrServiceScope('PATCH', '/api/service/hr/payroll/run-1'));
+  assert.ok(!inHrServiceScope('PATCH', '/api/service/hr/policies/pol-1'));
   assert.ok(!inHrServiceScope('POST', '/api/admin/payroll/run-1/actions'));
+  assert.ok(!inHrServiceScope('POST', '/api/admin/policies'));
   assert.ok(!inHrServiceScope('GET', '/api/finance'));
   assert.ok(!inHrServiceScope('GET', '/api/admin/payroll'));
 });

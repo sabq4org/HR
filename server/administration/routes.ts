@@ -45,7 +45,7 @@ import {
 import { decryptSensitive, encryptSensitive, sha256 } from './security.js';
 import { reportCsv, type ReportExportType } from './report-export.js';
 import { fault, roleFromState, stateForRole, validateValues } from './validation.js';
-import { approvesPayroll } from '../system-owner.js';
+import { actOnPolicy, createPolicyDraft, listPolicies } from './policies.js';
 
 const at = () => new Date().toISOString();
 const isRole = (value: string): value is Role =>
@@ -1682,91 +1682,31 @@ function registerPolicyRoutes(
   routeWithActor(app, 'get', '/api/admin/policies', requireActor, async (_req, res, actor) => {
     if (!['hr', 'approver', 'finance', 'auditor'].includes(actor.role))
       throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية الاطلاع على القواعد.');
-    const rows = await db.read<any>(
-      'SELECT * FROM administrative_policies ORDER BY policy_key,version DESC',
-    );
+    const policies = await listPolicies(db);
     res.json({
-      policies: rows.map((p) => ({
-        id: p.id,
-        key: p.policy_key,
-        name: p.name,
-        version: Number(p.version),
-        effectiveFrom: p.effective_from,
-        effectiveTo: p.effective_to,
-        source: p.source,
-        state: p.state,
-        values: actor.role === 'auditor' ? {} : JSON.parse(p.values_json),
-        createdBy: actor.role === 'auditor' ? '' : p.created_by,
-        approvedBy: actor.role === 'auditor' ? '' : p.approved_by,
+      policies: policies.map((p) => ({
+        ...p,
+        values: actor.role === 'auditor' ? {} : p.values,
+        createdBy: actor.role === 'auditor' ? '' : p.createdBy,
+        approvedBy: actor.role === 'auditor' ? '' : p.approvedBy,
       })),
     });
   });
   routeWithActor(app, 'post', '/api/admin/policies', requireActor, async (req, res, actor) => {
     if (actor.role !== 'hr') throw fault(403, 'FORBIDDEN', 'إنشاء القواعد متاح للشؤون الإدارية.');
     const b = requireRecord(req.body);
-    const key = requiredString(b.key, 'INVALID_POLICY', 'المعرف مطلوب.', 80);
-    const name = requiredString(b.name, 'INVALID_POLICY', 'الاسم مطلوب.', 200);
-    const effectiveFrom = requiredString(
-      b.effectiveFrom,
-      'INVALID_DATE',
-      'تاريخ السريان مطلوب.',
-      10,
-    );
-    const effectiveTo = typeof b.effectiveTo === 'string' ? b.effectiveTo : null;
-    const source = requiredString(b.source, 'SOURCE_REQUIRED', 'اذكر مصدر القاعدة وحالتها.', 500);
-    const values = requireRecord(b.values);
-    if (
-      !validIsoDate(effectiveFrom) ||
-      (effectiveTo && !validIsoDate(effectiveTo)) ||
-      (effectiveTo && effectiveTo < effectiveFrom)
-    )
-      throw fault(400, 'INVALID_DATE', 'فترة السريان غير صالحة.');
-    const id = newId();
-    const policy = await idempotent(
+    const policy = await createPolicyDraft(
       db,
       actor,
-      'policy:create',
-      req.get('Idempotency-Key') ?? undefined,
-      { key, name, effectiveFrom, effectiveTo, source, values },
-      async (tx, m) => getPolicy(tx, m.id),
-      async (tx) => {
-        const max = (
-          await tx.read<any>(
-            'SELECT MAX(version) AS v FROM administrative_policies WHERE policy_key=?',
-            [key],
-          )
-        )[0]?.v;
-        const version = Number(max ?? 0) + 1;
-        const now = at();
-        await tx.execute(
-          "INSERT INTO administrative_policies(id,policy_key,version,name,effective_from,effective_to,source,state,values_json,created_by,created_at) VALUES(?,?,?,?,?,?,?,'draft',?,?,?)",
-          [
-            id,
-            key,
-            version,
-            name,
-            effectiveFrom,
-            effectiveTo,
-            // Private data: the cited source is stored as written, without the synthetic tag.
-            privateMode ? source : `Synthetic: ${source}`,
-            JSON.stringify(values),
-            actor.id,
-            now,
-          ],
-        );
-        await appendEvent(
-          tx,
-          actor,
-          'policy',
-          id,
-          'policy_created',
-          source,
-          { version },
-          version,
-          now,
-        );
-        return { marker: { type: 'policy', id }, result: await getPolicy(tx, id) };
+      {
+        key: String(b.key ?? ''),
+        name: String(b.name ?? ''),
+        effectiveFrom: String(b.effectiveFrom ?? ''),
+        effectiveTo: typeof b.effectiveTo === 'string' ? b.effectiveTo : null,
+        source: String(b.source ?? ''),
+        values: requireRecord(b.values),
       },
+      { privateMode, idempotencyKey: req.get('Idempotency-Key') ?? undefined },
     );
     res.status(201).json({ policy });
   });
@@ -1775,73 +1715,15 @@ function registerPolicyRoutes(
     route(async (req, res) => {
       const actor = actorOrThrow(await requireActor(req));
       const b = requireRecord(req.body);
-      const version = versionValue(b.version);
-      const action = requiredString(b.action, 'INVALID_ACTION', 'الإجراء مطلوب.', 20);
-      const reason = requiredString(b.reason, 'REASON_REQUIRED', 'أدخل سبب الإجراء.', 1000);
-      if (!['approve', 'retire'].includes(action))
-        throw fault(400, 'INVALID_ACTION', 'الإجراء غير صالح.');
-      const policy = await idempotent(
-        db,
-        actor,
-        `policy:action:${param(req, 'id')}`,
-        req.get('Idempotency-Key') ?? undefined,
-        { version, action, reason },
-        async (tx, m) => getPolicy(tx, m.id),
-        async (tx) => {
-          const row = (
-            await tx.read<any>('SELECT * FROM administrative_policies WHERE id=?', [
-              param(req, 'id'),
-            ])
-          )[0];
-          if (!row) throw fault(404, 'POLICY_NOT_FOUND', 'القاعدة غير موجودة.');
-          if (Number(row.version) !== version) throw fault(409, 'STALE_VERSION', 'تغيرت القاعدة.');
-          if (action === 'approve' && row.created_by === actor.id)
-            throw fault(403, 'SELF_APPROVAL', 'لا تعتمد القاعدة التي أنشأتها.');
-          if (
-            action === 'approve'
-              ? !approvesPayroll(actor) || row.state !== 'draft'
-              : actor.role !== 'hr' || row.state !== 'synthetic_approved'
-          )
-            throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية الإجراء في هذه المرحلة.');
-          const state = action === 'approve' ? 'synthetic_approved' : 'retired';
-          const changed = await tx.execute(
-            'UPDATE administrative_policies SET state=?,approved_by=? WHERE id=? AND version=? AND state=?',
-            [state, action === 'approve' ? actor.id : row.approved_by, row.id, version, row.state],
-          );
-          if (changed.rowCount !== 1) throw fault(409, 'STALE_VERSION', 'تغيرت القاعدة.');
-          await appendEvent(
-            tx,
-            actor,
-            'policy',
-            row.id,
-            `policy_${action}`,
-            reason,
-            {},
-            row.version,
-          );
-          return { marker: { type: 'policy', id: row.id }, result: await getPolicy(tx, row.id) };
-        },
-      );
+      const policy = await actOnPolicy(db, actor, param(req, 'id'), {
+        action: String(b.action ?? ''),
+        version: b.version,
+        reason: String(b.reason ?? ''),
+        idempotencyKey: req.get('Idempotency-Key') ?? undefined,
+      });
       res.json({ policy });
     }),
   );
-}
-async function getPolicy(db: AsyncDb, id: string) {
-  const p = (await db.read<any>('SELECT * FROM administrative_policies WHERE id=?', [id]))[0];
-  if (!p) throw fault(404, 'POLICY_NOT_FOUND', 'القاعدة غير موجودة.');
-  return {
-    id: p.id,
-    key: p.policy_key,
-    name: p.name,
-    version: Number(p.version),
-    effectiveFrom: p.effective_from,
-    effectiveTo: p.effective_to,
-    source: p.source,
-    state: p.state,
-    values: JSON.parse(p.values_json),
-    createdBy: p.created_by,
-    approvedBy: p.approved_by,
-  };
 }
 
 function registerReportRoutes(app: Express, ctx: { db: AsyncDb; requireActor: RequireActor }) {

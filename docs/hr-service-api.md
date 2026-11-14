@@ -1,6 +1,6 @@
 # واجهة الموارد البشرية لبوت «محاسب سبق» (قراءة، وكتابة محددة في المرحلة الثانية)
 
-مفتاح خدمة مستقل يتيح لبوت «محاسب سبق» قراءة ملفات الموظفين والرواتب والإجازات والمسيرات عبر HTTP دون جلسة متصفح، وفي المرحلة الثانية: تعديل الملف بتوجيه علي، وإعداد مسودة المسير وإرسالها للمراجعة. كل الأمثلة هنا ببيانات وهمية، والمفتاح فيها `$SABQ_HR_SERVICE_TOKEN` (لا تكتب المفتاح الحقيقي في أي أمر يُحفظ في السجل).
+مفتاح خدمة مستقل يتيح لبوت «محاسب سبق» قراءة ملفات الموظفين والرواتب والإجازات والمسيرات عبر HTTP دون جلسة متصفح، وفي المرحلة الثانية: تعديل الملف بتوجيه علي، وإعداد مسودة المسير وإرسالها للمراجعة، ومسودة إصدار قواعد الرواتب. كل الأمثلة هنا ببيانات وهمية، والمفتاح فيها `$SABQ_HR_SERVICE_TOKEN` (لا تكتب المفتاح الحقيقي في أي أمر يُحفظ في السجل).
 
 ## الأمان
 
@@ -9,7 +9,7 @@
 - الخادم يحفظ بصمة SHA-256 فقط في `HR_SERVICE_API_KEY_HASHES` (أكثر من بصمة مفصولة بفواصل للتدوير)، وتُقارن بزمن ثابت.
 - النطاقات في `HR_SERVICE_API_KEY_SCOPES`. بدونها يتعطل المفتاح (`401 API_KEY_DISABLED`)، ويرفض الخادم الإقلاع إذا وُجدت البصمات بلا نطاقات أو خارج الأوضاع الخاصة.
 - المفتاح يعمل بصفة **حساب خدمة ثابت** اسمه «محاسب سبق» (`svc-sabq-accountant`، الدور `service`)، لا بصفة موظف. لا يقبله أي مسار من مسارات المتصفح (`/api/bootstrap` و`/api/admin/*` و`/api/session` …)، كلها `403 API_KEY_SCOPE`.
-- `GET` و`HEAD` على `/api/health` و`/api/service/hr/*`، وثلاثة مسارات كتابة فقط: `PATCH /api/service/hr/employees/:id` و`POST /api/service/hr/payroll` و`POST /api/service/hr/payroll/:id/actions`. أي طريقة أو مسار غيرها يُرفض بـ `403 API_KEY_SCOPE`.
+- `GET` و`HEAD` على `/api/health` و`/api/service/hr/*`، ومسارات الكتابة: `PATCH /api/service/hr/employees/:id` و`POST /api/service/hr/payroll` و`POST /api/service/hr/payroll/:id/actions` و`POST /api/service/hr/policies` و`POST /api/service/hr/policies/:id/actions` (الأخير يُرفض دائمًا). أي طريقة أو مسار غيرها يُرفض بـ `403 API_KEY_SCOPE`.
 - الكتابة بصيغة JSON (`Content-Type: application/json`، وإلا `415 JSON_REQUIRED`) ومعها `Idempotency-Key` إلزاميًا. لا تحتاج `Origin` لأنها ليست طلب متصفح.
 - 20 محاولة مفتاح خاطئة خلال 15 دقيقة (مشتركة مع مفتاح المالية) تعطي `429 API_KEY_LOCKED`.
 
@@ -26,10 +26,11 @@
 | `hr.employees.write` | تعديل حقول الملف (ومنها مكونات الراتب) بسبب وتاريخ سريان ورقم نسخة — المرحلة الثانية |
 | `hr.payroll.write` | إنشاء مسودة المسير الأساسي لشهر — المرحلة الثانية |
 | `hr.payroll.submit` | إرسال مسودة أعدّها المفتاح نفسه للمراجعة (`draft` ← `pending_finance`) — المرحلة الثانية |
+| `hr.policy.draft` | إنشاء مسودة إصدار قواعد رواتب (`key: payroll`) وقراءتها — بلا اعتماد |
 
 `hr.leave.write` معرّف ولم يُفعّل بعد؛ يرفض الخادم الإقلاع إن ضُبط.
 
-**لا يُمنح أبدًا لمفتاح:** `hr.payroll.approve` و`hr.payroll.close`. اعتماد المسير وإغلاقه يبقى لعلي (المعتمد البشري)، والخادم يرفض الإقلاع إن ضُبط أحدهما. مسار الإجراءات يرد `403 PAYROLL_ACTION_FORBIDDEN` على `approve` و`close` و`review` و`reject` مهما كانت النطاقات، وطبقة المسير نفسها ترفض أي إجراء غير `submit` للدور `service`.
+**لا يُمنح أبدًا لمفتاح:** `hr.payroll.approve` و`hr.payroll.close` و`hr.policy.approve` و`hr.policy.activate` و`hr.policy.retire`. اعتماد المسير وإغلاقه، واعتماد القواعد أو إيقافها، يبقى لعلي (المعتمد أو مالك النظام)، والخادم يرفض الإقلاع إن ضُبط أحدها. مسار إجراءات المسير يرد `403 PAYROLL_ACTION_FORBIDDEN` على `approve` و`close` و`review` و`reject` مهما كانت النطاقات. مسار إجراءات القواعد يرد `403 POLICY_ACTION_FORBIDDEN` على أي إجراء.
 
 ## التدقيق
 
@@ -47,6 +48,7 @@
 
 - تعديل الملف: حدث `field_updated` لكل حقل تغيّر (اسم الحقل وهل هو حساس، بلا قيمة)، وحدث `profile_updated` فيه `actorName` و`actorKind` و`keyId` وأسماء الحقول وتاريخ السريان، والسبب مشفّرًا. وسجل الحقل في `employee_profile_history` (القيمة القديمة والجديدة والسبب مشفّرة) باسم «محاسب سبق».
 - المسير: `service_payroll_draft_created` و`service_payroll_submitted` (`resource_type = payroll_run`)، إضافة إلى `payroll_events` (`created` و`submit`) الذي يظهر في الخط الزمني للمسير باسم «محاسب سبق».
+- قواعد الرواتب: `service_policy_draft_created` (`resource_type = policy`) بمعرّف الإصدار وتاريخي السريان فقط، بلا قيم أو نسب.
 
 ## المسارات
 
@@ -149,6 +151,18 @@ curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "Idempotency-K
 
 `draft` ← `pending_finance`، لمسودة أعدّها المفتاح نفسه فقط (`403 transition_forbidden` لمسودة أعدّها شخص). `version` غير مطابق: `409 version_conflict`. بعدها المراجعة للمالية والاعتماد (الذي يغلق المسير) للمعتمد، من الواجهة. `approve` و`close` و`review` و`reject` بالمفتاح: `403 PAYROLL_ACTION_FORBIDDEN` دائمًا.
 
+### مسودة إصدار قواعد الرواتب — `hr.policy.draft`
+
+```bash
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "Idempotency-Key: $(uuidgen)" \
+  "$BASE/api/service/hr/policies" -d @draft-payload.json
+
+curl -s -H "$AUTH" "$BASE/api/service/hr/policies"
+curl -s -H "$AUTH" "$BASE/api/service/hr/policies/POLICY_ID"
+```
+
+ينشئ مسودة إصدار `key: payroll` بنفس تحقق صفحة المسير (`currency: SAR` و`calculation: profile-components` وقسم `gosi` صالح). الحالة `draft` و`created_by` هو `svc-sabq-accountant`. الاعتماد من صفحة السياسات (`/settings/policies`) للحساب المعتمد أو مالك النظام، بشرط ألا يكون هو من أنشأ المسودة. المسير لا يُعد قبل الاعتماد (`400 policy_unavailable`). `POST /policies/:id/actions` بالمفتاح: `403 POLICY_ACTION_FORBIDDEN` دائمًا.
+
 ## التصدير (PDF وCSV وXLSX والتنزيل)
 
 كل تصدير في التطبيق له مسار للمفتاح، بنفس المولّد أو قالب الطباعة الذي تستخدمه الواجهة (لا قوالب مستقلة). ملفات PDF يرسمها Chromium في الخادم من مكوّن React نفسه وورقة الأنماط نفسها التي تطبعها الواجهة بـ`window.print`، والرد يحمل `x-pdf-renderer: chromium`، وبلا Chromium يرد `503 PDF_RENDERER_UNAVAILABLE`. كل تصدير يكتب حدثًا في `administration_events` (`resource_type = service_access`) باسم «محاسب سبق» بأسماء الأقسام والحقول وعدد الصفوف فقط، بلا قيم. كل الردود `cache-control: private, no-store`.
@@ -218,7 +232,7 @@ HR_SERVICE_API_KEY_SCOPES=hr.employees.read,hr.compensation.read,hr.sensitive.re
 لتفعيل المرحلة الثانية (بعد الدمج وبموافقة علي) أضف نطاقات الكتابة إلى القيمة نفسها، دون تغيير البصمة أو المفتاح:
 
 ```
-HR_SERVICE_API_KEY_SCOPES=hr.employees.read,hr.compensation.read,hr.sensitive.read,hr.leave.read,hr.payroll.read,hr.employees.write,hr.payroll.write,hr.payroll.submit
+HR_SERVICE_API_KEY_SCOPES=hr.employees.read,hr.compensation.read,hr.sensitive.read,hr.leave.read,hr.payroll.read,hr.employees.write,hr.payroll.write,hr.payroll.submit,hr.policy.draft
 ```
 
 لسحب الكتابة فقط: أعد القيمة إلى نطاقات القراءة وأعد النشر.

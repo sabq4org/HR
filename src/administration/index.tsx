@@ -45,6 +45,7 @@ import {
   formDefinitions,
   formByKind,
 } from '../../shared/catalog';
+import { policyActionBody } from '../../shared/policy-actions';
 import './administration.css';
 
 const key = () => crypto.randomUUID();
@@ -1931,7 +1932,7 @@ export function PoliciesPage() {
     try {
       const r = await api<{ policy: PolicyRecord }>(
         `/admin/policies/${confirm.policy.id}/actions`,
-        json('POST', { action: confirm.action, reason: actionReason }),
+        json('POST', policyActionBody(confirm.policy, confirm.action, actionReason)),
       );
       setValue((policies || []).map((x) => (x.id === confirm.policy.id ? r.policy : x)));
       notify(
