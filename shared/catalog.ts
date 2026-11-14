@@ -130,6 +130,28 @@ export const employeeFields: FormField[] = [
   field('housingAllowance', 'بدل السكن', 'money', { group: 'المالية', ...financial, min: 0 }),
   field('transportAllowance', 'بدل النقل', 'money', { group: 'المالية', ...financial, min: 0 }),
   field('otherAllowance', 'بدلات ثابتة أخرى', 'money', { group: 'المالية', ...financial, min: 0 }),
+  field('payrollEmploymentType', 'نوع الارتباط في المسير', 'select', {
+    group: 'المالية',
+    ...financial,
+    hint: 'الرسمي يخضع لنظام التأمينات ويُحسب له التأمين؛ المتعاون يستلم مبلغًا مقطوعًا بلا تأمينات.',
+    options: options([
+      ['staff', 'موظف رسمي خاضع للتأمينات'],
+      ['contractor', 'متعاون بمبلغ مقطوع'],
+    ]),
+  }),
+  field('contractorMonthlyAmount', 'المبلغ الشهري المقطوع للمتعاون', 'money', {
+    group: 'المالية',
+    ...financial,
+    min: 0,
+  }),
+  field('payrollPaymentMethod', 'طريقة صرف الراتب', 'select', {
+    group: 'المالية',
+    ...financial,
+    options: options([
+      ['direct', 'الدفع المباشر'],
+      ['wps', 'حماية الأجور'],
+    ]),
+  }),
   field('salaryEffectiveDate', 'تاريخ سريان الراتب المسجل', 'date', {
     group: 'المالية',
     ...financial,
@@ -198,6 +220,16 @@ export const employeeFields: FormField[] = [
     ...financial,
   }),
   field('insuranceNumber', 'رقم اشتراك التأمينات', 'text', { group: 'التأمينات', ...financial }),
+  field('insuranceNationalityGroup', 'فئة الجنسية في التأمينات', 'select', {
+    group: 'التأمينات',
+    ...financial,
+    hint: 'إن تُركت فارغة تُستنتج من حقل الجنسية وتظهر في المسير للمراجعة.',
+    options: options([
+      ['saudi', 'سعودي'],
+      ['non_saudi', 'غير سعودي'],
+      ['gcc', 'مواطن خليجي (يُعامل يدويًا)'],
+    ]),
+  }),
   field('insuranceCategory', 'فئة التأمينات', 'select', {
     group: 'التأمينات',
     ...financial,

@@ -1,8 +1,20 @@
 import { money, PayslipPaper } from './PayslipPaper';
+import { PayrollRegisterPaper, PayrollRegisterView } from './PayrollRegister';
+import { PayrollPolicyForm } from './PayrollPolicyForm';
+import { GOSI_CATEGORIES, GOSI_CATEGORY_LABEL } from '../../shared/gosi';
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Check, CircleDollarSign, Download, FileText, RefreshCw, Send } from 'lucide-react';
-import type { PayrollLine, PayrollRun } from '../../shared/administration';
+import {
+  Check,
+  CircleDollarSign,
+  Download,
+  FileSpreadsheet,
+  FileText,
+  Printer,
+  RefreshCw,
+  Send,
+} from 'lucide-react';
+import type { PayrollLine, PayrollPolicyOption, PayrollRun } from '../../shared/administration';
 import './payroll.css';
 
 type Actor = {
@@ -21,7 +33,7 @@ type SourceOption = {
 const label: Record<string, string> = {
   draft: 'مسودة',
   pending_finance: 'بانتظار مراجعة المالية',
-  pending_approver: 'بانتظار اعتماد مستقل',
+  pending_approver: 'بانتظار اعتماد المدير العام',
   closed: 'مغلق',
   rejected: 'مرفوض',
 };
@@ -74,7 +86,59 @@ export function PayrollPage({ actor }: Props) {
     [printEmployeeId, setPrintEmployeeId] = useState(''),
     [paymentState, setPaymentState] = useState<'paid' | 'failed' | 'partial'>('paid'),
     [paidMinor, setPaidMinor] = useState(''),
-    [paymentReference, setPaymentReference] = useState('');
+    [paymentReference, setPaymentReference] = useState(''),
+    [policies, setPolicies] = useState<PayrollPolicyOption[] | null>(null),
+    [policyId, setPolicyId] = useState(''),
+    [exclusions, setExclusions] = useState<{ code: string; label: string; count: number }[]>([]),
+    [notice, setNotice] = useState(''),
+    [printMode, setPrintMode] = useState<'payslip' | 'register'>('payslip');
+  const seesPolicies = ['hr', 'finance', 'approver', 'auditor'].includes(actor.role);
+  const loadPolicies = useCallback(async () => {
+    if (!seesPolicies) return;
+    try {
+      const result = await request<{ policies: PayrollPolicyOption[] }>(
+        `/policies?period=${encodeURIComponent(period)}`,
+      );
+      setPolicies(result.policies);
+      setPolicyId((current) =>
+        result.policies.some((p) => p.id === current) ? current : (result.policies[0]?.id ?? ''),
+      );
+    } catch (e) {
+      setPolicies([]);
+      setError((e as Error).message);
+    }
+  }, [period, seesPolicies]);
+  useEffect(() => {
+    void loadPolicies();
+  }, [loadPolicies]);
+  useEffect(() => {
+    const reset = () => setPrintMode('payslip');
+    window.addEventListener('afterprint', reset);
+    return () => window.removeEventListener('afterprint', reset);
+  }, []);
+  const printRegister = () => {
+    setPrintMode('register');
+    // Let React render the register paper before the print dialog opens.
+    window.setTimeout(() => window.print(), 50);
+  };
+  const exportXlsx = async (run: PayrollRun) => {
+    try {
+      const response = await fetch(`/api/admin/payroll/${run.id}/register.xlsx`);
+      if (!response.ok)
+        throw new Error(
+          (await response.json().catch(() => null))?.error?.message || 'تعذر تصدير المسير.',
+        );
+      const url = URL.createObjectURL(await response.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `payroll-${run.period}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const selectedPolicy = policies?.find((p) => p.id === policyId);
   const load = useCallback(async () => {
     setBusy(true);
     setError('');
@@ -124,14 +188,47 @@ export function PayrollPage({ actor }: Props) {
     setBusy(true);
     setError('');
     try {
-      const result = await request<{ run: PayrollRun; excludedCount?: number }>('', 'POST', {
+      const result = await request<{
+        run: PayrollRun;
+        excludedCount?: number;
+        exclusions?: { code: string; label: string; count: number }[];
+      }>('', 'POST', {
         period: targetPeriod,
-        policyId: 'payroll-policy-demo-v2',
+        ...(correctionOf ? { correctionOf } : { policyId }),
         reason,
-        ...(correctionOf ? { correctionOf } : {}),
       });
       setSelected(result.run);
       setExcludedCount(result.excludedCount ?? 0);
+      setExclusions(result.exclusions ?? []);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const nextPeriod = (value: string) => {
+    const [year, month] = value.split('-').map(Number);
+    return month === 12 ? `${year! + 1}-01` : `${year}-${String(month! + 1).padStart(2, '0')}`;
+  };
+  const copyToNext = async (run: PayrollRun) => {
+    setBusy(true);
+    setError('');
+    const target = nextPeriod(run.period);
+    try {
+      const result = await request<{
+        run: PayrollRun;
+        excludedCount?: number;
+        exclusions?: { code: string; label: string; count: number }[];
+      }>(`/${run.id}/copy`, 'POST', {
+        period: target,
+        reason: reason.trim().length >= 3 ? reason : `نسخ مسير ${run.period} إلى ${target}`,
+      });
+      setSelected(result.run);
+      setPeriod(target);
+      setExcludedCount(result.excludedCount ?? 0);
+      setExclusions(result.exclusions ?? []);
+      setNotice(`أُنشئت مسودة ${target} نسخةً من مسير ${run.period}. عدّل ما يلزم ثم أرسلها للمالية.`);
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -241,7 +338,10 @@ export function PayrollPage({ actor }: Props) {
         <div>
           <span className="payroll-eyebrow">إدارة مالية داخلية</span>
           <h1>مسيرات الرواتب</h1>
-          <p>معاينة اصطناعية مستقلة. لا تمثل احتسابًا نظاميًا أو تحويلًا ماليًا.</p>
+          <p>
+            يُعد المسير من الملف الوظيفي وإصدار قواعد معتمد، ويمر بمراجعة المالية ثم اعتماد المدير
+            العام. لا ينفذ تحويلًا ماليًا.
+          </p>
         </div>
         <button className="payroll-button secondary" onClick={() => void load()} disabled={busy}>
           <RefreshCw size={16} /> تحديث
@@ -252,20 +352,100 @@ export function PayrollPage({ actor }: Props) {
           {error}
         </div>
       )}
-      {excludedCount > 0 && (
-        <div className="payroll-warning" role="status">
-          استُبعد {excludedCount} موظفًا لعدم اكتمال مكونات الراتب الاصطناعية في ملفاتهم.
+      {notice && (
+        <div className="payroll-notice" role="status">
+          {notice}
         </div>
       )}
-      <section className="payroll-policy" aria-label="مصدر القواعد">
-        <CircleDollarSign />
-        <div>
-          <strong>قواعد رواتب تجريبية · الإصدار 2</strong>
-          <span>
-            تُقرأ المكونات من ملفات اصطناعية للعرض فقط؛ لا تمثل احتسابًا نظاميًا أو بيانات حقيقية.
-          </span>
+      {(excludedCount > 0 || exclusions.length > 0) && (
+        <div className="payroll-warning" role="status">
+          {excludedCount > 0
+            ? `لم يدخل ${excludedCount} موظفًا في المسير. أكمل ملفاتهم ثم أضفهم أو أعد إعداد المسودة:`
+            : 'ملاحظات إعداد المسير:'}
+          {exclusions.length > 0 && (
+            <ul>
+              {exclusions.map((item) => (
+                <li key={item.code}>
+                  {item.label}: {item.count}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-      </section>
+      )}
+      {seesPolicies && (
+        <section className="payroll-policy" aria-label="إصدار قواعد الرواتب">
+          <CircleDollarSign />
+          {policies === null ? (
+            <div>
+              <strong>جارٍ تحميل قواعد الرواتب…</strong>
+            </div>
+          ) : selectedPolicy ? (
+            <div>
+              <strong>
+                {selectedPolicy.name} · الإصدار {selectedPolicy.version}
+              </strong>
+              <span>
+                يسري من {selectedPolicy.effectiveFrom}
+                {selectedPolicy.effectiveTo ? ` حتى ${selectedPolicy.effectiveTo}` : ''} · المصدر:{' '}
+                {selectedPolicy.source}
+              </span>
+              {selectedPolicy.gosiInvalid ? (
+                <span className="payroll-error-text">
+                  قسم التأمينات في هذا الإصدار غير صالح؛ لا يُعد به مسير.
+                </span>
+              ) : selectedPolicy.gosi ? (
+                <ul className="policy-rate-list">
+                  {GOSI_CATEGORIES.map((key) => (
+                    <li key={key}>
+                      {GOSI_CATEGORY_LABEL[key]}: الموظف{' '}
+                      {(selectedPolicy.gosi!.categories[key].employeeBps / 100).toFixed(2)}% · صاحب
+                      العمل {(selectedPolicy.gosi!.categories[key].employerBps / 100).toFixed(2)}%
+                    </li>
+                  ))}
+                  <li>
+                    الأجر الخاضع:{' '}
+                    {selectedPolicy.gosi.wageComponents.includes('housingAllowance')
+                      ? 'الأساسي + السكن'
+                      : 'الأساسي'}{' '}
+                    بحد أعلى {(selectedPolicy.gosi.maxWageMinor / 100).toLocaleString('en-US')} ريال
+                  </li>
+                </ul>
+              ) : (
+                <span>هذا الإصدار بلا قسم تأمينات؛ لا يُحسم تأمين في المسير.</span>
+              )}
+              {policies.length > 1 && actor.role === 'hr' && (
+                <label>
+                  الإصدار المستخدم
+                  <select value={policyId} onChange={(e) => setPolicyId(e.target.value)}>
+                    {policies.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} · الإصدار {p.version}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          ) : (
+            <div>
+              <strong>لا يوجد إصدار قواعد رواتب معتمد يسري على {period}</strong>
+              <span>
+                تنشئ الموارد البشرية الإصدار بنسب التأمينات من مصدرها الرسمي، ثم يعتمده المعتمد
+                المستقل من صفحة السياسات. لا يُعد مسير قبل ذلك.
+              </span>
+            </div>
+          )}
+        </section>
+      )}
+      {actor.role === 'hr' && (
+        <PayrollPolicyForm
+          onCreated={(message) => {
+            setNotice(message);
+            void loadPolicies();
+          }}
+        />
+      )}
       {actor.role === 'hr' && (
         <section className="payroll-create">
           <h2>إعداد مسير جديد</h2>
@@ -278,7 +458,7 @@ export function PayrollPage({ actor }: Props) {
           <button
             className="payroll-button"
             onClick={() => void create()}
-            disabled={busy || reason.trim().length < 3}
+            disabled={busy || reason.trim().length < 3 || !policyId}
           >
             <FileText size={16} /> إنشاء مسودة
           </button>
@@ -315,15 +495,25 @@ export function PayrollPage({ actor }: Props) {
                   <span className={`payroll-state ${selected.state}`}>{label[selected.state]}</span>
                 </div>
                 <div>
-                  {selected.state === 'closed' &&
-                    ['hr', 'finance', 'approver', 'auditor'].includes(actor.role) && (
+                  {['hr', 'finance', 'approver', 'auditor'].includes(actor.role) && (
+                    <>
+                      <button className="payroll-button secondary" onClick={printRegister}>
+                        <Printer size={16} /> طباعة المسير
+                      </button>
+                      <button
+                        className="payroll-button secondary"
+                        onClick={() => void exportXlsx(selected)}
+                      >
+                        <FileSpreadsheet size={16} /> Excel
+                      </button>
                       <button
                         className="payroll-button secondary"
                         onClick={() => void exportCsv(selected)}
                       >
                         <Download size={16} /> CSV
                       </button>
-                    )}
+                    </>
+                  )}
                   {selected.canEdit && !editing && (
                     <button
                       className="payroll-button secondary"
@@ -349,6 +539,23 @@ export function PayrollPage({ actor }: Props) {
                       تعديل الأسطر
                     </button>
                   )}
+                  {actor.role === 'hr' &&
+                    !selected.correctionOf &&
+                    selected.state !== 'rejected' &&
+                    !runs.some(
+                      (run) =>
+                        run.period === nextPeriod(selected.period) &&
+                        !run.correctionOf &&
+                        run.state !== 'rejected',
+                    ) && (
+                      <button
+                        className="payroll-button secondary"
+                        onClick={() => void copyToNext(selected)}
+                        disabled={busy}
+                      >
+                        نسخ إلى {nextPeriod(selected.period)}
+                      </button>
+                    )}
                   {actor.role === 'hr' && selected.state === 'closed' && (
                     <button
                       className="payroll-button secondary"
@@ -364,18 +571,19 @@ export function PayrollPage({ actor }: Props) {
                 </div>
               </div>
               <p className="payroll-reason">{selected.reason}</p>
-              <div className="payroll-summary">
-                <span>
-                  {selected.correctionOf ? 'صافي فرق التصحيح' : 'الإجمالي المستحق'}{' '}
-                  <b>{money(selected.totals.netMinor)}</b>
-                </span>
-                <span>
-                  الإيرادات <b>{money(selected.totals.earningsMinor)}</b>
-                </span>
-                <span>
-                  الاستقطاعات <b>{money(selected.totals.deductionsMinor)}</b>
-                </span>
-              </div>
+              {selected.correctionOf && (
+                <div className="payroll-summary">
+                  <span>
+                    صافي فرق التصحيح <b>{money(selected.totals.netMinor)}</b>
+                  </span>
+                  <span>
+                    فرق الاستحقاقات <b>{money(selected.totals.earningsMinor)}</b>
+                  </span>
+                  <span>
+                    فرق الخصومات <b>{money(selected.totals.deductionsMinor)}</b>
+                  </span>
+                </div>
+              )}
               {selected.payments.length > 0 && (
                 <section className="payroll-payments" aria-label="حالات الدفع المسجلة">
                   <h3>حالة الدفع المسجلة</h3>
@@ -395,211 +603,215 @@ export function PayrollPage({ actor }: Props) {
                   ))}
                 </section>
               )}
-              <div
-                className="payroll-table-wrap"
-                role="region"
-                aria-label="جدول مكونات المسير"
-                tabIndex={0}
-              >
-                <table>
-                  <thead>
-                    <tr>
-                      <th>الموظف</th>
-                      <th>المكوّن</th>
-                      <th>النوع</th>
-                      <th>المبلغ</th>
-                      <th>مصدر الطلب</th>
-                      <th>المصدر</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(editing ? draftLines : selected.lines).map((line, index) => (
-                      <tr key={line.id}>
-                        <td>
-                          {editing ? (
-                            <select
-                              aria-label="الموظف"
-                              value={line.employeeId}
-                              onChange={(e) =>
-                                setDraftLines((lines) =>
-                                  lines.map((x, i) =>
-                                    i === index
-                                      ? {
-                                          ...x,
-                                          employeeId: e.target.value,
-                                          sourceRequestId: null,
-                                          employeeName:
-                                            selected.lines.find(
-                                              (person) => person.employeeId === e.target.value,
-                                            )?.employeeName || x.employeeName,
-                                        }
-                                      : x,
-                                  ),
-                                )
-                              }
-                            >
-                              {[
-                                ...new Map(
-                                  [...selected.lines, ...draftLines].map((person) => [
-                                    person.employeeId,
-                                    person,
-                                  ]),
-                                ).values(),
-                              ].map((person) => (
-                                <option key={person.employeeId} value={person.employeeId}>
-                                  {person.employeeName}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            line.employeeName
-                          )}
-                        </td>
-                        <td>
-                          {editing ? (
-                            <input
-                              aria-label="اسم المكوّن"
-                              value={line.component}
-                              onChange={(e) =>
-                                setDraftLines((lines) =>
-                                  lines.map((x, i) =>
-                                    i === index ? { ...x, component: e.target.value } : x,
-                                  ),
-                                )
-                              }
-                            />
-                          ) : (
-                            line.component
-                          )}
-                        </td>
-                        <td>
-                          {editing ? (
-                            <select
-                              aria-label="نوع المكوّن"
-                              value={line.kind}
-                              onChange={(e) =>
-                                setDraftLines((lines) =>
-                                  lines.map((x, i) =>
-                                    i === index
-                                      ? { ...x, kind: e.target.value as PayrollLine['kind'] }
-                                      : x,
-                                  ),
-                                )
-                              }
-                            >
-                              <option value="earning">استحقاق</option>
-                              <option value="deduction">استقطاع</option>
-                            </select>
-                          ) : line.kind === 'earning' ? (
-                            'استحقاق'
-                          ) : (
-                            'استقطاع'
-                          )}
-                        </td>
-                        <td>
-                          {editing ? (
-                            <input
-                              aria-label="المبلغ بالريال"
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={draftAmounts[line.id] ?? (line.amountMinor / 100).toFixed(2)}
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                setDraftAmounts((current) => ({ ...current, [line.id]: value }));
-                                const amount = parseRiyal(value);
-                                if (amount !== null)
+              {!editing && <PayrollRegisterView run={selected} />}
+              <details className="payroll-lines" open={editing}>
+                <summary>الأسطر التفصيلية ومصادرها</summary>
+                <div
+                  className="payroll-table-wrap"
+                  role="region"
+                  aria-label="جدول مكونات المسير"
+                  tabIndex={0}
+                >
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>الموظف</th>
+                        <th>المكوّن</th>
+                        <th>النوع</th>
+                        <th>المبلغ</th>
+                        <th>مصدر الطلب</th>
+                        <th>المصدر</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(editing ? draftLines : selected.lines).map((line, index) => (
+                        <tr key={line.id}>
+                          <td>
+                            {editing ? (
+                              <select
+                                aria-label="الموظف"
+                                value={line.employeeId}
+                                onChange={(e) =>
                                   setDraftLines((lines) =>
                                     lines.map((x, i) =>
-                                      i === index ? { ...x, amountMinor: amount } : x,
-                                    ),
-                                  );
-                              }}
-                            />
-                          ) : (
-                            money(line.amountMinor)
-                          )}
-                        </td>
-                        <td>
-                          {editing ? (
-                            <select
-                              aria-label="مصدر الطلب المعتمد"
-                              value={line.sourceRequestId || ''}
-                              onChange={(e) => {
-                                const source = sourceOptions.find(
-                                  (option) => option.id === e.target.value,
-                                );
-                                if (source)
-                                  setDraftAmounts((current) => ({
-                                    ...current,
-                                    [line.id]: (source.amountMinor / 100).toFixed(2),
-                                  }));
-                                setDraftLines((lines) =>
-                                  lines.map((x, i) =>
-                                    i === index
-                                      ? source
+                                      i === index
                                         ? {
                                             ...x,
-                                            sourceRequestId: source.id,
-                                            component: source.label,
-                                            kind: 'earning',
-                                            amountMinor: source.amountMinor,
-                                            source: source.label,
+                                            employeeId: e.target.value,
+                                            sourceRequestId: null,
+                                            employeeName:
+                                              selected.lines.find(
+                                                (person) => person.employeeId === e.target.value,
+                                              )?.employeeName || x.employeeName,
                                           }
-                                        : { ...x, sourceRequestId: null }
-                                      : x,
-                                  ),
-                                );
-                              }}
-                            >
-                              <option value="">سطر يدوي تجريبي</option>
-                              {sourceOptions
-                                .filter(
-                                  (option) =>
-                                    option.employeeId === line.employeeId &&
-                                    !draftLines.some(
-                                      (candidate, rowIndex) =>
-                                        rowIndex !== index &&
-                                        candidate.sourceRequestId === option.id,
+                                        : x,
                                     ),
-                                )
-                                .map((option) => (
-                                  <option key={option.id} value={option.id}>
-                                    {option.label} · {money(option.amountMinor)}
+                                  )
+                                }
+                              >
+                                {[
+                                  ...new Map(
+                                    [...selected.lines, ...draftLines].map((person) => [
+                                      person.employeeId,
+                                      person,
+                                    ]),
+                                  ).values(),
+                                ].map((person) => (
+                                  <option key={person.employeeId} value={person.employeeId}>
+                                    {person.employeeName}
                                   </option>
                                 ))}
-                            </select>
-                          ) : line.sourceRequestId ? (
-                            <a
-                              href={`/requests/${line.sourceRequestId}`}
-                              className="payroll-source-link"
-                            >
-                              عرض الطلب
-                            </a>
-                          ) : (
-                            '—'
-                          )}
-                        </td>
-                        <td>{line.source}</td>
-                        {editing && (
-                          <td>
-                            <button
-                              type="button"
-                              className="payroll-button secondary"
-                              onClick={() =>
-                                setDraftLines((lines) => lines.filter((_, i) => i !== index))
-                              }
-                              aria-label="حذف السطر"
-                            >
-                              حذف
-                            </button>
+                              </select>
+                            ) : (
+                              line.employeeName
+                            )}
                           </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                          <td>
+                            {editing ? (
+                              <input
+                                aria-label="اسم المكوّن"
+                                value={line.component}
+                                onChange={(e) =>
+                                  setDraftLines((lines) =>
+                                    lines.map((x, i) =>
+                                      i === index ? { ...x, component: e.target.value } : x,
+                                    ),
+                                  )
+                                }
+                              />
+                            ) : (
+                              line.component
+                            )}
+                          </td>
+                          <td>
+                            {editing ? (
+                              <select
+                                aria-label="نوع المكوّن"
+                                value={line.kind}
+                                onChange={(e) =>
+                                  setDraftLines((lines) =>
+                                    lines.map((x, i) =>
+                                      i === index
+                                        ? { ...x, kind: e.target.value as PayrollLine['kind'] }
+                                        : x,
+                                    ),
+                                  )
+                                }
+                              >
+                                <option value="earning">استحقاق</option>
+                                <option value="deduction">استقطاع</option>
+                              </select>
+                            ) : line.kind === 'earning' ? (
+                              'استحقاق'
+                            ) : (
+                              'استقطاع'
+                            )}
+                          </td>
+                          <td>
+                            {editing ? (
+                              <input
+                                aria-label="المبلغ بالريال"
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={draftAmounts[line.id] ?? (line.amountMinor / 100).toFixed(2)}
+                                onChange={(e) => {
+                                  const value = e.target.value;
+                                  setDraftAmounts((current) => ({ ...current, [line.id]: value }));
+                                  const amount = parseRiyal(value);
+                                  if (amount !== null)
+                                    setDraftLines((lines) =>
+                                      lines.map((x, i) =>
+                                        i === index ? { ...x, amountMinor: amount } : x,
+                                      ),
+                                    );
+                                }}
+                              />
+                            ) : (
+                              money(line.amountMinor)
+                            )}
+                          </td>
+                          <td>
+                            {editing ? (
+                              <select
+                                aria-label="مصدر الطلب المعتمد"
+                                value={line.sourceRequestId || ''}
+                                onChange={(e) => {
+                                  const source = sourceOptions.find(
+                                    (option) => option.id === e.target.value,
+                                  );
+                                  if (source)
+                                    setDraftAmounts((current) => ({
+                                      ...current,
+                                      [line.id]: (source.amountMinor / 100).toFixed(2),
+                                    }));
+                                  setDraftLines((lines) =>
+                                    lines.map((x, i) =>
+                                      i === index
+                                        ? source
+                                          ? {
+                                              ...x,
+                                              sourceRequestId: source.id,
+                                              component: source.label,
+                                              kind: 'earning',
+                                              amountMinor: source.amountMinor,
+                                              source: source.label,
+                                            }
+                                          : { ...x, sourceRequestId: null }
+                                        : x,
+                                    ),
+                                  );
+                                }}
+                              >
+                                <option value="">سطر يدوي تجريبي</option>
+                                {sourceOptions
+                                  .filter(
+                                    (option) =>
+                                      option.employeeId === line.employeeId &&
+                                      !draftLines.some(
+                                        (candidate, rowIndex) =>
+                                          rowIndex !== index &&
+                                          candidate.sourceRequestId === option.id,
+                                      ),
+                                  )
+                                  .map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.label} · {money(option.amountMinor)}
+                                    </option>
+                                  ))}
+                              </select>
+                            ) : line.sourceRequestId ? (
+                              <a
+                                href={`/requests/${line.sourceRequestId}`}
+                                className="payroll-source-link"
+                              >
+                                عرض الطلب
+                              </a>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                          <td>{line.source}</td>
+                          {editing && (
+                            <td>
+                              <button
+                                type="button"
+                                className="payroll-button secondary"
+                                onClick={() =>
+                                  setDraftLines((lines) => lines.filter((_, i) => i !== index))
+                                }
+                                aria-label="حذف السطر"
+                              >
+                                حذف
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
               {editing && (
                 <div className="payroll-actions">
                   <button
@@ -631,6 +843,9 @@ export function PayrollPage({ actor }: Props) {
                   >
                     حفظ التعديلات
                   </button>
+                  <small className="payroll-edit-note">
+                    يُعاد حساب «تأمين الموظف» وحصة صاحب العمل تلقائيًا من إصدار القواعد عند الحفظ.
+                  </small>
                   <button className="payroll-button secondary" onClick={() => setEditing(false)}>
                     إلغاء
                   </button>
@@ -646,9 +861,9 @@ export function PayrollPage({ actor }: Props) {
                         : event.action === 'submit'
                           ? 'أُرسلت للمراجعة'
                           : event.action === 'review'
-                            ? 'راجعتها المالية'
+                            ? 'راجعها ووقعها مدير الإدارة المالية'
                             : event.action === 'approve'
-                              ? 'اعتمدها معتمد مستقل'
+                              ? 'اعتمدها ووقعها المدير العام'
                               : event.action === 'reject'
                                 ? 'رُفضت'
                                 : 'عُدلت'}{' '}
@@ -823,7 +1038,8 @@ export function PayrollPage({ actor }: Props) {
           <p>الكشف للمعاينة الاصطناعية فقط، ولا ينشئ استحقاقًا ماليًا.</p>
         </section>
       )}
-      {selected?.state === 'closed' && printableLines.length > 0 && (
+      {selected && printMode === 'register' && <PayrollRegisterPaper run={selected} />}
+      {printMode === 'payslip' && selected?.state === 'closed' && printableLines.length > 0 && (
         <PayslipPaper run={selected} employeeId={printableLines[0]!.employeeId} />
       )}
     </section>

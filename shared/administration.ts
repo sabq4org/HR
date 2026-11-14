@@ -226,10 +226,42 @@ export interface PayrollLine {
 }
 export interface PayrollPayment {
   employeeId: string;
+  /** Pseudonym for auditors (matches the line pseudonym); the register keys rows on it. */
+  employeeKey?: string;
   state: 'pending' | 'paid' | 'failed' | 'partial';
   paidMinor: number;
   reference: string;
   recordedAt: string;
+}
+/** Register snapshot per employee in a run (owner's payroll template). */
+export type PayrollPaymentMethod = 'direct' | 'wps' | 'unspecified';
+export interface PayrollPerson {
+  employeeId: string;
+  employeeName: string;
+  title: string;
+  paymentMethod: PayrollPaymentMethod;
+  /** Informational employer insurance share; never part of the net. */
+  employerContributionMinor: number;
+  /** GOSI category the approved rule applied, or null when the rule has no insurance section. */
+  insuranceCategory: 'saudi_existing' | 'saudi_new' | 'non_saudi' | null;
+  /** True when the category was read from the nationality text, for review. */
+  insuranceCategoryInferred: boolean;
+  insuredWageMinor: number;
+  /** Staff are under GOSI; contractors are paid a lump sum with no insurance. */
+  employmentType: 'staff' | 'contractor';
+}
+export interface PayrollPolicyOption {
+  id: string;
+  name: string;
+  version: number;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  source: string;
+  synthetic: boolean;
+  /** The rule's insurance section; null when it has none. */
+  gosi: import('./gosi').GosiRule | null;
+  /** True when the insurance section exists but is malformed: runs refuse this version. */
+  gosiInvalid: boolean;
 }
 export interface PayrollRun {
   id: string;
@@ -243,6 +275,8 @@ export interface PayrollRun {
   correctionOf: string | null;
   reason: string;
   lines: PayrollLine[];
+  people: PayrollPerson[];
+  policyName: string;
   payments: PayrollPayment[];
   totals: { earningsMinor: number; deductionsMinor: number; netMinor: number };
   createdAt: string;

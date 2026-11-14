@@ -72,7 +72,7 @@ test('payroll real workflow is independently reviewed, scoped to payslip owners,
   await page.goto('/payroll');
   await page.getByRole('button', { name: new RegExp(period) }).click();
   await page.getByRole('button', { name: 'إكمال المراجعة وإرساله للمعتمد', exact: true }).click();
-  await expect(page.locator('.payroll-state')).toContainText('بانتظار اعتماد مستقل');
+  await expect(page.locator('.payroll-state')).toContainText('بانتظار اعتماد المدير العام');
 
   await switchPersona(page, 'عبدالله السبيعي');
   await page.goto('/payroll');
@@ -86,7 +86,7 @@ test('payroll real workflow is independently reviewed, scoped to payslip owners,
   await page.getByRole('link', { name: new RegExp(`مسير ${period}`) }).click();
   await expect(page).toHaveURL(new RegExp(`run=${runId}`));
   await expect(page.getByRole('heading', { name: `مسير ${period}`, exact: true })).toBeVisible();
-  await expect(page.locator('.payroll-table-wrap tbody tr')).toHaveCount(3);
+  await expect(page.locator('.payroll-lines .payroll-table-wrap tbody tr')).toHaveCount(3);
   await expect(
     page.getByRole('cell', { name: 'سارة القحطاني', exact: true }).first(),
   ).toBeVisible();

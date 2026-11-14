@@ -969,7 +969,7 @@ export function registerAdministration(
 
   registerDocumentRoutes(app, { db, requireActor });
   registerAttendanceRoutes(app, { db, requireActor });
-  registerPolicyRoutes(app, { db, requireActor });
+  registerPolicyRoutes(app, { db, requireActor, privateMode });
   registerReportRoutes(app, { db, requireActor });
 }
 
@@ -1673,8 +1673,11 @@ async function attendanceView(_db: AsyncDb, actor: Actor, r: any) {
   };
 }
 
-function registerPolicyRoutes(app: Express, ctx: { db: AsyncDb; requireActor: RequireActor }) {
-  const { db, requireActor } = ctx;
+function registerPolicyRoutes(
+  app: Express,
+  ctx: { db: AsyncDb; requireActor: RequireActor; privateMode?: boolean },
+) {
+  const { db, requireActor, privateMode = false } = ctx;
   routeWithActor(app, 'get', '/api/admin/policies', requireActor, async (_req, res, actor) => {
     if (!['hr', 'approver', 'finance', 'auditor'].includes(actor.role))
       throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية الاطلاع على القواعد.');
@@ -1743,7 +1746,8 @@ function registerPolicyRoutes(app: Express, ctx: { db: AsyncDb; requireActor: Re
             name,
             effectiveFrom,
             effectiveTo,
-            `Synthetic: ${source}`,
+            // Private data: the cited source is stored as written, without the synthetic tag.
+            privateMode ? source : `Synthetic: ${source}`,
             JSON.stringify(values),
             actor.id,
             now,
