@@ -141,6 +141,9 @@ function Login({
   error,
   hosted,
   privateData,
+  privateHosted,
+  needsAccess,
+  onAccess,
 }: {
   personas: DemoPersona[];
   onSelect: (id: string) => void;
@@ -148,7 +151,11 @@ function Login({
   error: string;
   hosted: boolean;
   privateData: boolean;
+  privateHosted: boolean;
+  needsAccess: boolean;
+  onAccess: (password: string) => void;
 }) {
+  const [password, setPassword] = useState('');
   return (
     <main className="login-page">
       <section className="login-story">
@@ -180,17 +187,47 @@ function Login({
         </div>
         <div className="login-content">
           <span className="demo-pill">
-            {privateData ? 'بيانات خاصة · هذا الجهاز فقط' : 'معاينة تفاعلية'}
+            {needsAccess || privateHosted
+              ? 'بيانات خاصة · دخول محمي'
+              : privateData
+                ? 'بيانات خاصة · هذا الجهاز فقط'
+                : 'معاينة تفاعلية'}
           </span>
           <h2>أهـلًا بك في مساحتـك</h2>
           <p>
-            {privateData
-              ? personas.length
-                ? 'اختر حسابك من الحسابات الممنوحة صلاحية.'
-                : 'لا توجد حسابات ممنوحة بعد. امنح صلاحية الموارد البشرية لحسابك عبر أداة الصلاحيات ثم أعد التحميل.'
-              : 'اختر حسابًا لتستكشف التجربة من زاوية مختلفة.'}
+            {needsAccess
+              ? 'أدخل كلمة مرور الدخول التي حددها مسؤول النظام.'
+              : privateData
+                ? personas.length
+                  ? 'اختر حسابك من الحسابات الممنوحة صلاحية.'
+                  : 'لا توجد حسابات ممنوحة بعد. امنح صلاحية الموارد البشرية لحسابك عبر أداة الصلاحيات ثم أعد التحميل.'
+                : 'اختر حسابًا لتستكشف التجربة من زاوية مختلفة.'}
           </p>
-          <PersonaPicker personas={personas} onSelect={onSelect} busy={busy} />
+          {needsAccess ? (
+            <form
+              className="access-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (password) onAccess(password);
+              }}
+            >
+              <label htmlFor="access-password">كلمة المرور</label>
+              <input
+                id="access-password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                disabled={busy}
+                required
+              />
+              <button className="button primary" type="submit" disabled={busy || !password}>
+                دخول
+              </button>
+            </form>
+          ) : (
+            <PersonaPicker personas={personas} onSelect={onSelect} busy={busy} />
+          )}
           {error && (
             <div className="form-error" role="alert">
               {error}
@@ -199,7 +236,13 @@ function Login({
           <div className="login-privacy">
             <ShieldCheck size={19} />
             <p>
-              {privateData ? (
+              {needsAccess || privateHosted ? (
+                <>
+                  بيانات موظفين حقيقية محفوظة ومشفرة.
+                  <br />
+                  لا تشارك كلمة المرور، وأغلق الجلسة على الأجهزة المشتركة.
+                </>
+              ) : privateData ? (
                 <>
                   بيانات موظفين حقيقية محفوظة ومشفرة على هذا الجهاز فقط.
                   <br />
@@ -233,6 +276,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [hosted, setHosted] = useState(false);
   const [privateData, setPrivateData] = useState(false);
+  const [privateHosted, setPrivateHosted] = useState(false);
+  const [needsAccess, setNeedsAccess] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [dialog, setDialog] = useState<
@@ -270,19 +315,34 @@ export default function App() {
       const session = await api<{
         me: Employee | null;
         personas: DemoPersona[];
-        mode?: 'synthetic-local' | 'synthetic-hosted' | 'private-local';
+        mode?: 'synthetic-local' | 'synthetic-hosted' | 'private-local' | 'private-hosted';
       }>('/session');
+      setNeedsAccess(false);
       setPersonas(session.personas);
       setHosted(session.mode === 'synthetic-hosted');
-      setPrivateData(session.mode === 'private-local');
+      setPrivateData(session.mode === 'private-local' || session.mode === 'private-hosted');
+      setPrivateHosted(session.mode === 'private-hosted');
       setData(null);
       if (session.me) await refresh();
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as { code?: string }).code === 'ACCESS_REQUIRED') setNeedsAccess(true);
+      else setError((e as Error).message);
     } finally {
       setLoading(false);
     }
   }, [refresh]);
+  const unlock = async (password: string) => {
+    setBusy(true);
+    setError('');
+    try {
+      await api('/access', { method: 'POST', body: JSON.stringify({ password }) });
+      await initialize();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   useEffect(() => {
     void initialize();
     return () => {
@@ -366,7 +426,7 @@ export default function App() {
       </main>
     );
   if (!data) {
-    if (error && !personas.length)
+    if (error && !personas.length && !needsAccess)
       return (
         <main className="boot-state">
           <Brand />
@@ -385,6 +445,9 @@ export default function App() {
         error={error}
         hosted={hosted}
         privateData={privateData}
+        privateHosted={privateHosted}
+        needsAccess={needsAccess}
+        onAccess={(password) => void unlock(password)}
       />
     );
   }
@@ -502,7 +565,11 @@ export default function App() {
             </button>
             <div className="demo-caption">
               <i />
-              {privateData ? 'بيانات خاصة · هذا الجهاز فقط' : 'بيئة تجريبية · بيانات وهمية'}
+              {privateHosted
+                ? 'بيانات خاصة · دخول محمي'
+                : privateData
+                  ? 'بيانات خاصة · هذا الجهاز فقط'
+                  : 'بيئة تجريبية · بيانات وهمية'}
             </div>
           </div>
         </aside>
@@ -599,11 +666,13 @@ export default function App() {
           <footer className="app-footer">
             <span>سبق · مساحة الفريق</span>
             <span>
-              {privateData
-                ? 'بيانات خاصة · على هذا الجهاز فقط'
-                : hosted
-                  ? 'تجربتك مستقلة · بيانات وهمية وتغييرات مؤقتة'
-                  : 'بيانات تجريبية فقط'}
+              {privateHosted
+                ? 'بيانات خاصة · دخول محمي بكلمة مرور'
+                : privateData
+                  ? 'بيانات خاصة · على هذا الجهاز فقط'
+                  : hosted
+                    ? 'تجربتك مستقلة · بيانات وهمية وتغييرات مؤقتة'
+                    : 'بيانات تجريبية فقط'}
             </span>
           </footer>
         </div>

@@ -62,7 +62,10 @@ export async function api<T>(url: string, options?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.error?.message || 'تعذّر إكمال العملية. حاول مرة أخرى.');
+    throw Object.assign(
+      new Error(payload?.error?.message || 'تعذّر إكمال العملية. حاول مرة أخرى.'),
+      { code: payload?.error?.code as string | undefined, status: response.status },
+    );
   }
   if (response.status === 204) return undefined as T;
   if (!response.headers.get('content-type')?.includes('application/json')) {

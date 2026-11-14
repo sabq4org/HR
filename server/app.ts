@@ -1,5 +1,5 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Employee, LeaveRequest, Role } from '../shared/contracts.js';
 import {
   createDatabase,
@@ -270,7 +270,7 @@ async function demoRules(
 }
 
 function dataModeLabel(publicOrigin: string | undefined, privateData: boolean) {
-  if (privateData) return 'private-local' as const;
+  if (privateData) return publicOrigin ? ('private-hosted' as const) : ('private-local' as const);
   return publicOrigin ? ('synthetic-hosted' as const) : ('synthetic-local' as const);
 }
 
@@ -280,14 +280,19 @@ export function createApp(
     sessionTtlMs?: number;
     publicOrigin?: string;
     dataMode?: 'synthetic' | 'private';
+    /** Shared access password (private hosted mode). Required for private data on a public origin. */
+    accessPassword?: string;
   } = {},
 ) {
   const db = database;
   // 'private' = real data on the owner's own machine (loopback only, no synthetic seed).
   // Sign-in lists only employees who were explicitly granted an access role.
   const privateData = options.dataMode === 'private';
-  if (privateData && options.publicOrigin)
-    throw new Error('Private data mode is local-only and cannot use a public origin.');
+  const accessPassword = options.accessPassword;
+  if (accessPassword !== undefined && accessPassword.length < 12)
+    throw new Error('The access password must be at least 12 characters.');
+  if (privateData && options.publicOrigin && !accessPassword)
+    throw new Error('Private data on a public origin requires an access password.');
   const mode = dataModeLabel(options.publicOrigin, privateData);
   const app = express();
   const sessions = new Map<string, Session>();
@@ -355,6 +360,76 @@ export function createApp(
   );
   app.use('/api/admin/imports/employees/commit', express.json({ limit: '512kb' }));
   app.use(express.json({ limit: '64kb' }));
+
+  // Access gate (private hosted mode): one password, set as a deployment secret, must be
+  // entered before any API other than health and the gate itself answers. Interim until SSO.
+  const accessCookie = pinnedOrigin ? '__Host-sabq_hr_access' : 'sabq_hr_access';
+  const accessTtlMs = 12 * 60 * 60 * 1000;
+  const accessTokens = new Map<string, number>();
+  const failedAttempts: number[] = [];
+  const digest = (value: string) => createHash('sha256').update(value, 'utf8').digest();
+  const accessToken = (req: Request) =>
+    (req.headers.cookie ?? '')
+      .split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${accessCookie}=`))
+      ?.slice(accessCookie.length + 1);
+  const hasAccess = (req: Request) => {
+    if (!accessPassword) return true;
+    const token = accessToken(req);
+    const expires = token ? accessTokens.get(token) : undefined;
+    if (!token || !expires) return false;
+    if (expires < Date.now()) {
+      accessTokens.delete(token);
+      return false;
+    }
+    return true;
+  };
+  app.get('/api/access', (req, res) =>
+    res.json({ required: !!accessPassword, granted: hasAccess(req) }),
+  );
+  app.post('/api/access', (req, res) => {
+    if (!accessPassword) return res.json({ required: false, granted: true });
+    const now = Date.now();
+    while (failedAttempts.length && failedAttempts[0] < now - 15 * 60 * 1000)
+      failedAttempts.shift();
+    if (failedAttempts.length >= 10)
+      return jsonError(
+        res,
+        fault(429, 'ACCESS_LOCKED', 'محاولات كثيرة خاطئة. انتظر 15 دقيقة ثم أعد المحاولة.'),
+      );
+    const given = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!given || given.length > 256 || !timingSafeEqual(digest(given), digest(accessPassword))) {
+      failedAttempts.push(now);
+      return jsonError(res, fault(401, 'ACCESS_DENIED', 'كلمة المرور غير صحيحة.'));
+    }
+    for (const [token, expires] of accessTokens) if (expires < now) accessTokens.delete(token);
+    const token = randomBytes(32).toString('base64url');
+    accessTokens.set(token, now + accessTtlMs);
+    res.cookie(accessCookie, token, {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: !!pinnedOrigin,
+      path: '/',
+      maxAge: accessTtlMs,
+    });
+    res.json({ required: true, granted: true });
+  });
+  app.delete('/api/access', (req, res) => {
+    const token = accessToken(req);
+    if (token) accessTokens.delete(token);
+    res.clearCookie(accessCookie, {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: !!pinnedOrigin,
+      path: '/',
+    });
+    res.status(204).end();
+  });
+  app.use('/api', (req, res, next) => {
+    if (req.path === '/health' || hasAccess(req)) return next();
+    jsonError(res, fault(401, 'ACCESS_REQUIRED', 'أدخل كلمة مرور الدخول أولًا.'));
+  });
   const demoIds = ['emp-noura', 'emp-omar', 'emp-sara', 'emp-reem', 'emp-abdullah', 'emp-hind'];
   const personaRows = async () =>
     privateData

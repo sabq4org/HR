@@ -237,7 +237,7 @@ class PgTx implements AsyncDb {
   }
 }
 
-const SCHEMA_RE = /^hr_(?:development|test_[a-z0-9_]+|preview_[a-f0-9]{16,64})$/;
+const SCHEMA_RE = /^hr_(?:development|private|test_[a-z0-9_]+|preview_[a-f0-9]{16,64})$/;
 function quoteSchema(schema: string): string {
   if (!SCHEMA_RE.test(schema) || schema === 'hr_public')
     throw new Error('Refusing an unsafe or public PostgreSQL schema name.');
@@ -432,7 +432,11 @@ export async function createDatabase(
   }
 }
 
-export async function createPostgresDatabase(url: string, schema = 'hr_development'): Promise<Db> {
+export async function createPostgresDatabase(
+  url: string,
+  schema = 'hr_development',
+  options: { seed?: boolean } = {},
+): Promise<Db> {
   if (!url) throw new Error('A PostgreSQL connection string is required.');
   const quoted = quoteSchema(schema);
   const dropSchema = schema.startsWith('hr_preview_');
@@ -453,6 +457,15 @@ export async function createPostgresDatabase(url: string, schema = 'hr_developme
   const db = new PostgresAdapter(url, shared, schema, dropSchema);
   try {
     await applyPostgresMigrations(shared.pool, schema);
+    // Private (real-data) schemas never receive synthetic personas or fixtures.
+    if (options.seed === false) {
+      const synthetic = await db.read<{ id: string }>(
+        "SELECT id FROM employees WHERE id IN ('emp-noura','emp-omar','emp-sara') LIMIT 1",
+      );
+      if (synthetic.length)
+        throw new Error('Refusing to open a synthetic demo schema as a private data schema.');
+      return db;
+    }
     await seed(db);
     await seedAdministrationProfiles(db);
     return db;

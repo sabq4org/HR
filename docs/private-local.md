@@ -1,4 +1,37 @@
-# تشغيل سبق HR ببياناتك الحقيقية على جهازك فقط
+# تشغيل سبق HR ببياناتك الحقيقية
+
+طريقتان: على Railway مع Neon بكلمة مرور (القسم الأول)، أو على جهازك فقط (القسم الثاني). القرار في [قرار 006](decisions/006-private-hosted-password.md).
+
+## أولًا: على Railway مع Neon بكلمة مرور
+
+لا تغيّر خدمة المعاينة العامة الحالية. أنشئ خدمة جديدة في المشروع نفسه:
+
+1. **New → GitHub Repo → sabq4org/HR.** اختر الفرع `claude/project-thread-e4jmmy` إلى أن يُدمج.
+2. في **Settings → Config-as-code**، اجعل مسار الملف `railway.private.json`.
+3. في **Settings → Networking**، أنشئ نطاقًا للخدمة.
+4. في **Variables** أضف:
+   - `DATABASE_URL`: رابط Neon، أو مرجع متغيره المربوط بالمشروع.
+   - `HR_PUBLIC_ORIGIN`: النطاق الذي أنشأته، مثل `https://hr-private-xxxx.up.railway.app`.
+   - `HR_ACCESS_PASSWORD`: كلمة مرور قوية، 16 حرفًا أو أكثر.
+   - `HR_DATA_KEY`: مفتاح التشفير. ولّده مرة واحدة واحفظه في مدير كلمات المرور، فبدونه لا تُقرأ البيانات:
+     ```bash
+     node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+     ```
+5. انشر الخدمة، ثم استورد من جهازك إلى Neon بنفس المفتاح:
+
+```bash
+export HR_PRIVATE_DATABASE_URL='رابط Neon'
+export HR_DATA_KEY='نفس قيمة Railway'
+npm run private:import -- ~/Documents/hr-private/employees-with-photos.xlsx --dry-run --include-incomplete
+npm run private:import -- ~/Documents/hr-private/employees-with-photos.xlsx --include-incomplete
+npm run private:access -- grant your.email@sabq.org hr
+```
+
+6. افتح نطاق الخدمة، وأدخل كلمة المرور، ثم اختر حسابك.
+
+**تنبيه:** من يعرف كلمة المرور يستطيع الدخول بأي حساب ممنوح، فلا تشاركها قبل الدخول المؤسسي.
+
+## ثانيًا: على جهازك فقط
 
 هذا الوضع يشغّل النظام على جهازك الشخصي ببيانات الموظفين الفعلية وصورهم، بلا أي بيانات وهمية. لا يرفع شيئًا إلى الإنترنت، ولا يمس المعاينة العامة على Railway ولا قاعدة Neon. القرار والتفاصيل التقنية في [قرار 005](decisions/005-private-local-mode.md).
 

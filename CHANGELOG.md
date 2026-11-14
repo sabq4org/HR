@@ -2,6 +2,14 @@
 
 يسجّل كل تغيير مؤثر في السلوك أو الأمان، مع رابط القرار والاختبار، حتى يتتبعه أي مطور أو وكيل لاحق. الأحدث أولًا.
 
+## 2026-11-14 — تشغيل خاص على Railway وNeon بكلمة مرور (فرع `claude/project-thread-e4jmmy`)
+
+- **الوضع الجديد:** `HR_MODE=private-hosted` يقرأ مخطط Neon المستقل `hr_private` بلا بيانات وهمية. يشترط `DATABASE_URL` و`HR_PUBLIC_ORIGIN` و`HR_DATA_KEY` و`HR_ACCESS_PASSWORD`.
+- **بوابة كلمة المرور:** تسبق كل البيانات، بكوكي `__Host-` آمن، وتقفل الدخول بعد 10 محاولات خاطئة. شاشة كلمة المرور في الواجهة.
+- **إعداد الخدمة:** `railway.private.json` لخدمة منفصلة، والمعاينة العامة لم تتغير.
+- **الاستيراد إلى Neon:** `private:import` و`private:access` يكتبان إلى Neon عبر `HR_PRIVATE_DATABASE_URL`.
+- **المرجع:** [قرار 006](docs/decisions/006-private-hosted-password.md) و[دليل التشغيل](docs/private-local.md).
+
 ## 2026-11-14 — وضع البيانات الخاصة على جهاز المالك وصور الموظفين (فرع `claude/project-thread-e4jmmy`)
 
 - **وضع خاص محلي:** `npm run private` يعمل ببيانات حقيقية على `127.0.0.1` فقط، دون بيانات وهمية، ويرفض أي إعداد مستضاف.

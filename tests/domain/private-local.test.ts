@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer, type Server } from 'node:http';
+import { createServer, request as httpRequest, type Server } from 'node:http';
 import ExcelJS from 'exceljs';
 import { createApp } from '../../server/app.js';
 import { createDatabase, type Db } from '../../server/database.js';
@@ -216,7 +216,7 @@ test('synthetic mode keeps photo scope: finance cannot fetch a colleague photo',
   }
 });
 
-test('a private database refuses synthetic data and private mode refuses a public origin', async () => {
+test('a private database refuses synthetic data and a public origin needs a password', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'hr-private-test-'));
   try {
     const path = join(dir, 'demo.sqlite');
@@ -225,7 +225,7 @@ test('a private database refuses synthetic data and private mode refuses a publi
     const db = await createDatabase(':memory:', { seed: false });
     assert.throws(
       () => createApp(db, { dataMode: 'private', publicOrigin: 'https://example.test' }),
-      /local-only/,
+      /requires an access password/,
     );
     await db.close();
   } finally {
@@ -263,6 +263,100 @@ test('include-incomplete imports placeholder people once and lists them for HR f
     )[0];
     assert.equal(row.join_date, '2026-11-14');
   } finally {
+    await db.close();
+  }
+});
+
+test('private hosted mode: password gate before any data, lockout, secure cookie', async () => {
+  const db = await createDatabase(':memory:', { seed: false });
+  assert.throws(
+    () => createApp(db, { dataMode: 'private', publicOrigin: 'https://hr.example.test' }),
+    /access password/,
+  );
+  assert.throws(
+    () =>
+      createApp(db, {
+        dataMode: 'private',
+        publicOrigin: 'https://hr.example.test',
+        accessPassword: 'short',
+      }),
+    /at least 12/,
+  );
+  const origin = 'https://hr.example.test';
+  const app = createApp(db, {
+    dataMode: 'private',
+    publicOrigin: origin,
+    accessPassword: 'correct-horse-battery',
+  });
+  const server: Server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const call = (path: string, init: { method?: string; body?: unknown; cookie?: string } = {}) =>
+    new Promise<{ status: number; body: string; setCookie?: string[] }>((resolve, reject) => {
+      const payload = init.body === undefined ? undefined : JSON.stringify(init.body);
+      const req = httpRequest(
+        {
+          host: '127.0.0.1',
+          port: address.port,
+          path: `/api${path}`,
+          method: init.method ?? 'GET',
+          headers: {
+            host: 'hr.example.test',
+            origin,
+            ...(payload ? { 'content-type': 'application/json' } : {}),
+            ...(init.cookie ? { cookie: init.cookie } : {}),
+          },
+        },
+        (res) => {
+          let body = '';
+          res.on('data', (chunk) => (body += chunk));
+          res.on('end', () =>
+            resolve({ status: res.statusCode!, body, setCookie: res.headers['set-cookie'] }),
+          );
+        },
+      );
+      req.on('error', reject);
+      req.end(payload);
+    });
+  try {
+    assert.equal((await call('/health')).status, 200);
+    assert.equal(JSON.parse((await call('/health')).body).mode, 'private-hosted');
+    for (const path of ['/session', '/bootstrap', '/employees/x/photo', '/admin/overview']) {
+      const res = await call(path);
+      assert.equal(res.status, 401, path);
+      assert.equal(JSON.parse(res.body).error.code, 'ACCESS_REQUIRED');
+    }
+    assert.equal(
+      (await call('/demo/session', { method: 'POST', body: { employeeId: 'x' } })).status,
+      401,
+    );
+    const wrong = await call('/access', { method: 'POST', body: { password: 'nope' } });
+    assert.equal(wrong.status, 401);
+    const ok = await call('/access', {
+      method: 'POST',
+      body: { password: 'correct-horse-battery' },
+    });
+    assert.equal(ok.status, 200);
+    const cookie = ok.setCookie!.find((c) => c.startsWith('__Host-sabq_hr_access='))!;
+    assert.match(cookie, /HttpOnly/);
+    assert.match(cookie, /Secure/);
+    assert.match(cookie, /SameSite=Strict/);
+    const session = await call('/session', { cookie: cookie.split(';')[0] });
+    assert.equal(session.status, 200);
+    assert.equal(JSON.parse(session.body).mode, 'private-hosted');
+    for (let i = 0; i < 9; i++)
+      await call('/access', { method: 'POST', body: { password: `wrong-${i}` } });
+    const locked = await call('/access', {
+      method: 'POST',
+      body: { password: 'correct-horse-battery' },
+    });
+    assert.equal(locked.status, 429, 'ten failures lock the gate, even for the right password');
+    const out = await call('/access', { method: 'DELETE', cookie: cookie.split(';')[0] });
+    assert.equal(out.status, 204);
+    assert.equal((await call('/session', { cookie: cookie.split(';')[0] })).status, 401);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     await db.close();
   }
 });
