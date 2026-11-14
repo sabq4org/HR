@@ -15,3 +15,8 @@ playwright-report/
 artifacts/screenshots/
 .DS_Store
 Sabq_HR_Project.zip
+
+# Spreadsheets and exports may hold real employee data; never commit them.
+*.xlsx
+*.xls
+*.csv

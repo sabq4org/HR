@@ -366,13 +366,17 @@ test('private hosted mode: password gate before any data, lockout, secure cookie
     const session = await call('/session', { cookie: cookie.split(';')[0] });
     assert.equal(session.status, 200);
     assert.equal(JSON.parse(session.body).mode, 'private-hosted');
-    for (let i = 0; i < 9; i++)
+    for (let i = 0; i < 10; i++)
       await call('/access', { method: 'POST', body: { password: `wrong-${i}` } });
     const locked = await call('/access', {
       method: 'POST',
       body: { password: 'correct-horse-battery' },
     });
-    assert.equal(locked.status, 429, 'ten failures lock the gate, even for the right password');
+    assert.equal(
+      locked.status,
+      429,
+      'ten failures lock this client, even for the right password (other clients: see second-review-hardening)',
+    );
     const out = await call('/access', { method: 'DELETE', cookie: cookie.split(';')[0] });
     assert.equal(out.status, 204);
     assert.equal((await call('/session', { cookie: cookie.split(';')[0] })).status, 401);

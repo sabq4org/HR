@@ -1,4 +1,5 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Pool, type PoolClient } from 'pg';
@@ -19,6 +20,21 @@ export type Db = AsyncDb;
 export const DEMO_POLICY_ID = 'policy-demo-annual-v1';
 
 type Migration = { version: number; name: string; url: URL };
+// Applied migrations must never change (second review, note 9). Line endings are
+// normalised so a Windows checkout does not look like an edit.
+function migrationSource(migration: Migration) {
+  const sql = readFileSync(fileURLToPath(migration.url), 'utf8');
+  return {
+    sql,
+    checksum: createHash('sha256').update(sql.replace(/\r\n/g, '\n'), 'utf8').digest('hex'),
+  };
+}
+function changedMigration(migration: Migration): Error {
+  return new Error(
+    `Migration ${String(migration.version).padStart(3, '0')}_${migration.name} changed after it was applied. ` +
+      'Restore the original file and add a new migration instead.',
+  );
+}
 function migrationsIn(directory: URL): Migration[] {
   return readdirSync(fileURLToPath(directory), { withFileTypes: true })
     .filter((entry) => entry.isFile() && /^\d{3}_[a-z0-9_-]+\.sql$/i.test(entry.name))
@@ -347,21 +363,29 @@ async function applySqliteMigrations(connection: DatabaseSync): Promise<void> {
   connection.exec(
     'CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)',
   );
+  if (!sqliteColumns(connection, 'schema_migrations').has('checksum'))
+    connection.exec('ALTER TABLE schema_migrations ADD COLUMN checksum TEXT');
   for (const migration of migrationsIn(new URL('./migrations/', import.meta.url))) {
+    const source = migrationSource(migration);
     const already = connection
-      .prepare('SELECT 1 AS found FROM schema_migrations WHERE version=?')
-      .get(migration.version);
-    if (already) continue;
-    const sql = omitDuplicateSqliteAlters(
-      connection,
-      readFileSync(fileURLToPath(migration.url), 'utf8'),
-    );
+      .prepare('SELECT checksum FROM schema_migrations WHERE version=?')
+      .get(migration.version) as { checksum: string | null } | undefined;
+    if (already) {
+      // Databases migrated before checksums existed record today's file once (baseline).
+      if (already.checksum === null)
+        connection
+          .prepare('UPDATE schema_migrations SET checksum=? WHERE version=? AND checksum IS NULL')
+          .run(source.checksum, migration.version);
+      else if (already.checksum !== source.checksum) throw changedMigration(migration);
+      continue;
+    }
+    const sql = omitDuplicateSqliteAlters(connection, source.sql);
     connection.exec('BEGIN IMMEDIATE');
     try {
       connection.exec(sql);
       connection
-        .prepare('INSERT INTO schema_migrations(version,name,applied_at) VALUES(?,?,?)')
-        .run(migration.version, migration.name, new Date().toISOString());
+        .prepare('INSERT INTO schema_migrations(version,name,applied_at,checksum) VALUES(?,?,?,?)')
+        .run(migration.version, migration.name, new Date().toISOString(), source.checksum);
       connection.exec('COMMIT');
     } catch (error) {
       try {
@@ -380,24 +404,35 @@ async function applyPostgresMigrations(pool: Pool, schema: string): Promise<void
       await client.query(
         'CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY,name TEXT NOT NULL,applied_at TEXT NOT NULL)',
       );
+      await client.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT');
     },
     false,
   );
   for (const migration of migrationsIn(new URL('./migrations/postgres/', import.meta.url))) {
-    const sql = readFileSync(fileURLToPath(migration.url), 'utf8');
+    const { sql, checksum } = migrationSource(migration);
     await withPgTransaction(
       pool,
       schema,
       async (client) => {
-        const already = await client.query(
-          'SELECT 1 AS found FROM schema_migrations WHERE version=$1',
+        const already = await client.query<{ checksum: string | null }>(
+          'SELECT checksum FROM schema_migrations WHERE version=$1 FOR UPDATE',
           [migration.version],
         );
-        if (already.rowCount) return;
+        if (already.rowCount) {
+          const recorded = already.rows[0].checksum;
+          // Databases migrated before checksums existed record today's file once (baseline).
+          if (recorded === null)
+            await client.query(
+              'UPDATE schema_migrations SET checksum=$1 WHERE version=$2 AND checksum IS NULL',
+              [checksum, migration.version],
+            );
+          else if (recorded !== checksum) throw changedMigration(migration);
+          return;
+        }
         await client.query(sql);
         await client.query(
-          'INSERT INTO schema_migrations(version,name,applied_at) VALUES($1,$2,$3)',
-          [migration.version, migration.name, new Date().toISOString()],
+          'INSERT INTO schema_migrations(version,name,applied_at,checksum) VALUES($1,$2,$3,$4)',
+          [migration.version, migration.name, new Date().toISOString(), checksum],
         );
       },
       true,

@@ -1,3 +1,4 @@
+import { securityHeaders } from './http-hardening.js';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Employee, LeaveRequest, Role } from '../shared/contracts.js';
@@ -282,6 +283,11 @@ export function createApp(
     dataMode?: 'synthetic' | 'private';
     /** Shared access password (private hosted mode). Required for private data on a public origin. */
     accessPassword?: string;
+    /**
+     * Reverse-proxy hops in front of the app (Railway: 1). Lets the access gate count
+     * failed passwords per client address instead of for the whole service.
+     */
+    trustProxyHops?: number;
   } = {},
 ) {
   const db = database;
@@ -310,6 +316,10 @@ export function createApp(
     throw new Error('publicOrigin must be an HTTPS origin without a path or credentials');
   const cookieName = pinnedOrigin ? '__Host-sabq_hr_demo' : COOKIE;
   app.disable('x-powered-by');
+  // Only the hops we were told about are trusted; the rightmost X-Forwarded-For entry is
+  // written by the platform proxy, so a client cannot choose its own counted address.
+  app.set('trust proxy', options.trustProxyHops ?? 0);
+  app.use(securityHeaders({ hosted: !!pinnedOrigin, https: !!pinnedOrigin }));
   app.use((req, res, next) => {
     if (req.path.startsWith('/api')) {
       res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -375,7 +385,28 @@ export function createApp(
   const accessCookie = pinnedOrigin ? '__Host-sabq_hr_access' : 'sabq_hr_access';
   const accessTtlMs = 12 * 60 * 60 * 1000;
   const accessTokens = new Map<string, number>();
-  const failedAttempts: number[] = [];
+  // Failed passwords are counted per client address (second review, note 3). A single
+  // global counter let anyone who knew the URL lock the owner out indefinitely.
+  const ACCESS_WINDOW_MS = 15 * 60 * 1000;
+  const ACCESS_MAX_FAILURES = 10;
+  const ACCESS_MAX_TRACKED_CLIENTS = 5_000;
+  const failedAttempts = new Map<string, number[]>();
+  const recentFailures = (client: string, now: number) => {
+    const list = (failedAttempts.get(client) ?? []).filter((t) => t > now - ACCESS_WINDOW_MS);
+    if (list.length) failedAttempts.set(client, list);
+    else failedAttempts.delete(client);
+    return list;
+  };
+  const recordFailure = (client: string, now: number) => {
+    const list = recentFailures(client, now);
+    if (!list.length && failedAttempts.size >= ACCESS_MAX_TRACKED_CLIENTS) {
+      for (const key of failedAttempts.keys()) recentFailures(key, now);
+      // Still full: forget the oldest-tracked client (Map keeps insertion order).
+      if (failedAttempts.size >= ACCESS_MAX_TRACKED_CLIENTS)
+        failedAttempts.delete(failedAttempts.keys().next().value!);
+    }
+    failedAttempts.set(client, [...list, now]);
+  };
   const digest = (value: string) => createHash('sha256').update(value, 'utf8').digest();
   const accessToken = (req: Request) =>
     (req.headers.cookie ?? '')
@@ -400,18 +431,24 @@ export function createApp(
   app.post('/api/access', (req, res) => {
     if (!accessPassword) return res.json({ required: false, granted: true });
     const now = Date.now();
-    while (failedAttempts.length && failedAttempts[0] < now - 15 * 60 * 1000)
-      failedAttempts.shift();
-    if (failedAttempts.length >= 10)
+    const client = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+    const failures = recentFailures(client, now);
+    if (failures.length >= ACCESS_MAX_FAILURES) {
+      res.setHeader(
+        'Retry-After',
+        String(Math.max(1, Math.ceil((failures[0] + ACCESS_WINDOW_MS - now) / 1000))),
+      );
       return jsonError(
         res,
         fault(429, 'ACCESS_LOCKED', 'محاولات كثيرة خاطئة. انتظر 15 دقيقة ثم أعد المحاولة.'),
       );
+    }
     const given = typeof req.body?.password === 'string' ? req.body.password : '';
     if (!given || given.length > 256 || !timingSafeEqual(digest(given), digest(accessPassword))) {
-      failedAttempts.push(now);
+      recordFailure(client, now);
       return jsonError(res, fault(401, 'ACCESS_DENIED', 'كلمة المرور غير صحيحة.'));
     }
+    failedAttempts.delete(client);
     for (const [token, expires] of accessTokens) if (expires < now) accessTokens.delete(token);
     const token = randomBytes(32).toString('base64url');
     accessTokens.set(token, now + accessTtlMs);

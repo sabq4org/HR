@@ -5,93 +5,77 @@ import express from 'express';
 import { createApp } from './app.js';
 import { createDatabase, createPostgresDatabase } from './database.js';
 import { createHostedDemoApp } from './hosted-demo.js';
+import { verifyDataKeyBinding } from './data-key.js';
+import { resolveRuntimeConfig } from './runtime-config.js';
+import { pageCsp } from './http-hardening.js';
 
 const envFile = resolve('.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
+const config = resolveRuntimeConfig(process.env);
 const production = process.env.NODE_ENV === 'production';
-const hostedDemo = process.env.HR_MODE === 'hosted-demo';
-// HR_MODE=private-hosted: real data in a dedicated PostgreSQL schema (Neon), behind a
-// shared access password set as a deployment secret. Interim until SSO. Decision 006.
-const privateHosted = process.env.HR_MODE === 'private-hosted';
-if (process.env.HR_MODE && !hostedDemo && !privateHosted) {
-  throw new Error('Unsupported HR_MODE. Use hosted-demo or private-hosted.');
-}
-if ((hostedDemo || privateHosted) && !production)
-  throw new Error('Hosted modes require NODE_ENV=production.');
-if (production && !hostedDemo && !privateHosted && process.env.LOCAL_DEMO !== 'true') {
-  throw new Error('Select HR_MODE=hosted-demo or explicitly enable LOCAL_DEMO=true.');
-}
-if (privateHosted) {
-  if (process.env.LOCAL_DEMO === 'true' || process.env.HR_DATA_MODE)
-    throw new Error('private-hosted cannot be combined with LOCAL_DEMO or HR_DATA_MODE.');
-  if (!process.env.DATABASE_URL) throw new Error('private-hosted requires DATABASE_URL.');
-  if (!process.env.HR_PUBLIC_ORIGIN) throw new Error('private-hosted requires HR_PUBLIC_ORIGIN.');
-  if (!process.env.HR_DATA_KEY) throw new Error('private-hosted requires HR_DATA_KEY.');
-  if ((process.env.HR_ACCESS_PASSWORD ?? '').length < 12)
-    throw new Error('private-hosted requires HR_ACCESS_PASSWORD of at least 12 characters.');
-}
-if (hostedDemo && process.env.HR_DB_PATH) {
-  throw new Error('Hosted previews use isolated temporary databases; HR_DB_PATH is not allowed.');
-}
-if (process.env.HR_DB_DRIVER && !['sqlite', 'postgres'].includes(process.env.HR_DB_DRIVER)) {
-  throw new Error('HR_DB_DRIVER must be sqlite or postgres.');
-}
-// HR_DATA_MODE=private: real employee data on the owner's own machine only.
-// Loopback listener, separate SQLite file, no synthetic seed. See docs/private-local.md.
-const privateData = process.env.HR_DATA_MODE === 'private';
-if (process.env.HR_DATA_MODE && !privateData)
-  throw new Error('HR_DATA_MODE must be "private" when set.');
-if (privateData && (hostedDemo || process.env.HR_PUBLIC_ORIGIN))
-  throw new Error('Private data mode cannot run as a hosted or public preview.');
-if (privateData && process.env.HR_DB_DRIVER === 'postgres')
-  throw new Error('Private data mode is SQLite-on-this-machine only until hosting is approved.');
-const runtime = privateHosted
-  ? await (async () => {
-      const db = await createPostgresDatabase(process.env.DATABASE_URL!, 'hr_private', {
-        seed: false,
-      });
-      return {
-        app: createApp(db, {
-          dataMode: 'private',
-          publicOrigin: process.env.HR_PUBLIC_ORIGIN,
-          accessPassword: process.env.HR_ACCESS_PASSWORD,
-        }),
-        close: () => db.close(),
-      };
-    })()
-  : hostedDemo
-    ? await createHostedDemoApp({
-        publicOrigin: process.env.HR_PUBLIC_ORIGIN ?? '',
-        databaseUrl: process.env.DATABASE_URL,
-      })
-    : await (async () => {
-        const defaultDataDir = resolve('.data');
-        mkdirSync(defaultDataDir, { recursive: true });
-        const db = privateData
-          ? await createDatabase(
-              process.env.HR_DB_PATH ?? resolve(defaultDataDir, 'hr-private.sqlite'),
-              { seed: false },
-            )
-          : process.env.HR_DB_DRIVER === 'postgres'
-            ? await createPostgresDatabase(process.env.DATABASE_URL ?? '', 'hr_development')
-            : await createDatabase(
-                process.env.HR_DB_PATH ?? resolve(defaultDataDir, 'hr-local.sqlite'),
-              );
+const hostedDemo = config.mode === 'hosted-demo';
+const privateHosted = config.mode === 'private-hosted';
+const privateData = config.mode === 'private-local';
+const runtime =
+  config.mode === 'private-hosted'
+    ? await (async () => {
+        const db = await createPostgresDatabase(config.databaseUrl, 'hr_private', {
+          seed: false,
+        });
+        try {
+          await verifyDataKeyBinding(db);
+        } catch (error) {
+          await db.close();
+          throw error;
+        }
         return {
-          app: createApp(db, { dataMode: privateData ? 'private' : 'synthetic' }),
+          app: createApp(db, {
+            dataMode: 'private',
+            publicOrigin: config.publicOrigin,
+            accessPassword: config.accessPassword,
+            trustProxyHops: config.trustProxyHops,
+          }),
           close: () => db.close(),
         };
-      })();
+      })()
+    : config.mode === 'hosted-demo'
+      ? await createHostedDemoApp({
+          publicOrigin: config.publicOrigin,
+          databaseUrl: config.previewDatabaseUrl,
+        })
+      : await (async () => {
+          const defaultDataDir = resolve('.data');
+          mkdirSync(defaultDataDir, { recursive: true });
+          const db =
+            config.mode === 'private-local'
+              ? await createDatabase(
+                  config.dbPath ?? resolve(defaultDataDir, 'hr-private.sqlite'),
+                  {
+                    seed: false,
+                  },
+                )
+              : config.driver === 'postgres'
+                ? await createPostgresDatabase(config.databaseUrl ?? '', 'hr_development')
+                : await createDatabase(config.dbPath ?? resolve(defaultDataDir, 'hr-local.sqlite'));
+          if (config.mode === 'private-local') {
+            try {
+              await verifyDataKeyBinding(db);
+            } catch (error) {
+              await db.close();
+              throw error;
+            }
+          }
+          return {
+            app: createApp(db, { dataMode: privateData ? 'private' : 'synthetic' }),
+            close: () => db.close(),
+          };
+        })();
 const { app } = runtime;
-app.use((_req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'same-origin');
-  res.setHeader('X-Frame-Options', 'DENY');
-  if (hostedDemo || privateHosted) res.setHeader('X-Robots-Tag', 'noindex, nofollow');
-  next();
-});
+// Security headers are applied inside createApp/createHostedDemoApp, before any route,
+// so API responses carry them too (second review, note 11).
 if (production) {
+  app.use(pageCsp);
   app.use(express.static(resolve('dist/client'), { index: false }));
   app.get('/{*path}', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
