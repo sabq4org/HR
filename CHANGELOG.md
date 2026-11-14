@@ -12,6 +12,13 @@
 - **الترحيل 019** في SQLite وPostgres. قوائم الترحيلات في الاختبارات حُدّثت إلى 19.
 - **الاختبارات:** `tests/domain/leave-entitlement.test.ts` (SQLite وPostgreSQL) و`tests/e2e/leave-entitlement.spec.ts`.
 
+## 2026-11-15 — مسودة قواعد الرواتب لمفتاح محاسب سبق وإصلاح اعتماد السياسات (فرع `grok/hr-policy-draft`)
+
+- **نطاق جديد** `hr.policy.draft`: `POST /api/service/hr/policies` ينشئ إصدار قواعد رواتب في حالة `draft` فقط، بنفس تحقق الإنشاء الإداري وقسم التأمينات (`parseGosiRule`). `created_by` هو حساب الخدمة `svc-sabq-accountant` حتى يعتمد علي الإصدار دون `SELF_APPROVAL`. القراءة: `GET /policies` و`GET /policies/:id`. اعتماد أو إيقاف القواعد بالمفتاح يرد `403 POLICY_ACTION_FORBIDDEN` دائمًا، والخادم يرفض الإقلاع إن ضُبط `hr.policy.approve` أو `hr.policy.activate` أو `hr.policy.retire`. التدقيق: `service_policy_draft_created` بمعرّف الإصدار وتاريخي السريان فقط، بلا قيم.
+- **إصلاح الواجهة:** زر الاعتماد في `/settings/policies` يرسل `version` مع الإجراء والسبب (`shared/policy-actions.ts`)، فلم يعد الاعتماد يرد `400 INVALID_VERSION`.
+- **الاختبارات:** `tests/domain/hr-policy-draft.test.ts` على SQLite وPostgreSQL: رفض النطاق والمالية وغياب المفتاح، إنشاء المسودة وإعادة الطلب، منع الاعتماد الذاتي، واعتماد مالك مختلف ثم نجاح مسودة مسير 2026-10 دون `policy_unavailable`.
+- **بعد الدمج:** يُضاف `hr.policy.draft` إلى `HR_SERVICE_API_KEY_SCOPES` في Railway؛ لا يُعتمد الإصدار إلا من علي.
+
 ## 2026-11-14 — مالك النظام: الموارد البشرية مع اعتماد المسير والقواعد (فرع `claude/project-thread-n8ohho`)
 
 - **الترحيل 018** `system_owners`. الحساب المدرج فيه بدور الموارد البشرية يعتمد المسير ويرفضه في خطوة الاعتماد، ويعتمد إصدارات القواعد، مع بقاء منع اعتماد ما أعده أو راجعه أو أنشأه. القرار: `docs/decisions/014-system-owner.md`.
