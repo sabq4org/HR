@@ -5,6 +5,7 @@ import express from 'express';
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { Actor } from '../../server/administration/service.js';
 import { registerFinance, type WafeqClientLike } from '../../server/finance/routes.js';
+import type { WafeqContact } from '../../server/integrations/wafeq.js';
 import { createDatabase, createPostgresDatabase, type AsyncDb } from '../../server/database.js';
 
 let db: AsyncDb;
@@ -13,6 +14,7 @@ let base = '';
 let actor: Actor = { id: 'finance-owner', role: 'hr' };
 let clientCalls = 0;
 let providerInvoiceCalls = 0;
+let providerContacts: WafeqContact[] = [];
 const client: WafeqClientLike = {
   getOrganization: async () => ({ id: 'org-test', name: 'Test organization' }),
   createCustomer: async () => {
@@ -20,6 +22,7 @@ const client: WafeqClientLike = {
     return { id: 'w-customer-1' };
   },
   getCustomer: async (id) => ({ id }),
+  listCustomers: async () => providerContacts,
   findCustomerByExternalId: async () => null,
   createInvoice: async () => {
     clientCalls++;
@@ -961,6 +964,7 @@ test(
       invoiceFinds = 0;
     const pgClient: WafeqClientLike = {
       getOrganization: async () => ({ id: 'pg-org', name: 'PG test' }),
+      listCustomers: async () => [],
       findCustomerByExternalId: async () => {
         contactFinds++;
         contactEntered();
@@ -1144,3 +1148,83 @@ test(
     }
   },
 );
+
+test('customers saved in Wafeq are listed for review and imported once, linked and encrypted', async () => {
+  actor = { id: 'finance-owner', role: 'hr' };
+  await api('/api/finance/settings/api-key', post({ apiKey: 'synthetic-fake-key' }, 'import-key'));
+  const contact = (id: string, name: string, vatNumber = ''): WafeqContact => ({
+    id,
+    name,
+    nameEnglish: '',
+    email: '',
+    vatNumber,
+    phone: '',
+    address: {
+      line: '',
+      city: 'Riyadh',
+      postalCode: '',
+      district: '',
+      buildingNumber: '',
+      additionalNumber: '',
+    },
+    country: 'SA',
+    externalId: '',
+  });
+  providerContacts = [
+    contact('w-1', 'Synthetic Media Co', '300000000000003'),
+    contact('w-2', 'Sample LLC'),
+    contact('w-3', 'Synthetic Events Co'),
+    // Same VAT number as w-1 under another id, and a contact outside Saudi Arabia.
+    contact('w-4', 'Synthetic Media Branch', '300000000000003'),
+    { ...contact('w-5', 'Synthetic Abroad Co'), country: 'AE' },
+  ];
+  try {
+    // A local customer with the same name is already covered.
+    await api('/api/finance/customers', post(customerBody, 'import-local'));
+    const listed = await json<{ contacts: { id: string; status: string }[] }>(
+      await api('/api/finance/wafeq/customers'),
+    );
+    assert.deepEqual(
+      listed.contacts.map((c) => [c.id, c.status]),
+      [
+        ['w-1', 'new'],
+        ['w-2', 'exists'],
+        ['w-3', 'new'],
+        ['w-4', 'new'],
+        ['w-5', 'unsupported'],
+      ],
+    );
+    assert.equal((await api('/api/finance/wafeq/customers/import', post({ ids: [] }))).status, 400);
+    const first = await api(
+      '/api/finance/wafeq/customers/import',
+      post({ ids: ['w-1', 'w-2', 'w-4', 'w-5'] }, 'import-1'),
+    );
+    assert.equal(first.status, 201);
+    assert.deepEqual(await first.json(), { imported: 1, skipped: 3 });
+    // A second request, even with a new key, does not duplicate.
+    const again = await api(
+      '/api/finance/wafeq/customers/import',
+      post({ ids: ['w-1', 'w-3'] }, 'import-2'),
+    );
+    assert.deepEqual(await again.json(), { imported: 1, skipped: 1 });
+    const overview = await json<{
+      customers: { name: string; wafeqId: string | null; syncStatus: string; vatNumber: string }[];
+    }>(await api('/api/finance'));
+    assert.equal(overview.customers.length, 3);
+    const media = overview.customers.find((c) => c.name === 'Synthetic Media Co');
+    assert.deepEqual(
+      [media?.wafeqId, media?.syncStatus, media?.vatNumber],
+      ['w-1', 'synced', '300000000000003'],
+    );
+    const rows = await db.read<{ customer_ciphertext: string }>(
+      'SELECT customer_ciphertext FROM finance_customers',
+    );
+    assert.equal(
+      rows.some((r) => r.customer_ciphertext.includes('Synthetic')),
+      false,
+    );
+    assert.equal(clientCalls, 0, 'nothing is written to the provider');
+  } finally {
+    providerContacts = [];
+  }
+});

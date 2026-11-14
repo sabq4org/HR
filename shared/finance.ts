@@ -28,6 +28,16 @@ export interface FinanceCustomer extends FinanceCustomerInput {
   syncStatus: 'not_synced' | 'synced' | 'error';
   syncMessage?: string;
 }
+/** One Wafeq contact offered for import; `exists` means a local customer already covers it. */
+export interface WafeqImportCandidate {
+  id: string;
+  name: string;
+  vatNumber: string;
+  email: string;
+  city: string;
+  /** `unsupported`: an address outside Saudi Arabia, which local customers cannot hold. */
+  status: 'new' | 'exists' | 'unsupported';
+}
 export interface FinanceSeller {
   name: string;
   vatNumber: string;
@@ -240,6 +250,8 @@ export interface FinanceOverview {
 // POST /api/finance/quotes/:id/convert {version,issueDate,dueDate,invoiceType?,purchaseOrder?}
 //   invoiceType follows the quote's documentType; a conflicting value is rejected. -> {invoice: FinanceInvoice}
 // POST /api/finance/customers/:id/sync {version} -> {customer: FinanceCustomer}
+// GET /api/finance/wafeq/customers -> {contacts: WafeqImportCandidate[]}, read-only at the provider.
+// POST /api/finance/wafeq/customers/import {ids} -> {imported: number, skipped: number}
 // POST /api/finance/invoices/:id/sync {version} -> {invoice: FinanceInvoice}
 // POST /api/finance/invoices/:id/refresh {} -> {invoice: FinanceInvoice}
 // GET /api/finance/invoices/:id/pdf -> private provider PDF, only cleared.

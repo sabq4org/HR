@@ -5,6 +5,7 @@ import type {
   FinanceCatalogItemInput,
   FinanceCustomer,
   FinanceCustomerInput,
+  WafeqImportCandidate,
   FinanceInvoice,
   FinanceLine,
   FinanceLineInput,
@@ -38,6 +39,7 @@ import {
   WafeqApiError,
   WafeqClient,
   type WafeqClientLike as WafeqProvider,
+  type WafeqContact,
 } from '../integrations/wafeq.js';
 export type { WafeqClientLike } from '../integrations/wafeq.js';
 import { autoPostInvoice, customerStatement } from './ledger.js';
@@ -985,6 +987,154 @@ export function registerFinance(
       async (_tx, m) => ({ id: m.id }),
     );
     res.json({ customer: await readCustomer(db, actor.id, saved.id) });
+  });
+  // Import of the customers already saved in Wafeq. Both routes only read from the provider.
+  // A contact is treated as already present when a local customer is linked to it, was the source
+  // of it, or shares its VAT number or exact name.
+  // Which Wafeq contacts the saved customers already cover. Read again inside the import
+  // transaction and extended as rows are inserted, so one request cannot add the same name or
+  // VAT number twice.
+  const saudi = (country: string) => !country || /^(sa|sau|saudi arabia)$/i.test(country);
+  const localCoverage = async (reader: AsyncDb, ownerId: string) => {
+    const rows = await reader.read<CustomerRow>(
+      'SELECT * FROM finance_customers WHERE owner_id=?',
+      [ownerId],
+    );
+    const linked = new Set<string>(),
+      ids = new Set<string>(),
+      vats = new Set<string>(),
+      names = new Set<string>();
+    const key = (name: string) => name.replace(/\s+/g, ' ').trim().toLowerCase();
+    for (const row of rows) {
+      const saved = safeJson<FinanceCustomerInput>(
+        row.customer_ciphertext,
+        `finance:customer:${row.id}`,
+      );
+      ids.add(row.id);
+      if (row.wafeq_id) linked.add(row.wafeq_id);
+      if (saved.vatNumber) vats.add(saved.vatNumber);
+      names.add(key(saved.name));
+    }
+    return {
+      has: (contact: WafeqContact) =>
+        linked.has(contact.id) ||
+        ids.has(contact.externalId) ||
+        (!!contact.vatNumber && vats.has(contact.vatNumber)) ||
+        names.has(key(contact.name)),
+      add: (contact: WafeqContact) => {
+        linked.add(contact.id);
+        if (contact.vatNumber) vats.add(contact.vatNumber);
+        names.add(key(contact.name));
+      },
+    };
+  };
+  const wafeqCandidates = async (ownerId: string) => {
+    const client = await storedClient(db, ownerId, clientFactory);
+    let contacts: WafeqContact[];
+    try {
+      contacts = await client.listCustomers();
+    } catch (error) {
+      const code = error instanceof WafeqApiError ? error.code : 'provider_unavailable';
+      throw fault(503, 'WAFEQ_UNAVAILABLE', `تعذرت قراءة العملاء من وافق (${code}).`);
+    }
+    const seen = new Set<string>();
+    const covered = await localCoverage(db, ownerId);
+    return contacts
+      .filter((c) => !seen.has(c.id) && seen.add(c.id))
+      .map((contact) => ({
+        contact,
+        status: (!saudi(contact.country)
+          ? 'unsupported'
+          : covered.has(contact)
+            ? 'exists'
+            : 'new') as WafeqImportCandidate['status'],
+      }));
+  };
+  registerRoute(app, 'get', '/api/finance/wafeq/customers', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    const contacts: WafeqImportCandidate[] = (await wafeqCandidates(actor.id)).map(
+      ({ contact, status }) => ({
+        id: contact.id,
+        name: contact.name,
+        vatNumber: contact.vatNumber,
+        email: contact.email,
+        city: contact.address.city,
+        status,
+      }),
+    );
+    res.set('cache-control', 'private, no-store').json({ contacts });
+  });
+  registerRoute(app, 'post', '/api/finance/wafeq/customers/import', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    const body = requireRecord(req.body);
+    if (
+      !Array.isArray(body.ids) ||
+      body.ids.length < 1 ||
+      body.ids.length > 5000 ||
+      body.ids.some((id) => typeof id !== 'string' || !id || id.length > 255)
+    )
+      throw fault(400, 'INVALID_INPUT', 'اختر عميلًا واحدًا على الأقل للاستيراد.');
+    const wanted = new Set(body.ids as string[]);
+    // The data comes from Wafeq again here, never from the browser, and before the transaction
+    // so that no provider call is made while it is open.
+    const chosen = (await wafeqCandidates(actor.id)).filter((c) => wanted.has(c.contact.id));
+    const result = await idempotent<{ imported: number; skipped: number }>(
+      db,
+      actor,
+      'finance.customer.import-wafeq',
+      req.get('idempotency-key'),
+      { ids: [...wanted].sort() },
+      async (tx) => {
+        let imported = 0;
+        const covered = await localCoverage(tx, actor.id);
+        for (const { contact, status } of chosen) {
+          if (status !== 'new' || covered.has(contact)) continue;
+          covered.add(contact);
+          const id = newId(),
+            createdAt = now();
+          const input: FinanceCustomerInput = {
+            name: contact.name,
+            email: contact.email,
+            vatNumber: contact.vatNumber,
+            address: {
+              line: contact.address.line,
+              city: contact.address.city,
+              postalCode: contact.address.postalCode,
+              country: 'SA',
+              ...(contact.address.district ? { district: contact.address.district } : {}),
+              ...(contact.address.buildingNumber
+                ? { buildingNumber: contact.address.buildingNumber }
+                : {}),
+              ...(contact.address.additionalNumber
+                ? { additionalNumber: contact.address.additionalNumber }
+                : {}),
+            },
+            type: 'business',
+            ...(contact.nameEnglish ? { nameEnglish: contact.nameEnglish } : {}),
+            ...(contact.phone ? { phone: contact.phone } : {}),
+          };
+          await tx.execute(
+            "INSERT INTO finance_customers(id,owner_id,version,customer_ciphertext,created_at,updated_at,wafeq_id,sync_status) VALUES(?,?,1,?,?,?,?,'synced')",
+            [
+              id,
+              actor.id,
+              encryptSensitive(JSON.stringify(input), `finance:customer:${id}`),
+              createdAt,
+              createdAt,
+              contact.id,
+            ],
+          );
+          await audited(tx, actor, 'finance_customer', id, 'imported_from_wafeq', 1);
+          imported++;
+        }
+        const counts = { imported, skipped: wanted.size - imported };
+        return { marker: { type: 'customer_import', id: JSON.stringify(counts) }, result: counts };
+      },
+      async (_tx, m) => JSON.parse(m.id) as { imported: number; skipped: number },
+    );
+    res.status(201).json(result);
   });
   registerRoute(app, 'post', '/api/finance/customers/:id/sync', async (req, res) => {
     const actor = await auth(req);

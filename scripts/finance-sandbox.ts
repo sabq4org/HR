@@ -45,6 +45,7 @@ const provider: WafeqClientLike = {
   getOrganization: async () => ({ id: 'org-sandbox', name: 'منشأة تجريبية (وهمية)' }),
   createCustomer: async () => ({ id: `con_${randomUUID()}` }),
   getCustomer: async (id) => ({ id }),
+  listCustomers: async () => [],
   findCustomerByExternalId: async () => null,
   createInvoice: async (invoice) => {
     const result: WafeqInvoiceResult = {

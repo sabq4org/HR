@@ -12,6 +12,7 @@ import {
   ArrowRight,
   CircleAlert,
   ClipboardList,
+  DownloadCloud,
   FileText,
   LoaderCircle,
   Plus,
@@ -39,6 +40,7 @@ import type {
 } from '../../shared/finance';
 import { CustomerCard } from './CustomerCard';
 import { ExportPdfButton } from './ExportPdf';
+import { WafeqImportModal } from './WafeqImport';
 import type { InvoiceLedgerState, LedgerAccount, LedgerOverview } from '../../shared/ledger';
 import { InvoicePaymentForm } from './InvoicePaymentForm';
 import { useSearchParams } from 'react-router-dom';
@@ -207,6 +209,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
   // current settings; whatever it froze at the time stays as it was.
   const docSeller = (seller: FinanceSeller) =>
     overview ? completeSeller(seller, overview.settings.seller) : seller;
+  const [importing, setImporting] = useState(false);
   const [cardCustomer, setCardCustomer] = useState<FinanceCustomer | null>(null);
   const [statementCustomer, setStatementCustomer] = useState<FinanceCustomer | null>(null);
   const [customerForm, setCustomerForm] = useState<FinanceCustomerInput>(blankCustomer());
@@ -723,10 +726,18 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                   <h2>العملاء</h2>
                   <p>بيانات العميل المستخدمة في عروض الأسعار والفواتير.</p>
                 </div>
-                <button className="button primary" onClick={() => beginCustomer()}>
-                  <Plus size={17} />
-                  إضافة عميل
-                </button>
+                <div className="fin-section-actions">
+                  {overview.settings.canSync && (
+                    <button className="button secondary" onClick={() => setImporting(true)}>
+                      <DownloadCloud size={17} />
+                      استيراد من وافق
+                    </button>
+                  )}
+                  <button className="button primary" onClick={() => beginCustomer()}>
+                    <Plus size={17} />
+                    إضافة عميل
+                  </button>
+                </div>
               </div>
               {overview.customers.length ? (
                 <div className="fin-table-wrap">
@@ -1822,6 +1833,16 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
             />
           ) : null;
         })()}
+      {importing && (
+        <WafeqImportModal
+          close={() => setImporting(false)}
+          onDone={async (message) => {
+            setImporting(false);
+            await load();
+            notify(message);
+          }}
+        />
+      )}
       {cardCustomer && (
         <CustomerCard
           customer={cardCustomer}

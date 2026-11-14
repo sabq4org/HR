@@ -35,6 +35,40 @@ const provider: WafeqClientLike = {
   async getCustomer(id) {
     return { id };
   },
+  // Synthetic contacts for the import flow; nothing here comes from a real account.
+  async listCustomers() {
+    const blank = {
+      line: '',
+      postalCode: '',
+      district: '',
+      buildingNumber: '',
+      additionalNumber: '',
+    };
+    return [
+      {
+        id: 'con_import_1',
+        name: 'وكالة اصطناعية للاستيراد',
+        nameEnglish: 'Synthetic Import Agency',
+        email: 'import-one@example.test',
+        vatNumber: '300000000100003',
+        phone: '0110000001',
+        address: { ...blank, line: 'طريق الاختبار', city: 'الرياض', postalCode: '12345' },
+        country: 'SA',
+        externalId: '',
+      },
+      {
+        id: 'con_import_2',
+        name: 'مؤسسة اصطناعية بلا بريد',
+        nameEnglish: '',
+        email: '',
+        vatNumber: '',
+        phone: '',
+        address: { ...blank, city: 'جدة' },
+        country: 'SA',
+        externalId: '',
+      },
+    ];
+  },
   async findCustomerByExternalId(externalId) {
     return contacts.get(externalId) ?? null;
   },

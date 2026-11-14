@@ -25,8 +25,31 @@ export interface WafeqInvoiceMappings {
   zeroTaxRateId: string;
 }
 
+/** A contact as saved in Wafeq, reduced to what a local customer record holds. */
+export interface WafeqContact {
+  id: string;
+  name: string;
+  nameEnglish: string;
+  email: string;
+  vatNumber: string;
+  phone: string;
+  address: {
+    line: string;
+    city: string;
+    postalCode: string;
+    district: string;
+    buildingNumber: string;
+    additionalNumber: string;
+  };
+  /** As returned by the provider; empty when it gives none. */
+  country: string;
+  externalId: string;
+}
+
 export interface WafeqClientLike {
   getOrganization(): Promise<WafeqOrganization>;
+  /** Read-only: every contact that Wafeq does not mark as supplier-only. */
+  listCustomers(): Promise<WafeqContact[]>;
   createCustomer(
     input: FinanceCustomerInput,
     externalId: string,
@@ -135,6 +158,49 @@ function listPage(value: unknown): { count: number; hasNext: boolean; results: J
   return { count: value.count as number, hasNext: value.next !== null, results };
 }
 
+const field = (value: unknown, max: number) =>
+  (typeof value === 'string' ? value : typeof value === 'number' ? String(value) : '')
+    .trim()
+    .slice(0, max);
+
+/**
+ * Reads one row of the contact list leniently: contacts created in Wafeq itself carry no
+ * external_id, and optional fields may be null or absent. Supplier-only contacts return null.
+ */
+function responseContact(row: unknown): WafeqContact | null {
+  if (!isObject(row)) throw new WafeqApiError('invalid_response');
+  const id = string(row.id);
+  if (!id) throw new WafeqApiError('invalid_response');
+  if (row.is_customer === false) return null;
+  if (
+    Array.isArray(row.relationship) &&
+    row.relationship.length > 0 &&
+    !row.relationship.some((r) => typeof r === 'string' && r.toUpperCase() === 'CUSTOMER')
+  )
+    return null;
+  const names = isObject(row.name) ? row.name : null;
+  const name = names ? field(names.ar, 200) || field(names.en, 200) : field(row.name, 200);
+  if (!name) return null;
+  return {
+    id,
+    name,
+    nameEnglish: names && field(names.ar, 200) ? field(names.en, 200) : '',
+    email: field(row.email, 254),
+    vatNumber: field(row.tax_registration_number, 20),
+    phone: field(row.phone, 30),
+    address: {
+      line: field(row.address, 200),
+      city: field(row.city, 100),
+      postalCode: field(row.postal_code, 20),
+      district: field(row.district, 100),
+      buildingNumber: field(row.building_number, 20),
+      additionalNumber: field(row.additional_number, 20),
+    },
+    country: field(row.country, 60),
+    externalId: field(row.external_id, 255),
+  };
+}
+
 function findExactExternalId(pages: JsonObject[][], externalId: string): JsonObject | null {
   const matches = pages.flat().filter((row) => row.external_id === externalId);
   if (matches.length > 1) throw new WafeqApiError('duplicate_external_id');
@@ -190,6 +256,27 @@ export class WafeqClient implements WafeqClientLike {
 
   async getCustomer(id: string): Promise<{ id: string }> {
     return this.idResult(await this.jsonRequest('GET', `contacts/${pathPart(id, 'customer_id')}/`));
+  }
+
+  async listCustomers(): Promise<WafeqContact[]> {
+    const contacts: WafeqContact[] = [];
+    for (let page = 1; page <= 50; page++) {
+      const query = new URLSearchParams({ page_size: '100' });
+      if (page > 1) query.set('page', String(page));
+      const value = await this.jsonRequest('GET', `contacts/?${query.toString()}`);
+      if (
+        !isObject(value) ||
+        !Array.isArray(value.results) ||
+        !(value.next === null || value.next === undefined || typeof value.next === 'string')
+      )
+        throw new WafeqApiError('invalid_response');
+      for (const row of value.results) {
+        const contact = responseContact(row);
+        if (contact) contacts.push(contact);
+      }
+      if (!value.next || value.results.length === 0) return contacts;
+    }
+    throw new WafeqApiError('too_many_pages');
   }
 
   async findCustomerByExternalId(externalId: string): Promise<{ id: string } | null> {
