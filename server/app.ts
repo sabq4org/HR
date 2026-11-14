@@ -1,4 +1,4 @@
-import { securityHeaders } from './http-hardening.js';
+import { clientFailureLimiter, securityHeaders } from './http-hardening.js';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Employee, LeaveRequest, Role } from '../shared/contracts.js';
@@ -13,6 +13,7 @@ import {
 import { registerAdministration } from './administration/routes.js';
 import { decryptSensitive } from './administration/security.js';
 import { canAccessFinance, registerFinance } from './finance/routes.js';
+import { bearerToken, inAccountantScope, matchesServiceKey } from './finance/service-keys.js';
 
 type Session = Actor & { expiresAt: number };
 type EmployeeRow = {
@@ -294,6 +295,11 @@ export function createApp(
     financeEmployeeId?: string;
     /** Dependency injection for isolated tests; the runtime always uses the fixed Wafeq API. */
     financeClientFactory?: Parameters<typeof registerFinance>[1]['createClient'];
+    /**
+     * SHA-256 digests of accountant service keys (never the keys). Read on every request, so a
+     * caller may rotate the list in place. Keys act only as financeEmployeeId, finance scope only.
+     */
+    financeApiKeyHashes?: readonly string[];
   } = {},
 ) {
   const db = database;
@@ -356,8 +362,41 @@ export function createApp(
       );
     next();
   });
+  // Accountant service keys (Authorization: Bearer sabqfin_...). Finance scope only.
+  const serviceRequests = new WeakSet<Request>();
+  // Counted per client address, like the access gate: a global counter would let anyone
+  // who knows the URL lock the accountant's valid key out with 20 junk requests.
+  const keyFailures = clientFailureLimiter({ maxFailures: 20, windowMs: 15 * 60 * 1000 });
   app.use((req, res, next) => {
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    const token = bearerToken(req.get('authorization'));
+    if (token === undefined) return next();
+    const now = Date.now();
+    const client = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+    const retryAfter = keyFailures.retryAfterSeconds(client, now);
+    if (retryAfter) {
+      res.setHeader('Retry-After', String(retryAfter));
+      return jsonError(
+        res,
+        fault(429, 'API_KEY_LOCKED', 'محاولات مفاتيح خاطئة كثيرة. انتظر 15 دقيقة.'),
+      );
+    }
+    const hashes = options.financeApiKeyHashes ?? [];
+    if (!privateData || !options.financeEmployeeId || hashes.length === 0)
+      return jsonError(
+        res,
+        fault(401, 'API_KEY_DISABLED', 'مفاتيح الخدمة غير مفعّلة في هذه النسخة.'),
+      );
+    if (!token || !matchesServiceKey(token, hashes)) {
+      keyFailures.recordFailure(client, now);
+      return jsonError(res, fault(401, 'INVALID_API_KEY', 'مفتاح الخدمة غير صالح.'));
+    }
+    if (!inAccountantScope(req.method, req.path))
+      return jsonError(res, fault(403, 'API_KEY_SCOPE', 'مفتاح المحاسب مقصور على النظام المالي.'));
+    serviceRequests.add(req);
+    next();
+  });
+  app.use((req, res, next) => {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !serviceRequests.has(req)) {
       const origin = req.get('origin');
       if (!origin)
         return jsonError(res, fault(403, 'ORIGIN_REQUIRED', 'يلزم طلب من المصدر المحلي نفسه.'));
@@ -388,6 +427,15 @@ export function createApp(
     express.json({ limit: '3mb' }),
   );
   app.use('/api/admin/imports/employees/commit', express.json({ limit: '512kb' }));
+  app.use((req, res, next) => {
+    if (!serviceRequests.has(req) || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method))
+      return next();
+    const hasBody =
+      Number(req.get('content-length') ?? 0) > 0 || Boolean(req.get('transfer-encoding'));
+    if (hasBody && !req.is('application/json'))
+      return jsonError(res, fault(415, 'JSON_REQUIRED', 'أرسل البيانات بصيغة JSON.'));
+    next();
+  });
   app.use(express.json({ limit: '64kb' }));
 
   // Access gate (private hosted mode): one password, set as a deployment secret, must be
@@ -397,26 +445,7 @@ export function createApp(
   const accessTokens = new Map<string, number>();
   // Failed passwords are counted per client address (second review, note 3). A single
   // global counter let anyone who knew the URL lock the owner out indefinitely.
-  const ACCESS_WINDOW_MS = 15 * 60 * 1000;
-  const ACCESS_MAX_FAILURES = 10;
-  const ACCESS_MAX_TRACKED_CLIENTS = 5_000;
-  const failedAttempts = new Map<string, number[]>();
-  const recentFailures = (client: string, now: number) => {
-    const list = (failedAttempts.get(client) ?? []).filter((t) => t > now - ACCESS_WINDOW_MS);
-    if (list.length) failedAttempts.set(client, list);
-    else failedAttempts.delete(client);
-    return list;
-  };
-  const recordFailure = (client: string, now: number) => {
-    const list = recentFailures(client, now);
-    if (!list.length && failedAttempts.size >= ACCESS_MAX_TRACKED_CLIENTS) {
-      for (const key of failedAttempts.keys()) recentFailures(key, now);
-      // Still full: forget the oldest-tracked client (Map keeps insertion order).
-      if (failedAttempts.size >= ACCESS_MAX_TRACKED_CLIENTS)
-        failedAttempts.delete(failedAttempts.keys().next().value!);
-    }
-    failedAttempts.set(client, [...list, now]);
-  };
+  const accessFailures = clientFailureLimiter({ maxFailures: 10, windowMs: 15 * 60 * 1000 });
   const digest = (value: string) => createHash('sha256').update(value, 'utf8').digest();
   const accessToken = (req: Request) =>
     (req.headers.cookie ?? '')
@@ -442,12 +471,9 @@ export function createApp(
     if (!accessPassword) return res.json({ required: false, granted: true });
     const now = Date.now();
     const client = req.ip ?? req.socket.remoteAddress ?? 'unknown';
-    const failures = recentFailures(client, now);
-    if (failures.length >= ACCESS_MAX_FAILURES) {
-      res.setHeader(
-        'Retry-After',
-        String(Math.max(1, Math.ceil((failures[0] + ACCESS_WINDOW_MS - now) / 1000))),
-      );
+    const retryAfter = accessFailures.retryAfterSeconds(client, now);
+    if (retryAfter) {
+      res.setHeader('Retry-After', String(retryAfter));
       return jsonError(
         res,
         fault(429, 'ACCESS_LOCKED', 'محاولات كثيرة خاطئة. انتظر 15 دقيقة ثم أعد المحاولة.'),
@@ -455,10 +481,10 @@ export function createApp(
     }
     const given = typeof req.body?.password === 'string' ? req.body.password : '';
     if (!given || given.length > 256 || !timingSafeEqual(digest(given), digest(accessPassword))) {
-      recordFailure(client, now);
+      accessFailures.recordFailure(client, now);
       return jsonError(res, fault(401, 'ACCESS_DENIED', 'كلمة المرور غير صحيحة.'));
     }
-    failedAttempts.delete(client);
+    accessFailures.clear(client);
     for (const [token, expires] of accessTokens) if (expires < now) accessTokens.delete(token);
     const token = randomBytes(32).toString('base64url');
     accessTokens.set(token, now + accessTtlMs);
@@ -483,7 +509,7 @@ export function createApp(
     res.status(204).end();
   });
   app.use('/api', (req, res, next) => {
-    if (req.path === '/health' || hasAccess(req)) return next();
+    if (req.path === '/health' || serviceRequests.has(req) || hasAccess(req)) return next();
     jsonError(res, fault(401, 'ACCESS_REQUIRED', 'أدخل كلمة مرور الدخول أولًا.'));
   });
   const demoIds = ['emp-noura', 'emp-omar', 'emp-sara', 'emp-reem', 'emp-abdullah', 'emp-hind'];
@@ -504,6 +530,15 @@ export function createApp(
     return value?.slice(cookieName.length + 1);
   };
   const actorFor = async (req: Request): Promise<Actor | undefined> => {
+    if (serviceRequests.has(req)) {
+      // The key acts as the granted finance account with the least role; cookies are ignored.
+      const employee = options.financeEmployeeId
+        ? await getEmployee(db, options.financeEmployeeId)
+        : undefined;
+      if (!employee || employee.status === 'suspended' || employee.status === 'terminated')
+        return undefined;
+      return { id: employee.id, role: 'employee' };
+    }
     const token = tokenFor(req);
     if (!token) return undefined;
     const session = sessions.get(token);

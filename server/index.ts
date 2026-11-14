@@ -36,6 +36,7 @@ const runtime =
             accessPassword: config.accessPassword,
             trustProxyHops: config.trustProxyHops,
             financeEmployeeId: process.env.HR_FINANCE_EMPLOYEE_ID,
+            financeApiKeyHashes: config.financeApiKeyHashes,
           }),
           close: () => db.close(),
         };
@@ -71,6 +72,8 @@ const runtime =
             app: createApp(db, {
               dataMode: privateData ? 'private' : 'synthetic',
               financeEmployeeId: privateData ? process.env.HR_FINANCE_EMPLOYEE_ID : undefined,
+              financeApiKeyHashes:
+                config.mode === 'private-local' ? config.financeApiKeyHashes : undefined,
             }),
             close: () => db.close(),
           };

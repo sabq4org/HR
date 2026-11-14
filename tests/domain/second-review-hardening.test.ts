@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createApp } from '../../server/app.js';
 import { createDatabase } from '../../server/database.js';
+import { generateServiceKey, hashServiceKey } from '../../server/finance/service-keys.js';
 
 const keyA = randomBytes(32).toString('base64url');
 const keyB = randomBytes(32).toString('base64url');
@@ -87,6 +88,41 @@ test('access gate locks only the client that failed, not the owner', async () =>
     assert.equal((await attempt('203.0.113.9', password, '198.51.100.1')).status, 429);
     const owner = await attempt('198.51.100.7', password);
     assert.equal(owner.status, 200, 'the owner still signs in from another address');
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    await db.close();
+  }
+});
+
+// Same flaw in the accountant service-key check: twenty junk keys from anyone used to
+// lock out the valid key for everyone.
+test('service-key lock counts per client, so junk keys cannot lock the accountant out', async () => {
+  const db = await createDatabase(':memory:', { seed: false });
+  await db.execute(
+    `INSERT INTO employees(id,employee_number,name,initials,title,department,email,location,join_date,role,color,access_role,employment_status)
+     VALUES('emp-key-owner','KEY-9','حساب اصطناعي','حس','اختبار','اختبار','key-owner@example.test','الرياض','2026-01-01','employee','#DCEEFF','finance','active')`,
+  );
+  const key = generateServiceKey();
+  const { server, port } = await listen(
+    createApp(db, {
+      dataMode: 'private',
+      financeEmployeeId: 'emp-key-owner',
+      financeApiKeyHashes: [hashServiceKey(key)],
+      trustProxyHops: 1,
+    }),
+  );
+  const attempt = (clientIp: string, token: string) =>
+    call(port, '/api/finance', {
+      headers: { authorization: `Bearer ${token}`, 'x-forwarded-for': clientIp },
+    });
+  try {
+    for (let i = 0; i < 20; i++)
+      assert.equal((await attempt('203.0.113.9', generateServiceKey())).status, 401);
+    const attacker = await attempt('203.0.113.9', key);
+    assert.equal(attacker.status, 429, 'the failing client stays locked');
+    assert.ok(Number(attacker.headers['retry-after']) > 0);
+    const accountant = await attempt('198.51.100.7', key);
+    assert.equal(accountant.status, 200, 'the accountant still gets in from another address');
   } finally {
     await new Promise<void>((done) => server.close(() => done()));
     await db.close();
