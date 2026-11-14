@@ -53,7 +53,11 @@ function FieldList({ file, items }: { file: EmployeeFile; items: FormField[] }) 
       {items.map((field) => (
         <div key={field.key}>
           <dt>{field.label}</dt>
-          <dd>{valueLabel(file.values[field.key], field, data.employees)}</dd>
+          <dd>
+            {field.type === 'employee' && field.key === 'managerId' && file.managerName
+              ? file.managerName
+              : valueLabel(file.values[field.key], field, data.employees)}
+          </dd>
         </div>
       ))}
     </dl>

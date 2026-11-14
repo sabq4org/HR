@@ -133,3 +133,41 @@ export function profileTabs(file: EmployeeFile) {
       : authorizedFields(file, tab).length > 0,
   );
 }
+
+const identityKeys = ['name', 'employeeNumber', 'department', 'title'];
+export const REPORT_DOCUMENT_LIMIT = 15;
+/**
+ * What the PDF report shows. The template renders from this, and the service export audits it,
+ * so the audit event names exactly the sections, fields and documents disclosed.
+ */
+export function reportSelection(file: EmployeeFile, includeLeave: boolean) {
+  const tabs = profileTabs(file).filter((tab) => includeLeave || tab !== 'الإجازات');
+  const fieldSections = tabs
+    .filter((tab) => tab !== 'الإجازات')
+    .map((tab) => ({
+      tab,
+      fields: splitFields(authorizedFields(file, tab), file.values).essential.filter(
+        (field) => !identityKeys.includes(field.key),
+      ),
+    }))
+    .filter((section) => section.fields.length > 0);
+  const leave = tabs.includes('الإجازات');
+  const documents = file.documents
+    .filter((doc) => doc.state === 'active')
+    .slice(0, REPORT_DOCUMENT_LIMIT);
+  const activeDocuments = file.documents.filter((doc) => doc.state === 'active').length;
+  const fieldKeys = [
+    ...identityKeys.filter((key) => isProfileFieldVisible(file, key)),
+    ...fieldSections.flatMap((section) => section.fields.map((field) => field.key)),
+    ...(leave && isProfileFieldVisible(file, 'annualLeaveEntitlement')
+      ? ['annualLeaveEntitlement']
+      : []),
+  ];
+  const sections = [
+    'الهوية الوظيفية',
+    ...fieldSections.map((section) => section.tab),
+    ...(leave ? ['الإجازات'] : []),
+    ...(documents.length ? ['الوثائق السارية'] : []),
+  ];
+  return { fieldSections, leave, documents, activeDocuments, fieldKeys, sections };
+}

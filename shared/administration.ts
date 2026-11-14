@@ -108,6 +108,8 @@ export interface EmploymentPeriod {
 }
 export interface EmployeeFile {
   employee: Employee;
+  /** Display name of the direct manager, so a self-service reader need not see the directory. */
+  managerName?: string | null;
   version: number;
   values: FormValues;
   editable: boolean;

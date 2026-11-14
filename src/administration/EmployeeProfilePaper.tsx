@@ -2,12 +2,11 @@ import { Children, type ReactNode } from 'react';
 import type { EmployeeFile, FormField } from '../../shared/administration';
 import { documentCategories } from '../../shared/catalog';
 import {
-  authorizedFields,
   hasFieldValue,
   isProfileFieldVisible,
   profileGroups,
-  profileTabs,
-  splitFields,
+  REPORT_DOCUMENT_LIMIT,
+  reportSelection,
 } from './profile-visibility';
 const date = (value: string | null | undefined) =>
   value
@@ -73,7 +72,10 @@ export function EmployeeProfilePaper({
   generated?: Date;
   includeLeave?: boolean;
 }) {
-  const tabs = profileTabs(file).filter((tab) => includeLeave || tab !== 'الإجازات');
+  const selection = reportSelection(file, includeLeave);
+  const people = file.managerName
+    ? [{ id: String(file.values.managerId ?? ''), name: file.managerName }, ...employees]
+    : employees;
   const generatedLabel = new Intl.DateTimeFormat('ar-SA-u-ca-gregory-nu-latn', {
     dateStyle: 'long',
     timeStyle: 'short',
@@ -86,7 +88,6 @@ export function EmployeeProfilePaper({
   const salaryTotal = recordedSalary.includes('basicSalary')
     ? recordedSalary.reduce((sum, key) => sum + Number(file.values[key]), 0)
     : null;
-  const activeDocuments = file.documents.filter((doc) => doc.state === 'active');
   return (
     <article className="employee-report" dir="rtl">
       <header className="employee-report-brand">
@@ -116,39 +117,32 @@ export function EmployeeProfilePaper({
           </div>
         </dl>
       </section>
-      {tabs
-        .filter((tab) => tab !== 'الإجازات')
-        .map((tab) => {
-          const { essential } = splitFields(authorizedFields(file, tab), file.values);
-          const shown = essential.filter(
-            (field) => !['name', 'employeeNumber', 'department', 'title'].includes(field.key),
-          );
-          if (!shown.length) return null;
-          return (
-            <section className="employee-report-section" key={tab}>
-              <h3>{profileGroups[tab].title}</h3>
-              <ReportFields>
-                {shown.map((field) => (
-                  <div key={field.key}>
-                    <dt>{field.label}</dt>
-                    <dd>{format(file.values[field.key], field, employees)}</dd>
-                  </div>
-                ))}
-                {tab === 'الراتب' && recordedSalary.length > 0 && (
-                  <div>
-                    <dt>إجمالي العناصر الثابتة المسجلة</dt>
-                    <dd>
-                      {salaryTotal === null
-                        ? 'غير متاح'
-                        : format(salaryTotal, { key: 'total', label: '', type: 'money' })}
-                    </dd>
-                  </div>
-                )}
-              </ReportFields>
-            </section>
-          );
-        })}
-      {tabs.includes('الإجازات') && (
+      {selection.fieldSections.map(({ tab, fields: shown }) => {
+        return (
+          <section className="employee-report-section" key={tab}>
+            <h3>{profileGroups[tab].title}</h3>
+            <ReportFields>
+              {shown.map((field) => (
+                <div key={field.key}>
+                  <dt>{field.label}</dt>
+                  <dd>{format(file.values[field.key], field, people)}</dd>
+                </div>
+              ))}
+              {tab === 'الراتب' && recordedSalary.length > 0 && (
+                <div>
+                  <dt>إجمالي العناصر الثابتة المسجلة</dt>
+                  <dd>
+                    {salaryTotal === null
+                      ? 'غير متاح'
+                      : format(salaryTotal, { key: 'total', label: '', type: 'money' })}
+                  </dd>
+                </div>
+              )}
+            </ReportFields>
+          </section>
+        );
+      })}
+      {selection.leave && (
         <section className="employee-report-section">
           <h3>الإجازات</h3>
           <ReportFields>
@@ -181,7 +175,7 @@ export function EmployeeProfilePaper({
           </ReportFields>
         </section>
       )}
-      {activeDocuments.length > 0 && (
+      {selection.documents.length > 0 && (
         <section className="employee-report-section">
           <h3>الوثائق السارية</h3>
           <table>
@@ -193,7 +187,7 @@ export function EmployeeProfilePaper({
               </tr>
             </thead>
             <tbody>
-              {activeDocuments.slice(0, 15).map((doc) => (
+              {selection.documents.map((doc) => (
                 <tr key={doc.id}>
                   <td>{doc.filename}</td>
                   <td>
@@ -205,7 +199,9 @@ export function EmployeeProfilePaper({
               ))}
             </tbody>
           </table>
-          {activeDocuments.length > 15 && <p>يعرض التقرير أحدث 15 وثيقة سارية.</p>}
+          {selection.activeDocuments > REPORT_DOCUMENT_LIMIT && (
+            <p>يعرض التقرير أحدث {REPORT_DOCUMENT_LIMIT} وثيقة سارية.</p>
+          )}
         </section>
       )}
       <section className="employee-report-signature">

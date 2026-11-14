@@ -31,7 +31,7 @@ import { hrDocumentHtml } from '../finance/document-html.js';
 import { createPayrollCommands, payrollCsv } from '../payroll/index.js';
 import { employeesTemplate } from '../imports/workbook.js';
 import { EmployeeProfilePaper } from '../../src/administration/EmployeeProfilePaper.js';
-import { profileTabs } from '../../src/administration/profile-visibility.js';
+import { reportSelection } from '../../src/administration/profile-visibility.js';
 import { PayslipPaper } from '../../src/payroll/PayslipPaper.js';
 import { IssuedLetter } from '../../src/letters/paper.js';
 import { SERVICE_ACCOUNT, type HrScope } from './keys.js';
@@ -105,16 +105,6 @@ export function maskEmployeeFile(
     },
     leaveMovements: leave?.leaveMovements ?? [],
   };
-}
-
-/** Section titles the printed report will contain (for the audit event; names only). */
-export function reportSections(file: EmployeeFile, includeLeave: boolean): string[] {
-  const sections: string[] = ['الهوية الوظيفية'];
-  sections.push(...profileTabs(file).filter((tab) => includeLeave || tab !== 'الإجازات'));
-  if (file.periods.length) sections.push('فترات العمل');
-  if (file.documents.length) sections.push('الوثائق');
-  if (file.fieldHistory.length) sections.push('سجل التغييرات');
-  return sections;
 }
 
 /** The employee report HTML for the key's scopes, plus the masked file it was drawn from. */
@@ -196,16 +186,18 @@ export function registerHrServiceExports(app: Express, { db, contextFor, private
         dataModeLabel,
       );
       const bytes = await pdfOr503(html);
+      const selection = reportSelection(file, includeLeave);
       await audit(context, employee.id, 'service_export_profile_report', {
         employeeId: employee.id,
-        sections: reportSections(file, includeLeave),
+        sections: selection.sections,
         included: {
           compensation: context.scopes.includes('hr.compensation.read'),
           personalAndMedical: context.scopes.includes('hr.sensitive.read'),
           leave: includeLeave,
         },
-        fields: file.visibleFieldKeys.filter((key) => fieldByKey.get(key)?.sensitive).sort(),
-        documents: file.documents.length,
+        // Exactly what the template rendered: essential fields only, active documents up to the limit.
+        fields: selection.fieldKeys.filter((key) => fieldByKey.get(key)?.sensitive).sort(),
+        documents: selection.documents.length,
       });
       sendPdf(res, `employee-report-${employee.employee_number}`, bytes);
     }),

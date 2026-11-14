@@ -241,6 +241,8 @@ async function scenario(db: Db) {
       });
       assert.ok(details.sections.includes('الراتب') && details.sections.includes('التأمينات'));
       assert.ok(details.fields.includes('iban') && details.fields.includes('nationalId'));
+      // The audit names only what the report rendered: the medical provider is not in it.
+      assert.ok(!details.fields.includes('medicalProvider'));
       const raw = JSON.stringify(event);
       for (const value of [SYNTHETIC_IBAN, SYNTHETIC_ID, SYNTHETIC_PROVIDER, '12345'])
         assert.ok(!raw.includes(value), 'audit holds names only');
