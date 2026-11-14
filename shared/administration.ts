@@ -115,7 +115,54 @@ export interface EmployeeFile {
   requests: AdministrativeRequest[];
   documents: EmployeeDocument[];
   completeness: { completed: number; total: number; missing: string[] };
+  visibleFieldKeys: string[];
   history: WorkflowEvent[];
+  sectionReadiness: Record<
+    string,
+    {
+      completed: number;
+      total: number;
+      missing: string[];
+      status: 'complete' | 'incomplete' | 'unverified' | 'not_applicable';
+    }
+  >;
+  fieldHistory: EmployeeFieldHistory[];
+  leaveSummary: {
+    openingBalance: number | null;
+    allocated: number | null;
+    available: number | null;
+    taken: number;
+    adjustments: number;
+    reserved: number;
+    policyApproved: boolean;
+    balanceKnown: boolean;
+  };
+  leaveMovements: LeaveMovement[];
+  closedPayslips: ClosedPayslipReference[];
+}
+export interface EmployeeFieldHistory {
+  id: string;
+  fieldKey: string;
+  oldValue: Scalar | null;
+  newValue: Scalar | null;
+  effectiveAt: string;
+  reason: string | null;
+  actorId: string;
+  actorName: string;
+  createdAt: string;
+}
+export interface LeaveMovement {
+  id: string;
+  kind: string;
+  days: number;
+  createdAt: string;
+  effectiveAt: string;
+  source: string;
+}
+export interface ClosedPayslipReference {
+  runId: string;
+  period: string;
+  closedAt: string | null;
 }
 export interface EmployeeDocument {
   id: string;

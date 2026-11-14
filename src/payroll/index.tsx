@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Check, CircleDollarSign, Download, FileText, RefreshCw, Send } from 'lucide-react';
 import type { PayrollLine, PayrollRun } from '../../shared/administration';
 import './payroll.css';
@@ -57,6 +58,9 @@ async function request<T>(path: string, method = 'GET', body?: unknown): Promise
   return value as T;
 }
 export function PayrollPage({ actor }: Props) {
+  const [searchParams] = useSearchParams();
+  const linkedRun = searchParams.get('run');
+  const linkedEmployee = searchParams.get('employee');
   const [runs, setRuns] = useState<PayrollRun[]>([]),
     [selected, setSelected] = useState<PayrollRun | null>(null),
     [busy, setBusy] = useState(false),
@@ -94,6 +98,31 @@ export function PayrollPage({ actor }: Props) {
     setExcludedCount(0);
     void load();
   }, [actor.id, load]);
+  useEffect(() => {
+    if (!linkedRun) return;
+    let active = true;
+    // The server checks run and employee access; query parameters grant no permissions.
+    void request<{ run: PayrollRun }>(`/${encodeURIComponent(linkedRun)}`)
+      .then(({ run }) => {
+        if (!active) return;
+        if (run.state !== 'closed') {
+          setError('الكشف المرتبط غير متاح حتى إغلاق المسير.');
+          return;
+        }
+        setSelected(run);
+        setPrintEmployeeId(
+          linkedEmployee && run.lines.some((line) => line.employeeId === linkedEmployee)
+            ? linkedEmployee
+            : '',
+        );
+      })
+      .catch((error: Error) => {
+        if (active) setError(error.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [actor.id, linkedRun, linkedEmployee]);
   const create = async (correctionOf?: string, targetPeriod = period) => {
     setBusy(true);
     setError('');

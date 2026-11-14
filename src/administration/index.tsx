@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { IssuedLetter } from '../letters';
 import {
   Archive,
@@ -17,6 +17,14 @@ import {
   X,
 } from 'lucide-react';
 import { api, Avatar, Modal, PageHeading, useApp } from '../lib';
+import { EmployeeProfileReport } from './EmployeeProfileReport';
+import {
+  isProfileFieldVisible,
+  ProfileReadiness,
+  ProfileTab,
+  profileTabs,
+  visibleEmployeeFields,
+} from './EmployeeProfileSections';
 import type {
   AdministrativeOverview,
   AdministrativeRequest,
@@ -292,6 +300,12 @@ function Field({
   onChange: (v: string | number | boolean) => void;
 }) {
   const { data } = useApp();
+  const departmentOptions: string[] =
+    field.key === 'department'
+      ? [
+          ...new Set(data.employees.map((employee) => employee.department.trim()).filter(Boolean)),
+        ].sort((a, b) => a.localeCompare(b, 'ar'))
+      : [];
   const common = {
     id: field.key,
     name: field.key,
@@ -338,6 +352,7 @@ function Field({
       ) : (
         <input
           {...common}
+          list={field.key === 'department' ? 'employee-departments' : undefined}
           type={
             field.type === 'date'
               ? 'date'
@@ -354,11 +369,20 @@ function Field({
           onChange={(e) =>
             onChange(
               field.type === 'number' || field.type === 'money'
-                ? Number(e.target.value)
+                ? e.target.value === ''
+                  ? ''
+                  : Number(e.target.value)
                 : e.target.value,
             )
           }
         />
+      )}
+      {field.key === 'department' && (
+        <datalist id="employee-departments">
+          {departmentOptions.map((department) => (
+            <option key={department} value={department} />
+          ))}
+        </datalist>
       )}
       {field.hint && <small>{field.hint}</small>}
     </label>
@@ -514,7 +538,13 @@ function fieldsByGroup(fields: FormField[]) {
   }, {});
 }
 
-export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
+export function EmployeeFilePage({
+  employeeId,
+  title = 'الملف الوظيفي',
+}: {
+  employeeId?: string;
+  title?: string;
+}) {
   const { data, notify, refresh } = useApp();
   const id = employeeId || data.me.id;
   const {
@@ -530,6 +560,19 @@ export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [editGroup, setEditGroup] = useState('');
+  const [profileSearch, setProfileSearch] = useSearchParams();
+  const reportOpen = profileSearch.get('view') === 'report';
+  const setReportOpen = (open: boolean) => {
+    setProfileSearch(
+      (current) => {
+        const next = new URLSearchParams(current);
+        if (open) next.set('view', 'report');
+        else next.delete('view');
+        return next;
+      },
+      { replace: !open },
+    );
+  };
   useEffect(() => {
     if (file) setValues(file.values);
   }, [file]);
@@ -556,28 +599,30 @@ export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
   };
   if (loading)
     return (
-      <Shell title="الملف الوظيفي" subtitle="بيانات الموظف وسجلها">
+      <Shell title={title} subtitle="بيانات العمل والبنك والتأمينات والإجازات، في ملف واحد.">
         <Busy />
       </Shell>
     );
   if (error)
     return (
-      <Shell title="الملف الوظيفي" subtitle="بيانات الموظف وسجلها">
+      <Shell title={title} subtitle="بيانات العمل والبنك والتأمينات والإجازات، في ملف واحد.">
         <Notice error={error} retry={() => void reload()} />
       </Shell>
     );
   if (!file) return null;
+  if (reportOpen) return <EmployeeProfileReport file={file} onBack={() => setReportOpen(false)} />;
   const employee = file.employee;
-  const groups = fieldsByGroup(employeeFields as FormField[]);
-  const tabs = ['البيانات', 'الوثائق', 'فترات العمل', 'الطلبات', 'سجل التغييرات'];
+  const editableEmployeeFields = visibleEmployeeFields(file);
+  const detailsTabs = profileTabs(file);
+  const tabs = [...detailsTabs, 'الوثائق', 'فترات العمل', 'الطلبات', 'سجل التغييرات'];
   return (
     <Shell
-      title="الملف الوظيفي"
-      subtitle="بيانات الموظف وسجلها"
+      title={title}
+      subtitle="بيانات العمل والبنك والتأمينات والإجازات، في ملف واحد."
       action={
         <>
-          <button className="adm-button secondary" onClick={() => window.print()}>
-            <Printer size={16} /> طباعة
+          <button className="adm-button secondary" onClick={() => setReportOpen(true)}>
+            <FileText size={16} /> تقرير PDF
           </button>
           {editable && tab === 'البيانات' && (
             <ActionButton onClick={() => setEditing(!editing)}>
@@ -607,6 +652,12 @@ export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
           <span>وثائق سارية من {file.documents.length}</span>
         </div>
       </header>
+      <div className="profile-shortcuts">
+        <Link to={id === data.me.id ? '/profile/overview' : `/employees/${id}/overview`}>
+          عرض الملخص الوظيفي <ArrowRight size={14} />
+        </Link>
+      </div>
+      <ProfileReadiness file={file} />
       {!editable && (
         <p className="adm-note">
           <ShieldCheck size={16} /> بياناتك للعرض فقط. تواصل مع الشؤون الإدارية لتصحيحها.
@@ -619,10 +670,10 @@ export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
           </button>
         ))}
       </nav>
-      {tab === 'البيانات' &&
+      {detailsTabs.includes(tab) &&
         (editing ? (
           <EmployeeWizard
-            fields={employeeFields as FormField[]}
+            fields={editableEmployeeFields}
             values={values}
             setValues={setValues}
             busy={busy}
@@ -634,27 +685,7 @@ export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
             submitLabel="حفظ التعديلات"
           />
         ) : (
-          <div className="adm-groups">
-            {Object.entries(groups).map(([group, fields]) => (
-              <section className="adm-section" key={group}>
-                <h3>{group}</h3>
-                <dl className="adm-details">
-                  {fields.map((f) => (
-                    <div key={f.key}>
-                      <dt>{f.label}</dt>
-                      <dd>{displayValue(file.values[f.key], f, data.employees)}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-            ))}
-            {file.completeness.missing.length > 0 && (
-              <section className="adm-section">
-                <h3>بيانات تحتاج استكمالًا</h3>
-                <p>{file.completeness.missing.join('، ')}</p>
-              </section>
-            )}
-          </div>
+          <ProfileTab file={file} tab={tab} />
         ))}
       {tab === 'الوثائق' && (
         <>
@@ -683,16 +714,63 @@ export function EmployeeFilePage({ employeeId }: { employeeId?: string }) {
       )}
       {tab === 'الطلبات' && <RequestRows requests={file.requests} />}
       {tab === 'سجل التغييرات' && (
-        <Table headers={['التاريخ', 'المنفذ', 'الإجراء', 'السبب']}>
-          {file.history.map((h) => (
-            <tr key={h.id}>
-              <td>{date(h.createdAt)}</td>
-              <td>{h.actorName}</td>
-              <td>{actionNames[h.action] || 'إجراء مسجل'}</td>
-              <td>{h.reason || '—'}</td>
-            </tr>
-          ))}
-        </Table>
+        <>
+          {file.fieldHistory.filter((entry) => isProfileFieldVisible(file, entry.fieldKey)).length >
+            0 && (
+            <section className="adm-section profile-section">
+              <h3>تغييرات البيانات</h3>
+              <Table
+                headers={[
+                  'الحقل',
+                  'القيمة السابقة',
+                  'القيمة الجديدة',
+                  'السريان',
+                  'المنفذ',
+                  'السبب',
+                ]}
+              >
+                {file.fieldHistory
+                  .filter((entry) => isProfileFieldVisible(file, entry.fieldKey))
+                  .map((entry) => {
+                    const field = (employeeFields as FormField[]).find(
+                      (item) => item.key === entry.fieldKey,
+                    );
+                    return (
+                      <tr key={entry.id}>
+                        <td>{field?.label || entry.fieldKey}</td>
+                        <td>
+                          {entry.oldValue === null
+                            ? 'غير مسجل'
+                            : displayValue(entry.oldValue, field)}
+                        </td>
+                        <td>
+                          {entry.newValue === null
+                            ? 'غير مسجل'
+                            : displayValue(entry.newValue, field)}
+                        </td>
+                        <td>{date(entry.effectiveAt)}</td>
+                        <td>{entry.actorName || '—'}</td>
+                        <td>{entry.reason || '—'}</td>
+                      </tr>
+                    );
+                  })}
+              </Table>
+            </section>
+          )}
+          <section className="adm-section profile-section">
+            <h3>سجل الإجراءات</h3>
+            <Table headers={['التاريخ', 'المنفذ', 'الإجراء', 'السبب']}>
+              {file.history.map((h) => (
+                <tr key={h.id}>
+                  <td>{date(h.createdAt)}</td>
+                  <td>{h.actorName}</td>
+                  <td>{actionNames[h.action] || 'إجراء مسجل'}</td>
+                  <td>{h.reason || '—'}</td>
+                </tr>
+              ))}
+            </Table>
+          </section>
+        </>
       )}
     </Shell>
   );
@@ -879,6 +957,7 @@ export function EmployeeCreateDialog({
 
 export function ServicesPage() {
   const { data, notify } = useApp();
+  const [searchParams] = useSearchParams();
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<RequestKind | null>(null);
   const [values, setValues] = useState<FormValues>({});
@@ -889,6 +968,15 @@ export function ServicesPage() {
   const visible = (formDefinitions as typeof formDefinitions).filter(
     (f) => f.initiators.includes(data.me.role) && `${f.title} ${f.description}`.includes(query),
   );
+  useEffect(() => {
+    const requestedKind = searchParams.get('kind') as RequestKind | null;
+    if (requestedKind && visible.some((form) => form.kind === requestedKind)) {
+      setKind(requestedKind);
+      setSubjectId(data.me.id);
+      setValues({});
+      setError('');
+    }
+  }, [searchParams, data.me.id, data.me.role]);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!kind) return;

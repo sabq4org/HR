@@ -67,6 +67,24 @@ function mapChange(row: any): LeaveChangeRequest {
 async function actorEmployee(db: Db, id: string, tx: AsyncDb = db) {
   return (await tx.read<any>('SELECT * FROM employee_access WHERE id=?', [id]))[0];
 }
+async function assertOpeningAvailable(tx: AsyncDb, employeeId: string, opening: number) {
+  // Zero attaches a policy without adding days. Positive openings must be unique
+  // across both the employee-file workflow and the policy-assignment workflow.
+  if (opening === 0) return;
+  const existing = await tx.read(
+    `SELECT 1 AS found FROM leave_balance_openings WHERE employee_id=?
+     UNION ALL SELECT 1 FROM leave_ledger WHERE employee_id=?
+     UNION ALL SELECT 1 FROM leave_policy_assignments WHERE employee_id=? AND approval_status='approved'
+     LIMIT 1`,
+    [employeeId, employeeId, employeeId],
+  );
+  if (existing.length)
+    throw fail(
+      409,
+      'OPENING_BALANCE_ALREADY_EXISTS',
+      'يوجد رصيد افتتاحي أو حركة سابقة؛ أسند السياسة برصيد إضافي صفر، واستخدم تسوية مستقلة لتصحيح الرصيد.',
+    );
+}
 async function policyForEmployee(db: Db, employeeId: string, date: string, tx: AsyncDb = db) {
   return (
     await tx.read<any>(
@@ -349,6 +367,7 @@ export function registerLeaveRoutes(
         )[0];
         if (conflict)
           throw fail(409, 'ASSIGNMENT_OVERLAP', 'تتداخل فترة الإسناد مع سياسة أخرى للموظف.');
+        await assertOpeningAvailable(tx, b.employeeId, b.openingBalance);
         const id = randomUUID();
         const now = new Date().toISOString();
         await tx.execute(
@@ -449,6 +468,7 @@ export function registerLeaveRoutes(
           const reference = req.body?.approvalReference;
           if (typeof reference !== 'string' || !reference.trim() || reference.length > 200)
             throw fail(400, 'APPROVAL_REFERENCE_REQUIRED', 'أدخل مرجع اعتماد الرصيد الافتتاحي.');
+          await assertOpeningAvailable(tx, row.employee_id, row.opening_balance);
           const now = new Date().toISOString();
           const updated = await tx.execute(
             "UPDATE leave_policy_assignments SET approval_status='approved',approved_by=?,approved_at=? WHERE id=? AND approval_status='pending'",

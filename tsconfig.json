@@ -20,6 +20,7 @@
     "tests",
     "vite.config.ts",
     "playwright.config.ts",
+    "playwright.finance.config.ts",
     "scripts"
   ]
 }

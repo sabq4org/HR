@@ -42,7 +42,9 @@ export async function createIssuedDocument(
     fact('الرقم الوظيفي', 'Employee number', employee.employee_number),
     fact('المسمى الوظيفي', 'Job title', employee.title),
     fact('الإدارة', 'Department', employee.department),
-    fact('تاريخ المباشرة', 'Employment start', employee.join_date),
+    ...(request.kind === 'experience_letter'
+      ? []
+      : [fact('تاريخ المباشرة', 'Employment start', employee.join_date)]),
   ];
   let paragraphs: string[];
   if (request.kind === 'salary_letter') {
@@ -97,10 +99,22 @@ export async function createIssuedDocument(
       'أُعد للغرض الذي حدده صاحب الطلب، اعتمادًا على بيانات المعاينة الاصطناعية.',
     ];
   } else if (request.kind === 'experience_letter') {
-    const periods = await db.read<{ start_date: string; end_date: string | null }>(
-      'SELECT start_date,end_date FROM employment_periods WHERE employee_id=? ORDER BY start_date',
+    const allPeriods = await db.read<{
+      start_date: string;
+      end_date: string | null;
+      status: string;
+    }>(
+      'SELECT start_date,end_date,status FROM employment_periods WHERE employee_id=? ORDER BY start_date',
       [employee.id],
     );
+    const periods = allPeriods.filter((p) =>
+      ['verified', 'synthetic-demo-only'].includes(p.status),
+    );
+    if (periods.length === 0 || periods.length !== allPeriods.length)
+      throw Object.assign(
+        new Error('لا يمكن إصدار شهادة خبرة قبل التحقق من فترات العمل ومصادرها.'),
+        { status: 409, code: 'EXPERIENCE_PERIODS_UNVERIFIED' },
+      );
     periods.forEach((p, i) =>
       facts.push(
         fact(

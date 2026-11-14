@@ -1,5 +1,5 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Employee, LeaveRequest, Role } from '../shared/contracts.js';
 import {
   createDatabase,
@@ -14,6 +14,9 @@ import { createAccountAccess } from './access/index.js';
 import { registerPilotStatus } from './pilot-status.js';
 import { currentPolicy, leaveChangesFor, registerLeaveRoutes } from './leave/routes.js';
 import { annualLeaveDays } from '../shared/leave.js';
+import { decryptSensitive } from './administration/security.js';
+import { canAccessFinance, registerFinance } from './finance/routes.js';
+import { bearerToken, inAccountantScope, matchesServiceKey } from './finance/service-keys.js';
 
 type Session = Actor & { expiresAt: number };
 type EmployeeRow = {
@@ -28,6 +31,7 @@ type EmployeeRow = {
   manager_id: string | null;
   join_date: string;
   role: Role;
+  access_role: Role | null;
   color: string;
   status: Employee['status'];
 };
@@ -88,8 +92,9 @@ async function getEmployee(
 ): Promise<EmployeeRow | undefined> {
   return (await query.read<EmployeeRow>('SELECT * FROM employee_access WHERE id=?', [id]))[0];
 }
-function toEmployee(row: EmployeeRow): Employee {
+function toEmployee(row: EmployeeRow, photos?: Map<string, string>): Employee {
   return {
+    photoId: photos?.get(row.id) ?? null,
     id: row.id,
     employeeNumber: row.employee_number,
     name: row.name,
@@ -104,6 +109,24 @@ function toEmployee(row: EmployeeRow): Employee {
     color: row.color,
     status: row.status,
   };
+}
+/** Latest active profile photo (document category 'photo') per employee; ids only, no bytes. */
+async function photoIds(query: AsyncDb, employeeIds?: string[]): Promise<Map<string, string>> {
+  const rows = await query.read<{ id: string; employee_id: string }>(
+    "SELECT id,employee_id FROM employee_documents WHERE category='photo' AND state='active' ORDER BY uploaded_at,id",
+  );
+  const wanted = employeeIds ? new Set(employeeIds) : undefined;
+  const map = new Map<string, string>();
+  for (const row of rows)
+    if (!wanted || wanted.has(row.employee_id)) map.set(row.employee_id, row.id);
+  return map;
+}
+function mayViewEmployee(actor: Actor, target: EmployeeRow): boolean {
+  return (
+    actor.role === 'hr' ||
+    target.id === actor.id ||
+    (actor.role === 'manager' && target.manager_id === actor.id)
+  );
 }
 async function toLeave(db: Db, row: LeaveRow, query: AsyncDb = db): Promise<LeaveRequest> {
   const employee = (await getEmployee(db, row.employee_id, query))!;
@@ -263,12 +286,43 @@ async function demoRules(
   };
 }
 
+function dataModeLabel(publicOrigin: string | undefined, privateData: boolean) {
+  if (privateData) return publicOrigin ? ('private-hosted' as const) : ('private-local' as const);
+  return publicOrigin ? ('synthetic-hosted' as const) : ('synthetic-local' as const);
+}
+
 export function createApp(
   database: Db,
-  options: { sessionTtlMs?: number; publicOrigin?: string; authMode?: 'demo' | 'accounts' } = {},
+  options: {
+    sessionTtlMs?: number;
+    publicOrigin?: string;
+    authMode?: 'demo' | 'accounts';
+    dataMode?: 'synthetic' | 'private';
+    accessPassword?: string;
+    financeEmployeeId?: string;
+    financeClientFactory?: Parameters<typeof registerFinance>[1]['createClient'];
+    financeApiKeyHashes?: readonly string[];
+  } = {},
 ) {
   const db = database;
   const authMode = options.authMode ?? 'demo';
+  const privateData = options.dataMode === 'private';
+  const financeOptions = { privateMode: privateData, allowedActorId: options.financeEmployeeId };
+  const accessPassword = options.accessPassword;
+  if (accessPassword !== undefined && accessPassword.length < 12)
+    throw new Error('The access password must be at least 12 characters.');
+  if (privateData && options.publicOrigin && !accessPassword && authMode !== 'accounts')
+    throw new Error('Private data on a public origin requires an access password.');
+  const mode =
+    authMode === 'accounts'
+      ? 'operational'
+      : privateData
+        ? options.publicOrigin
+          ? 'private-hosted'
+          : 'private-local'
+        : options.publicOrigin
+          ? 'synthetic-hosted'
+          : 'synthetic-local';
   const app = express();
   const sessions = new Map<string, Session>();
   const sessionTtlMs = options.sessionTtlMs ?? 8 * 60 * 60 * 1000;
@@ -295,15 +349,53 @@ export function createApp(
   });
   app.use((req, res, next) => {
     const host = req.get('host')?.toLowerCase();
-    if (pinnedOrigin ? host !== pinnedOrigin.host.toLowerCase() : !safeHost(host))
+    const railwayHealthcheck =
+      privateData &&
+      pinnedOrigin &&
+      host === 'healthcheck.railway.app' &&
+      req.path === '/api/health' &&
+      (req.method === 'GET' || req.method === 'HEAD');
+    if (
+      !railwayHealthcheck &&
+      (pinnedOrigin ? host !== pinnedOrigin.host.toLowerCase() : !safeHost(host))
+    )
       return jsonError(
         res,
         fault(403, 'LOCAL_HOST_REQUIRED', 'يُسمح بالوصول عبر المضيف المحدد فقط.'),
       );
     next();
   });
+  // Accountant service keys (Authorization: Bearer sabqfin_...). Finance scope only.
+  const serviceRequests = new WeakSet<Request>();
+  const failedKeyAttempts: number[] = [];
   app.use((req, res, next) => {
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    const token = bearerToken(req.get('authorization'));
+    if (token === undefined) return next();
+    const now = Date.now();
+    while (failedKeyAttempts.length && failedKeyAttempts[0] < now - 15 * 60 * 1000)
+      failedKeyAttempts.shift();
+    if (failedKeyAttempts.length >= 20)
+      return jsonError(
+        res,
+        fault(429, 'API_KEY_LOCKED', 'محاولات مفاتيح خاطئة كثيرة. انتظر 15 دقيقة.'),
+      );
+    const hashes = options.financeApiKeyHashes ?? [];
+    if (!privateData || !options.financeEmployeeId || hashes.length === 0)
+      return jsonError(
+        res,
+        fault(401, 'API_KEY_DISABLED', 'مفاتيح الخدمة غير مفعّلة في هذه النسخة.'),
+      );
+    if (!token || !matchesServiceKey(token, hashes)) {
+      failedKeyAttempts.push(now);
+      return jsonError(res, fault(401, 'INVALID_API_KEY', 'مفتاح الخدمة غير صالح.'));
+    }
+    if (!inAccountantScope(req.method, req.path))
+      return jsonError(res, fault(403, 'API_KEY_SCOPE', 'مفتاح المحاسب مقصور على النظام المالي.'));
+    serviceRequests.add(req);
+    next();
+  });
+  app.use((req, res, next) => {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !serviceRequests.has(req)) {
       const origin = req.get('origin');
       if (!origin)
         return jsonError(res, fault(403, 'ORIGIN_REQUIRED', 'يلزم طلب من المصدر المحلي نفسه.'));
@@ -334,18 +426,101 @@ export function createApp(
     express.json({ limit: '3mb' }),
   );
   app.use('/api/admin/imports/employees/commit', express.json({ limit: '512kb' }));
+  app.use((req, res, next) => {
+    if (!serviceRequests.has(req) || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method))
+      return next();
+    const hasBody =
+      Number(req.get('content-length') ?? 0) > 0 || Boolean(req.get('transfer-encoding'));
+    if (hasBody && !req.is('application/json'))
+      return jsonError(res, fault(415, 'JSON_REQUIRED', 'أرسل البيانات بصيغة JSON.'));
+    next();
+  });
   app.use(express.json({ limit: '64kb' }));
   const accountAccess =
     authMode === 'accounts' ? createAccountAccess(db, { secure: !!pinnedOrigin }) : undefined;
   accountAccess?.register(app);
+
+  // Access gate (private hosted mode): one password, set as a deployment secret, must be
+  // entered before any API other than health and the gate itself answers. Interim until SSO.
+  const accessCookie = pinnedOrigin ? '__Host-sabq_hr_access' : 'sabq_hr_access';
+  const accessTtlMs = 12 * 60 * 60 * 1000;
+  const accessTokens = new Map<string, number>();
+  const failedAttempts: number[] = [];
+  const digest = (value: string) => createHash('sha256').update(value, 'utf8').digest();
+  const accessToken = (req: Request) =>
+    (req.headers.cookie ?? '')
+      .split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${accessCookie}=`))
+      ?.slice(accessCookie.length + 1);
+  const hasAccess = (req: Request) => {
+    if (!accessPassword) return true;
+    const token = accessToken(req);
+    const expires = token ? accessTokens.get(token) : undefined;
+    if (!token || !expires) return false;
+    if (expires < Date.now()) {
+      accessTokens.delete(token);
+      return false;
+    }
+    return true;
+  };
+  app.get('/api/access', (req, res) =>
+    res.json({ required: !!accessPassword, granted: hasAccess(req) }),
+  );
+  app.post('/api/access', (req, res) => {
+    if (!accessPassword) return res.json({ required: false, granted: true });
+    const now = Date.now();
+    while (failedAttempts.length && failedAttempts[0] < now - 15 * 60 * 1000)
+      failedAttempts.shift();
+    if (failedAttempts.length >= 10)
+      return jsonError(
+        res,
+        fault(429, 'ACCESS_LOCKED', 'محاولات كثيرة خاطئة. انتظر 15 دقيقة ثم أعد المحاولة.'),
+      );
+    const given = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!given || given.length > 256 || !timingSafeEqual(digest(given), digest(accessPassword))) {
+      failedAttempts.push(now);
+      return jsonError(res, fault(401, 'ACCESS_DENIED', 'كلمة المرور غير صحيحة.'));
+    }
+    for (const [token, expires] of accessTokens) if (expires < now) accessTokens.delete(token);
+    const token = randomBytes(32).toString('base64url');
+    accessTokens.set(token, now + accessTtlMs);
+    res.cookie(accessCookie, token, {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: !!pinnedOrigin,
+      path: '/',
+      maxAge: accessTtlMs,
+    });
+    res.json({ required: true, granted: true });
+  });
+  app.delete('/api/access', (req, res) => {
+    const token = accessToken(req);
+    if (token) accessTokens.delete(token);
+    res.clearCookie(accessCookie, {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: !!pinnedOrigin,
+      path: '/',
+    });
+    res.status(204).end();
+  });
+  app.use('/api', (req, res, next) => {
+    if (req.path === '/health' || serviceRequests.has(req) || hasAccess(req)) return next();
+    jsonError(res, fault(401, 'ACCESS_REQUIRED', 'أدخل كلمة مرور الدخول أولًا.'));
+  });
   const demoIds = ['emp-noura', 'emp-omar', 'emp-sara', 'emp-reem', 'emp-abdullah', 'emp-hind'];
   const personaRows = async () =>
     authMode === 'accounts'
       ? []
-      : db.read<EmployeeRow>(
-          `SELECT * FROM employee_access WHERE id IN (${demoIds.map((_, i) => `?`).join(',')}) ORDER BY id`,
-          demoIds,
-        );
+      : privateData
+        ? db.read<EmployeeRow>(
+            "SELECT * FROM employee_access WHERE access_role IS NOT NULL AND access_role<>'employee' AND status NOT IN ('suspended','terminated') ORDER BY name,id",
+          )
+        : db.read<EmployeeRow>(
+            `SELECT * FROM employee_access WHERE id IN (${demoIds.map((_, i) => `?`).join(',')}) ORDER BY id`,
+            demoIds,
+          );
   const tokenFor = (req: Request) => {
     const value = (req.headers.cookie ?? '')
       .split(';')
@@ -354,6 +529,15 @@ export function createApp(
     return value?.slice(cookieName.length + 1);
   };
   const actorFor = async (req: Request): Promise<Actor | undefined> => {
+    if (serviceRequests.has(req)) {
+      // The key acts as the granted finance account with the least role; cookies are ignored.
+      const employee = options.financeEmployeeId
+        ? await getEmployee(db, options.financeEmployeeId)
+        : undefined;
+      if (!employee || employee.status === 'suspended' || employee.status === 'terminated')
+        return undefined;
+      return { id: employee.id, role: 'employee' };
+    }
     if (accountAccess) return accountAccess.actorFor(req);
     const token = tokenFor(req);
     if (!token) return undefined;
@@ -364,7 +548,12 @@ export function createApp(
       return undefined;
     }
     const employee = await getEmployee(db, session.id);
-    if (!employee || employee.status === 'suspended' || employee.status === 'terminated') {
+    if (
+      !employee ||
+      employee.status === 'suspended' ||
+      employee.status === 'terminated' ||
+      (privateData && (!employee.access_role || employee.access_role === 'employee'))
+    ) {
       sessions.delete(token);
       return undefined;
     }
@@ -441,8 +630,7 @@ export function createApp(
       return value;
     });
   };
-  const runtimeMode =
-    authMode === 'accounts' ? 'operational' : pinnedOrigin ? 'synthetic-hosted' : 'synthetic-local';
+  const runtimeMode = mode;
   app.get('/api/health', async (_req, res) => {
     try {
       await db.read('SELECT 1 AS healthy');
@@ -459,9 +647,10 @@ export function createApp(
         .filter((e) => e.status !== 'suspended' && e.status !== 'terminated')
         .map((e) => ({ id: e.id, name: e.name, role: e.role, title: e.title }));
       res.json({
-        me: employee ? toEmployee(employee) : null,
+        me: employee ? toEmployee(employee, await photoIds(db, [employee.id])) : null,
         personas,
         mode: runtimeMode,
+        authMode,
       });
     } catch (e) {
       jsonError(res, e as ApiFault);
@@ -471,8 +660,8 @@ export function createApp(
     try {
       if (accountAccess) throw fault(404, 'NOT_FOUND', 'المسار غير موجود.');
       const id = req.body?.employeeId;
-      if (!demoIds.includes(id))
-        throw fault(400, 'INVALID_PERSONA', 'اختر إحدى شخصيات التجربة المتاحة.');
+      if (typeof id !== 'string' || !(await personaRows()).some((p) => p.id === id))
+        throw fault(400, 'INVALID_PERSONA', 'اختر أحد الحسابات المتاحة.');
       const employee = await getEmployee(db, id);
       if (!employee || employee.status === 'suspended' || employee.status === 'terminated')
         throw fault(400, 'INVALID_PERSONA', 'الشخصية التجريبية غير متاحة.');
@@ -528,6 +717,7 @@ export function createApp(
             ? all.filter((e) => e.id === actor.id || e.manager_id === actor.id)
             : [me];
       const ids = new Set(visible.map((e) => e.id));
+      const photos = await photoIds(db, [...ids]);
       const rows = await db.read<LeaveRow>(
         'SELECT * FROM leave_requests ORDER BY created_at DESC,id',
       );
@@ -544,32 +734,31 @@ export function createApp(
         request_id?: string | null;
       }>('SELECT * FROM outbox WHERE recipient_id=? ORDER BY created_at DESC,id DESC', [actor.id]);
       let policyConfigured = false;
-      let policySummary = {
+      let policy = {
         name: 'سياسة الإجازة السنوية غير مسندة',
         version: 'غير متاحة',
         description: 'يجب اعتماد سياسة وإسنادها قبل طلب الإجازة.',
         workingDays: [] as number[],
         holidayDates: [] as string[],
       };
-      if (authMode === 'demo') {
+      if (authMode === 'demo' && !privateData) {
         const rules = await demoRules(db, actor.id);
         policyConfigured = true;
-        policySummary = {
+        policy = {
           name: 'سياسة الإجازة السنوية التجريبية',
           version: rules.version,
           description: `قاعدة محلية اصطناعية فقط؛ ${rules.source}`,
           workingDays: rules.workingDays,
           holidayDates: [],
         };
-      }
-      if (authMode === 'accounts') {
+      } else if (authMode === 'accounts') {
         const assigned = await db.read<any>(
           `SELECT p.* FROM leave_policy_assignments a JOIN policy_versions p ON p.id=a.policy_version_id
           WHERE a.employee_id=? AND a.approval_status='approved' AND a.effective_from<=? AND (a.effective_to IS NULL OR a.effective_to>=?) AND p.approval_status='approved' AND p.effective_from<=? AND (p.effective_to IS NULL OR p.effective_to>=?) ORDER BY a.effective_from DESC LIMIT 1`,
           [actor.id, todayInRiyadh(), todayInRiyadh(), todayInRiyadh(), todayInRiyadh()],
         );
         policyConfigured = !!assigned[0];
-        policySummary = assigned[0]
+        policy = assigned[0]
           ? {
               name: 'سياسة الإجازة السنوية المعتمدة',
               version: assigned[0].version,
@@ -584,10 +773,19 @@ export function createApp(
               workingDays: [],
               holidayDates: [],
             };
+      } else if (privateData) {
+        policy = {
+          name: 'لا توجد سياسة إجازة معتمدة',
+          version: 'none',
+          description: 'طلبات الإجازة متوقفة حتى تعتمد سياسة حقيقية.',
+          workingDays: [0, 1, 2, 3, 4],
+          holidayDates: [],
+        };
       }
       res.json({
-        me: toEmployee(me),
-        employees: visible.map(toEmployee),
+        me: toEmployee(me, photos),
+        financeAccess: canAccessFinance(actor, financeOptions),
+        employees: visible.map((e) => toEmployee(e, photos)),
         leaves,
         balance: await balance(db, actor.id),
         notifications: notifications.map((n) => ({
@@ -605,9 +803,10 @@ export function createApp(
           role: e.role,
           title: e.title,
         })),
-        policy: policySummary,
+        policy,
         policyConfigured,
         authMode,
+        mode: runtimeMode,
         today: todayInRiyadh(),
       });
     } catch (e) {
@@ -619,13 +818,37 @@ export function createApp(
       const actor = await requireActor(req);
       const target = await getEmployee(db, req.params.id);
       if (!target) throw fault(404, 'NOT_FOUND', 'الموظف غير موجود.');
-      if (
-        actor.role !== 'hr' &&
-        target.id !== actor.id &&
-        !(actor.role === 'manager' && target.manager_id === actor.id)
-      )
+      if (!mayViewEmployee(actor, target))
         throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية الاطلاع على هذا الملف.');
-      res.json({ employee: toEmployee(target) });
+      res.json({ employee: toEmployee(target, await photoIds(db, [target.id])) });
+    } catch (e) {
+      jsonError(res, e as ApiFault);
+    }
+  });
+  // Profile photo for the team directory. Visible to whoever may view the employee
+  // (self, HR, direct manager); identity documents stay behind the document rules.
+  app.get('/api/employees/:id/photo', async (req, res) => {
+    try {
+      const actor = await requireActor(req);
+      const target = await getEmployee(db, req.params.id);
+      if (!target || !mayViewEmployee(actor, target))
+        throw fault(404, 'NOT_FOUND', 'الصورة غير موجودة.');
+      const row = (
+        await db.read<{ id: string; mime_type: string; encrypted_content: string }>(
+          "SELECT id,mime_type,encrypted_content FROM employee_documents WHERE employee_id=? AND category='photo' AND state='active' ORDER BY uploaded_at DESC,id DESC LIMIT 1",
+          [target.id],
+        )
+      )[0];
+      if (!row || !['image/png', 'image/jpeg'].includes(row.mime_type))
+        throw fault(404, 'NOT_FOUND', 'الصورة غير موجودة.');
+      const bytes = Buffer.from(
+        decryptSensitive(row.encrypted_content, `employee-document:${row.id}`),
+        'base64',
+      );
+      res.setHeader('Content-Type', row.mime_type);
+      res.setHeader('Content-Disposition', 'inline');
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.end(bytes);
     } catch (e) {
       jsonError(res, e as ApiFault);
     }
@@ -972,7 +1195,13 @@ export function createApp(
       }
     });
   }
-  registerAdministration(app, { db, requireActor });
+  registerAdministration(app, { db, requireActor, privateMode: privateData });
+  registerFinance(app, {
+    db,
+    requireActor,
+    ...financeOptions,
+    createClient: options.financeClientFactory,
+  });
   app.use((req, res, next) => {
     if (req.path === '/api' || req.path.startsWith('/api/'))
       return jsonError(res, fault(404, 'NOT_FOUND', 'المسار غير موجود.'));

@@ -254,3 +254,47 @@ test('HR downloads an Excel template, previews a row, and saves the employee bat
   await page.getByRole('link', { name: 'عرض دليل الفريق' }).click();
   await expect(page.getByText(values.name)).toBeVisible();
 });
+
+test('HR sets on-duty status from the team card switch; other roles get no switch', async ({
+  page,
+}) => {
+  await login(page);
+  await page.goto('/employees');
+  const card = page.locator('.person-card', { hasText: 'فهد الدوسري' });
+  const toggle = card.getByRole('switch');
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  // HR cannot switch their own status.
+  await expect(
+    page.locator('.person-card', { hasText: 'نورة العتيبي' }).getByRole('switch'),
+  ).toHaveCount(0);
+  await axe(page);
+  const onTab = page.getByRole('button', { name: /^على رأس العمل/ });
+  const offTab = page.getByRole('button', { name: /^ليسوا على رأس العمل/ });
+  await expect(onTab).toHaveAttribute('aria-pressed', 'true');
+  await toggle.click();
+  // Switched off: the card leaves the default tab and appears in the second one.
+  await expect(card).toHaveCount(0);
+  await expect(page).toHaveURL(/\/employees$/);
+  await page.reload();
+  await expect(page.locator('.person-card').first()).toBeVisible();
+  await expect(card).toHaveCount(0);
+  await offTab.click();
+  await expect(offTab).toHaveAttribute('aria-pressed', 'true');
+  await expect(card).toContainText('منتهية الخدمة');
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await expect(page.locator('.person-card', { hasText: 'نورة العتيبي' })).toHaveCount(0);
+  await axe(page);
+  await toggle.focus();
+  await page.keyboard.press('Space');
+  await expect(card).toHaveCount(0);
+  await onTab.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await expect(card).toContainText('على رأس العمل');
+  // The rest of the card still opens the profile.
+  await card.getByRole('link', { name: 'فهد الدوسري' }).click();
+  await expect(page).toHaveURL(/\/employees\/emp-fahad$/);
+  await switchPersona(page, 'عمر');
+  await page.goto('/employees');
+  await expect(page.locator('.person-card').first()).toBeVisible();
+  await expect(page.getByRole('switch')).toHaveCount(0);
+});

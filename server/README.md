@@ -4,6 +4,8 @@ One Express application serves the API and built React UI. SQLite and PostgreSQL
 
 ## Modes and keys
 
+The merge preserves `HR_MODE=private-hosted` (dedicated `hr_private`, shared password gate) and `HR_DATA_MODE=private` (local-only `.data/hr-private.sqlite`) exactly as opt-in modes alongside the new account mode. A merge does not switch an existing private deployment to individual accounts.
+
 - Local default: loopback on port 4317, SQLite `.data/hr-local.sqlite`. `HR_DB_PATH` overrides the local file. `npm run preview` opts into the same synthetic local mode with a built UI.
 - Local PostgreSQL: `HR_DB_DRIVER=postgres`, dedicated `DATABASE_URL`, fixed `HR_DATA_KEY`; schema `hr_development`. Actual credentials belong in ignored environment configuration.
 - Hosted preview: `HR_MODE=hosted-demo` plus explicit HTTPS `HR_PUBLIC_ORIGIN`. Forbids `HR_DB_PATH`; binds `0.0.0.0:$PORT`. Default is one ephemeral in-memory database per visitor. A Secure/HttpOnly/SameSite cookie identifies the workspace; persona switching stays inside it. Workspaces expire, are capped, and never use the developer's SQLite file.
@@ -14,7 +16,7 @@ Sensitive profile values, medical/request fields, file contents, history values/
 
 ## Schema upgrades
 
-Ten numbered migrations exist for each database dialect. Versions are recorded in `schema_migrations`; each migration and its version entry commit together. SQLite uses `BEGIN IMMEDIATE`, PostgreSQL uses transactions and an advisory lock.
+Fourteen numbered migrations (001–008 and 010–015) exist for each database dialect. Versions are recorded in `schema_migrations`; each migration and its version entry commit together. SQLite uses `BEGIN IMMEDIATE`, PostgreSQL uses transactions and an advisory lock.
 
 1. Core employees, leave requests, decisions, append-only ledger and audit.
 2. Synthetic policy versions, schedules and employment periods.
@@ -25,11 +27,16 @@ Ten numbered migrations exist for each database dialect. Versions are recorded i
 
 7. Pin new payroll runs to profile-components policy version 2; retain and retire only the intermediate local flat-salary version 1 without rewriting its values. Reject a policy whose calculator does not match the implemented synthetic engine.
 
-8. Internal accounts, hashed sessions and recovery codes, encrypted TOTP secrets, persistent throttling and independently approved role changes.
-9. Annual-leave policy/calendar snapshots, independent policy assignments, linked amendment requests, immutable approval history and compensating ledger references.
-10. Scheduled maintenance runs and deduplicated internal reminders.
+8. Append-only approved leave opening balances, including zero, and ledger links for corrections.
 
-Demo seeds insert missing reference profiles/personas only; reopening never resets existing requests, ledgers, profiles, decisions or audit. Operational mode skips them unless explicitly opted into a local synthetic test. All delivery fixtures are fictional. No production data migration or cloud database provisioning has occurred. Existing leave records without a calculation snapshot are not assigned invented historic rules: approval/amendment is blocked pending a separately reviewed migration; pending records may be rejected.
+9. Private finance settings, customers, document snapshots, provider operations and private artifacts.
+10. Private finance catalog.
+11. Double-entry finance ledger and reporting tables.
+12. Internal accounts, hashed sessions and recovery codes, encrypted TOTP secrets, persistent throttling and independently approved role changes.
+13. Annual-leave policy/calendar snapshots, independent policy assignments, linked amendment requests, immutable approval history and compensating ledger references.
+14. Scheduled maintenance runs and deduplicated internal reminders.
+
+Demo seeds insert missing reference profiles/personas only; reopening never resets existing requests, ledgers, profiles, decisions or audit. Operational mode skips them unless explicitly opted into a local synthetic test. All delivery fixtures are fictional. This account pilot does not import or change real employee data; existing private deployment modes and their grants remain available. Existing leave records without a calculation snapshot are not assigned invented historic rules: approval/amendment is blocked pending a separately reviewed migration; pending records may be rejected.
 
 Before upgrading a persistent local preview, run `npm run db:backup`. For intermediate development databases that already contain payroll runs, check duplicate primary periods first:
 
@@ -40,7 +47,7 @@ WHERE correction_of IS NULL AND state <> 'rejected'
 GROUP BY period HAVING count(*) > 1;
 ```
 
-If any appear, stop and review the conflicting synthetic runs before applying migration 006. Never delete closed runs or rewrite their history to force the index. A failed migration rolls back and preserves the original database, but prevents startup until resolved. The local database used for this delivery passed all seven migrations after backup.
+If any appear, stop and review the conflicting synthetic runs before applying migration 006. Never delete closed runs or rewrite their history to force the index. A failed migration rolls back and preserves the original database, but prevents startup until resolved. Migration 008 is additive; it does not create employee balances. A private backup must precede persistent upgrades. Do not roll back to a server catalog that lacks sensitivity classifications for the new profile fields.
 
 ## Backup and restore
 
@@ -53,6 +60,8 @@ For recovery, stop the process, preserve the whole current `.data` directory, cr
 `npm run test:recovery` creates a temporary employee profile, private attachment, maintenance run and activated synthetic account. It restores SQLite and verifies decryption, bytes and login with a one-use recovery code, including rejection of reuse. Full verification then requires a localhost `HR_TEST_DATABASE_URL` plus `pg_dump`/`pg_restore` to restore into an isolated temporary database; the command fails if that configuration is missing. It reads ignored `.env.pg-test` when present. Generated recovery resources are removed; remote PostgreSQL targets are refused. Production backup cadence, RPO/RTO and restore access remain unapproved. See [operations runbook](../docs/operations-runbook.md) for schedules, key handling and rollback. The SQLite backup command refuses PostgreSQL mode rather than backing up the wrong file.
 
 ## Permissions and financial boundaries
+
+The private finance module requires private data mode and an exact `HR_FINANCE_EMPLOYEE_ID` grant; public previews deny it. Wafeq API keys are entered through `/finance?tab=settings` and encrypted with the existing data key, never returned to the browser. Accounting status is not a ZATCA verdict. The current adapter only recognizes documented `PENDING`; unverified final states and QR/XML artifacts fail closed. No real invoice has been submitted by this implementation. See [private finance setup and rollback](../docs/private-finance.md) and [release evidence](../docs/releases/2026-11-14-private-finance.md).
 
 The server resolves current role/status, checks ownership or team scope, and hides confidential values outside permitted roles. Decisions, their side effects, audit and notifications occur in one transaction with idempotency keys and versions. No creator/subject self approval. Closed payroll and ledger events are not overwritten. Corrections use separate linked runs.
 

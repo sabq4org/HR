@@ -4,6 +4,7 @@ import { defineConfig, devices } from '@playwright/test';
 const hostedPreview = process.env.HR_TEST_HOSTED === 'true';
 export default defineConfig({
   testDir: './tests/e2e',
+  testIgnore: /finance.*\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   timeout: 30_000,

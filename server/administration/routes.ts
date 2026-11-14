@@ -37,6 +37,7 @@ import {
   readProtectedFormValues,
   saveProfileValues,
   validateEffectiveAt,
+  visibleRequestValues,
   type Actor,
   type EmployeeRow,
 } from './service.js';
@@ -46,26 +47,6 @@ import { csvCell, fault, roleFromState, stateForRole, validateValues } from './v
 const at = () => new Date().toISOString();
 const isRole = (value: string): value is Role =>
   ['employee', 'manager', 'hr', 'finance', 'approver', 'auditor'].includes(value);
-function roleCanReadValues(actor: Actor, ownerId: string, kind: RequestKind): boolean {
-  if (actor.id === ownerId || actor.role === 'hr') return true;
-  return false;
-}
-function viewValues(
-  actor: Actor,
-  ownerId: string,
-  kind: RequestKind,
-  values: FormValues,
-  fields: { key: string; sensitive?: string }[],
-): FormValues {
-  if (roleCanReadValues(actor, ownerId, kind)) return values;
-  const result: FormValues = Object.create(null) as FormValues;
-  for (const [key, value] of Object.entries(values)) {
-    const sensitivity = fields.find((f) => f.key === key)?.sensitive;
-    if (!sensitivity && actor.role !== 'finance') result[key] = value;
-    else if (sensitivity === 'financial' && actor.role === 'finance') result[key] = value;
-  }
-  return result;
-}
 function workflowState(steps: Role[], index: number): RequestState {
   if (index >= steps.length) return 'approved';
   return stateForRole(steps[index]) as RequestState;
@@ -205,7 +186,6 @@ function cleanRequest(
   actor: Actor,
   form: any,
 ): AdministrativeRequest {
-  const canRead = roleCanReadValues(actor, owner.id, row.kind);
   return {
     id: row.id,
     number: row.request_number,
@@ -215,7 +195,16 @@ function cleanRequest(
     createdBy: row.created_by,
     state: row.state,
     version: Number(row.version),
-    values: viewValues(actor, owner.id, row.kind, values, form.fields),
+    values: visibleRequestValues(
+      actor,
+      {
+        ownerId: owner.id,
+        createdBy: row.created_by,
+        kind: row.kind,
+        steps: JSON.parse(row.steps_json) as Role[],
+      },
+      values,
+    ),
     steps: JSON.parse(row.steps_json) as Role[],
     stepIndex: Number(row.step_index),
     createdAt: row.created_at,
@@ -414,10 +403,14 @@ async function buildAdministrativeOverview(
 
 export function registerAdministration(
   app: Express,
-  { db, requireActor }: { db: AsyncDb; requireActor: RequireActor },
+  {
+    db,
+    requireActor,
+    privateMode = false,
+  }: { db: AsyncDb; requireActor: RequireActor; privateMode?: boolean },
 ) {
   registerPayroll(app, { db, requireActor });
-  registerEmployeeImports(app, { db, requireActor });
+  registerEmployeeImports(app, { db, requireActor, privateMode });
 
   routeWithActor(app, 'get', '/api/admin/overview', requireActor, async (_req, res, actor) => {
     res.json({ overview: await buildAdministrativeOverview(db, actor) });
@@ -437,7 +430,12 @@ export function registerAdministration(
       body,
       (tx, m) => getEmployeeFile(tx, actor, m.id),
       async (tx) => {
-        const file = await createEmployee(tx, actor, body.values);
+        const file = await createEmployee(tx, actor, body.values, {
+          mode: privateMode ? 'private' : 'synthetic',
+          employmentSource: privateMode
+            ? 'Private HR-created employee record; employment terms require review.'
+            : undefined,
+        });
         return { marker: { type: 'employee', id: file.employee.id }, result: file };
       },
     );
@@ -482,6 +480,96 @@ export function registerAdministration(
         },
       );
       res.json({ file });
+    },
+  );
+  // Quick on-duty switch from the team directory (decision 011). It reuses the existing
+  // employment_status field through saveProfileValues, so the change gets the same resource
+  // permission, version guard, field history and audit trail as an edit from the file.
+  routeWithActor(
+    app,
+    'post',
+    '/api/admin/employees/:id/work-status',
+    requireActor,
+    async (req, res, actor) => {
+      const employeeId = param(req, 'id');
+      const b = requireRecord(req.body);
+      if (typeof b.onDuty !== 'boolean')
+        throw fault(400, 'INVALID_STATUS', 'حدّد هل الموظف على رأس العمل أم لا.');
+      const onDuty = b.onDuty;
+      const expectedStatus = requiredString(
+        b.expectedStatus,
+        'INVALID_STATUS',
+        'أرسل الحالة الظاهرة في البطاقة.',
+        40,
+      );
+      const readStatus = async (tx: AsyncDb, id: string) => {
+        const e = await readEmployee(tx, id);
+        if (!e) throw fault(404, 'EMPLOYEE_NOT_FOUND', 'الموظف غير موجود.');
+        return { id: e.id, status: e.status };
+      };
+      const employee = await idempotent(
+        db,
+        actor,
+        `employee:work-status:${employeeId}`,
+        req.get('Idempotency-Key') ?? undefined,
+        { onDuty, expectedStatus },
+        async (tx, m) => readStatus(tx, m.id),
+        async (tx) => {
+          const e = await readEmployee(tx, employeeId);
+          if (!e) throw fault(404, 'EMPLOYEE_NOT_FOUND', 'الموظف غير موجود.');
+          if (!mayManageEmployee(actor, e))
+            throw fault(
+              403,
+              'FORBIDDEN',
+              actor.role === 'hr'
+                ? 'لا يمكنك تغيير حالتك الوظيفية بنفسك.'
+                : 'يتطلب تغيير الحالة الوظيفية صلاحية الشؤون الإدارية.',
+            );
+          if (e.status !== expectedStatus)
+            throw fault(409, 'STALE_VERSION', 'تغيرت حالة الموظف؛ حدّث الصفحة ثم أعد المحاولة.');
+          const wasOnDuty = e.status === 'active' || e.status === 'on_leave';
+          if (wasOnDuty === onDuty)
+            throw fault(409, 'STATUS_UNCHANGED', 'الحالة الوظيفية مطابقة لما طلبته.');
+          if (onDuty && e.status === 'terminated') {
+            const periods = await tx.read<{ end_date: string | null }>(
+              'SELECT end_date FROM employment_periods WHERE employee_id=?',
+              [e.id],
+            );
+            // A dated separation closed the employment period; only rehire may open a new one.
+            if (periods.length && periods.every((period) => period.end_date !== null))
+              throw fault(
+                409,
+                'REHIRE_REQUIRED',
+                'انتهت خدمة هذا الموظف بتاريخ مسجل؛ استخدم إعادة التعيين من ملفه.',
+              );
+          }
+          const next = onDuty ? 'active' : 'terminated';
+          const reason = onDuty
+            ? 'ضبط سريع من دليل الفريق: على رأس العمل.'
+            : 'ضبط سريع من دليل الفريق: ليس على رأس العمل.';
+          const version = await saveProfileValues(
+            tx,
+            actor,
+            e.id,
+            { employmentStatus: next },
+            reason,
+            at(),
+            e.record_version,
+          );
+          await appendEvent(
+            tx,
+            actor,
+            'employee',
+            e.id,
+            'employee_work_status_changed',
+            reason,
+            { from: e.status, to: next, source: 'team-directory' },
+            version,
+          );
+          return { marker: { type: 'employee', id: e.id }, result: await readStatus(tx, e.id) };
+        },
+      );
+      res.json({ employee });
     },
   );
   routeWithActor(
@@ -539,8 +627,18 @@ export function registerAdministration(
             );
           const now = at();
           await tx.execute(
-            "INSERT INTO employment_periods(id,employee_id,start_date,relationship_type,source,status,created_at) VALUES(?,?,?,?,?,'synthetic-demo-only',?)",
-            [newId(), e.id, startDate, type, 'User-created synthetic rehire.', now],
+            'INSERT INTO employment_periods(id,employee_id,start_date,relationship_type,source,status,created_at) VALUES(?,?,?,?,?,?,?)',
+            [
+              newId(),
+              e.id,
+              startDate,
+              type,
+              privateMode
+                ? 'Private approved rehire; verify source documents.'
+                : 'User-created synthetic rehire.',
+              privateMode ? 'pending-review' : 'synthetic-demo-only',
+              now,
+            ],
           );
           await tx.execute(
             "UPDATE employees SET employment_status='active',record_version=record_version+1 WHERE id=? AND record_version=?",
@@ -878,11 +976,14 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
   const now = at();
   if (row.kind === 'leave_adjustment') {
     const days = Number(values.days);
+    const adjustmentType =
+      values.adjustmentType === 'opening_balance' ? 'opening_balance' : 'correction';
+    const adjustmentSource = typeof values.source === 'string' ? values.source.trim() : '';
     const effectiveAt =
       typeof values.effectiveDate === 'string' ? values.effectiveDate : now.slice(0, 10);
     if (
       !Number.isInteger(days) ||
-      days === 0 ||
+      (adjustmentType !== 'opening_balance' && days === 0) ||
       Math.abs(days) > 365 ||
       !validIsoDate(effectiveAt) ||
       effectiveAt > todayInRiyadh()
@@ -892,6 +993,65 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         'INVALID_ADJUSTMENT',
         'تسوية الرصيد يجب أن تكون عدد أيامًا صالحًا وسارية حتى اليوم.',
       );
+    if (
+      adjustmentType === 'opening_balance' &&
+      (days < 0 || !adjustmentSource || adjustmentSource.length > 500)
+    )
+      throw fault(
+        400,
+        'INVALID_OPENING_BALANCE',
+        'الرصيد الافتتاحي يتطلب رصيدًا غير سالب ومصدرًا موثقًا.',
+      );
+    if (adjustmentType === 'opening_balance') {
+      const existingOpening = await tx.read(
+        'SELECT id FROM leave_balance_openings WHERE employee_id=?',
+        [row.employee_id],
+      );
+      const anyLedgerMovement = await tx.read(
+        'SELECT id FROM leave_ledger WHERE employee_id=? LIMIT 1',
+        [row.employee_id],
+      );
+      const approvedPolicyOpening = await tx.read(
+        "SELECT id FROM leave_policy_assignments WHERE employee_id=? AND approval_status='approved' LIMIT 1",
+        [row.employee_id],
+      );
+      if (existingOpening.length || anyLedgerMovement.length || approvedPolicyOpening.length)
+        throw fault(
+          409,
+          'OPENING_BALANCE_ALREADY_EXISTS',
+          'يوجد رصيد أو حركة سابقة؛ استخدم طلب تسوية رصيد مستقل.',
+        );
+      let ledgerId: number | null = null;
+      if (days > 0) {
+        await tx.execute(
+          'INSERT INTO leave_ledger(employee_id,kind,days,created_at,actor_id) VALUES(?,?,?,?,?)',
+          [row.employee_id, 'allocation', days, now, actor.id],
+        );
+        ledgerId = Number(
+          (
+            await tx.read<{ id: number }>(
+              'SELECT id FROM leave_ledger WHERE employee_id=? ORDER BY id DESC LIMIT 1',
+              [row.employee_id],
+            )
+          )[0]?.id,
+        );
+      }
+      await tx.execute(
+        'INSERT INTO leave_balance_openings(id,employee_id,request_id,days,effective_at,ledger_id,source_ciphertext,actor_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+        [
+          newId(),
+          row.employee_id,
+          row.id,
+          days,
+          effectiveAt,
+          ledgerId,
+          encryptSensitive(adjustmentSource, `leave-opening:${row.id}:source`),
+          actor.id,
+          now,
+        ],
+      );
+      return;
+    }
     if (days < 0) {
       const sums = await tx.read<any>(
         'SELECT kind,SUM(days) days FROM leave_ledger WHERE employee_id=? GROUP BY kind',
@@ -904,7 +1064,19 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         throw fault(409, 'INSUFFICIENT_BALANCE', 'لا يمكن خفض الرصيد إلى أقل من صفر.');
     }
     await tx.execute(
-      'INSERT INTO leave_balance_adjustments(id,employee_id,request_id,days,effective_at,reason,actor_id,created_at) VALUES(?,?,?,?,?,?,?,?)',
+      'INSERT INTO leave_ledger(employee_id,kind,days,created_at,actor_id) VALUES(?,?,?,?,?)',
+      [row.employee_id, days > 0 ? 'allocation' : 'consume', days, now, actor.id],
+    );
+    const ledgerId = Number(
+      (
+        await tx.read<{ id: number }>(
+          'SELECT id FROM leave_ledger WHERE employee_id=? ORDER BY id DESC LIMIT 1',
+          [row.employee_id],
+        )
+      )[0]?.id,
+    );
+    await tx.execute(
+      'INSERT INTO leave_balance_adjustments(id,employee_id,request_id,days,effective_at,reason,actor_id,created_at,ledger_id,source_ciphertext) VALUES(?,?,?,?,?,?,?,?,?,?)',
       [
         newId(),
         row.employee_id,
@@ -917,11 +1089,11 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         ),
         actor.id,
         now,
+        ledgerId,
+        adjustmentSource
+          ? encryptSensitive(adjustmentSource, `leave-adjustment:${row.id}:source`)
+          : null,
       ],
-    );
-    await tx.execute(
-      'INSERT INTO leave_ledger(employee_id,kind,days,created_at,actor_id) VALUES(?,?,?,?,?)',
-      [row.employee_id, days > 0 ? 'allocation' : 'consume', days, now, actor.id],
     );
   }
   if (['data_change', 'bank_change', 'transfer', 'contract', 'separation'].includes(row.kind)) {
@@ -1403,6 +1575,16 @@ function registerAttendanceRoutes(app: Express, ctx: { db: AsyncDb; requireActor
             )
           )
             throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية المراجعة.');
+          // Maker-checker: whoever entered the record (e.g. HR on an employee's behalf)
+          // cannot also approve or reject it. The submitter is read from the append-only log.
+          const submitter = (
+            await tx.read<{ actor_id: string }>(
+              "SELECT actor_id FROM administration_events WHERE resource_type='attendance' AND resource_id=? AND action='attendance_submitted' ORDER BY created_at,id LIMIT 1",
+              [row.id],
+            )
+          )[0];
+          if (submitter?.actor_id === actor.id)
+            throw fault(403, 'SELF_APPROVAL', 'لا تعتمد سجل حضور أدخلته بنفسك؛ يراجعه مختص آخر.');
           const now = at();
           const changed = await tx.execute(
             'UPDATE attendance_records SET state=?,version=version+1,reviewed_by=?,encrypted_reason=?,updated_at=? WHERE id=? AND version=?',

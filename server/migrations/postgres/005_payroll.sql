@@ -57,8 +57,3 @@ BEGIN RAISE EXCEPTION 'payroll events are append-only'; END;
 $$ LANGUAGE plpgsql;
 CREATE TRIGGER payroll_events_no_update BEFORE UPDATE ON payroll_events FOR EACH ROW EXECUTE FUNCTION prevent_payroll_event_mutation();
 CREATE TRIGGER payroll_events_no_delete BEFORE DELETE ON payroll_events FOR EACH ROW EXECUTE FUNCTION prevent_payroll_event_mutation();
-INSERT INTO administrative_policies(id,policy_key,version,name,effective_from,source,state,values_json,created_by,approved_by,created_at)
-VALUES('payroll-policy-demo-v1','payroll-demo',1,'قواعد رواتب تجريبية','2026-01-01',
-       'قيم تجريبية للعرض فقط؛ لا تمثل نظام العمل أو التأمينات أو مدد.', 'synthetic_approved',
-       '{"currency":"SAR","calculation":"synthetic-profile-components"}',
-       'emp-noura','emp-abdullah','2026-01-01T00:00:00.000Z') ON CONFLICT(id) DO NOTHING;

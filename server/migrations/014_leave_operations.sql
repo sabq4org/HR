@@ -17,9 +17,9 @@ CREATE TABLE IF NOT EXISTS leave_policy_assignments (
   approval_status TEXT NOT NULL DEFAULT 'pending' CHECK(approval_status IN ('pending','approved','rejected','cancelled')),
   approved_by TEXT, approved_at TEXT,
   decided_by TEXT,
-  decision_reason TEXT,
-  UNIQUE(employee_id, policy_version_id, effective_from)
+  decision_reason TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS leave_policy_assignment_active_uq ON leave_policy_assignments(employee_id, policy_version_id, effective_from) WHERE approval_status IN ('pending','approved');
 CREATE TABLE IF NOT EXISTS leave_change_requests (
   id TEXT PRIMARY KEY, leave_id TEXT NOT NULL REFERENCES leave_requests(id), employee_id TEXT NOT NULL REFERENCES employees(id),
   kind TEXT NOT NULL CHECK(kind IN ('cancel','extend','early_return','amend')),

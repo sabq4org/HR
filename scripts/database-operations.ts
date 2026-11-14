@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 const mode = process.argv[2];
-if (process.env.HR_DB_DRIVER === 'postgres')
+if (process.env.HR_DB_DRIVER === 'postgres' || process.env.HR_MODE === 'private-hosted')
   throw new Error(
     'Use the approved PostgreSQL provider backup and isolated restore procedure; this command backs up SQLite only.',
   );
@@ -16,7 +16,9 @@ const source = resolve(
     process.env.HR_DB_PATH ??
     (process.env.HR_MODE === 'operational'
       ? '.data/hr-operational.sqlite'
-      : '.data/hr-local.sqlite'),
+      : process.env.HR_DATA_MODE === 'private'
+        ? '.data/hr-private.sqlite'
+        : '.data/hr-local.sqlite'),
 );
 if (!existsSync(source))
   throw new Error('Local database does not exist. Start the app once before backing it up.');

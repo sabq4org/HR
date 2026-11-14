@@ -40,6 +40,6 @@ After restoring, inspect recent `operations_job_runs`, run one explicit maintena
 
 ## Rollback and incident response
 
-Migrations are forward-only and transactional. If migration 010 fails, preserve the database and sanitized startup error, restore the pre-change verified backup if required, and investigate before another start. Do not delete migration records or operational tables manually. If reminder content or recipient scope is wrong, stop scheduler startup using the normal host process controls, preserve the database, correct the code, and deploy through the authorized release workflow. Do not mass-delete outbox rows or dedupe keys; use a reviewed forward repair with an audit trail.
+Migrations are forward-only and transactional. If migration 015 fails, preserve the database and sanitized startup error, restore the pre-change verified backup if required, and investigate before another start. Do not delete migration records or operational tables manually. If reminder content or recipient scope is wrong, stop scheduler startup using the normal host process controls, preserve the database, correct the code, and deploy through the authorized release workflow. Do not mass-delete outbox rows or dedupe keys; use a reviewed forward repair with an audit trail.
 
 No production recovery point objective (RPO), recovery time objective (RTO), backup cadence, or restore access has been measured or approved by this runbook. The local checks establish only that the documented local recovery procedure works for the tested copy.

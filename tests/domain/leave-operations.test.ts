@@ -501,7 +501,7 @@ test('policy versioning and opening balance assignment require separate approver
       employeeId: 'emp-sara',
       effectiveFrom: addDays(today, 119),
       effectiveTo: addDays(today, 121),
-      openingBalance: 5,
+      openingBalance: 0,
       approvalReference: 'OPEN-01',
     },
     'assignment-out-of-range',
@@ -517,7 +517,7 @@ test('policy versioning and opening balance assignment require separate approver
       employeeId: 'emp-sara',
       effectiveFrom: today,
       effectiveTo: addDays(today, 90),
-      openingBalance: 5,
+      openingBalance: 0,
       approvalReference: 'OPEN-02',
     },
     'assignment-valid',
@@ -548,7 +548,7 @@ test('policy versioning and opening balance assignment require separate approver
   assert.equal(allocation.status, 200, await allocation.clone().text());
   const employee = await login('emp-sara');
   const balanceAfter = ((await (await call('/bootstrap', employee)).json()) as any).balance;
-  assert.equal(balanceAfter.allocated, balanceBefore.allocated + 5);
+  assert.equal(balanceAfter.allocated, balanceBefore.allocated);
   const policy = await currentPolicy(database, 'emp-sara', today, 'accounts');
   assert.equal(policy.effectiveFrom, today);
   assert.equal(policy.effectiveTo, addDays(today, 90));
@@ -564,7 +564,7 @@ test('policy versioning and opening balance assignment require separate approver
       employeeId: 'emp-abdullah',
       effectiveFrom: today,
       effectiveTo: addDays(today, 10),
-      openingBalance: 3,
+      openingBalance: 0,
       approvalReference: 'OPEN-03',
     },
     'assignment-beneficiary',
@@ -593,7 +593,7 @@ test('policy versioning and opening balance assignment require separate approver
       employeeId: 'emp-fahad',
       effectiveFrom: addDays(today, 1),
       effectiveTo: addDays(today, 20),
-      openingBalance: 4,
+      openingBalance: 0,
       approvalReference: 'OPEN-FUTURE',
     },
     'assignment-future',
@@ -626,7 +626,7 @@ test('policy versioning and opening balance assignment require separate approver
       employeeId: 'emp-yousef',
       effectiveFrom: today,
       effectiveTo: addDays(today, 10),
-      openingBalance: 2,
+      openingBalance: 0,
       approvalReference: 'OPEN-REJECT',
     },
     'assignment-reject',
@@ -644,4 +644,218 @@ test('policy versioning and opening balance assignment require separate approver
     'assignment-reject-decision',
   );
   assert.equal(rejectedAssignment.status, 200);
+});
+
+test('opening balances cannot be granted twice across employee-file and policy approvals, including zero and intervening changes', async () => {
+  const hr = await login('emp-noura');
+  const approver = await login('emp-abdullah');
+  const today = todayInRiyadh();
+  const draft = await call(
+    '/leave-policies',
+    hr,
+    {
+      version: 'opening-merge-test',
+      effectiveFrom: addDays(today, -5),
+      effectiveTo: addDays(today, 90),
+      allocatedDays: 10,
+      workingDays: [0, 1, 2, 3, 4],
+      holidayDates: [],
+      source: 'مصدر اصطناعي',
+      sourceReference: 'merge-opening-source',
+    },
+    'opening-merge-policy',
+  );
+  assert.equal(draft.status, 201, await draft.clone().text());
+  const policyId = ((await draft.json()) as any).policy.id;
+  assert.equal(
+    (
+      await call(
+        `/leave-policies/${policyId}/approve`,
+        approver,
+        { approvalReference: 'independent-policy' },
+        'opening-merge-policy-approval',
+      )
+    ).status,
+    200,
+  );
+  async function employee(number: string) {
+    // Create an unallocated fixture; the demo employee-creation API deliberately
+    // attaches its synthetic balance and is covered by the existing API tests.
+    const id = randomUUID();
+    await database.execute(
+      'INSERT INTO employees(id,employee_number,name,initials,title,department,email,location,manager_id,join_date,role,color,access_role) VALUES(?,?,?,?,?,?,?,?,NULL,?,?,?,NULL)',
+      [
+        id,
+        number,
+        'موظف اصطناعي',
+        'ما',
+        'اختبار',
+        'اختبار',
+        `${number}@example.test`,
+        'الرياض',
+        today,
+        'employee',
+        'blue',
+      ],
+    );
+    return id;
+  }
+  async function assign(employeeId: string, days: number, key: string) {
+    return call(
+      `/leave-policies/${policyId}/assign`,
+      hr,
+      {
+        employeeId,
+        effectiveFrom: today,
+        effectiveTo: addDays(today, 30),
+        openingBalance: days,
+        approvalReference: 'opening-merge-approval',
+      },
+      key,
+    );
+  }
+  async function pendingId(employeeId: string) {
+    return (
+      await database.read<{ id: string }>(
+        "SELECT id FROM leave_policy_assignments WHERE employee_id=? AND approval_status='pending'",
+        [employeeId],
+      )
+    )[0].id;
+  }
+  async function adminOpening(employeeId: string, key: string) {
+    const created = await call(
+      '/admin/requests',
+      hr,
+      {
+        kind: 'leave_adjustment',
+        employeeId,
+        submit: true,
+        values: {
+          adjustmentType: 'opening_balance',
+          source: 'سجل افتتاحي اصطناعي معتمد',
+          days: 0,
+          effectiveDate: today,
+          reason: 'إثبات رصيد افتتاحي صفري للاختبار',
+        },
+      },
+      key,
+    );
+    assert.equal(created.status, 201, await created.clone().text());
+    const row = ((await created.json()) as any).request;
+    return call(
+      `/admin/requests/${row.id}/actions`,
+      approver,
+      { version: row.version, action: 'approve', reason: 'تمت مراجعة المصدر' },
+      `${key}-approve`,
+    );
+  }
+  const first = await employee('MERGE-OPEN-1');
+  assert.equal((await assign(first, 5, 'pending-positive')).status, 201);
+  const pending = await pendingId(first);
+  assert.equal((await adminOpening(first, 'intervening-zero-opening')).status, 200);
+  const raced = await call(
+    `/leave-policy-assignments/${pending}/approve`,
+    approver,
+    { approvalReference: 'must-not-grant' },
+    'raced-approve',
+  );
+  assert.equal(raced.status, 409);
+  assert.equal(((await raced.json()) as any).error.code, 'OPENING_BALANCE_ALREADY_EXISTS');
+  assert.equal(
+    (await database.read('SELECT id FROM leave_ledger WHERE employee_id=?', [first])).length,
+    0,
+  );
+  assert.equal(
+    (
+      await call(
+        `/leave-policy-assignments/${pending}/decision`,
+        hr,
+        { decision: 'cancel', reason: 'استبدال الإسناد دون إضافة أيام' },
+        'cancel-raced',
+      )
+    ).status,
+    200,
+  );
+  assert.equal((await assign(first, 5, 'duplicate-positive')).status, 409);
+  // The cancelled assignment stays in history; its same dates can be submitted again.
+  assert.equal((await assign(first, 0, 'attach-existing-zero')).status, 201);
+  assert.equal(
+    (
+      await call(
+        `/leave-policy-assignments/${await pendingId(first)}/approve`,
+        approver,
+        { approvalReference: 'attach-policy-only' },
+        'attach-zero-approve',
+      )
+    ).status,
+    200,
+  );
+  const second = await employee('MERGE-OPEN-2');
+  assert.equal((await assign(second, 0, 'policy-zero-first')).status, 201);
+  assert.equal(
+    (
+      await call(
+        `/leave-policy-assignments/${await pendingId(second)}/approve`,
+        approver,
+        { approvalReference: 'approved-zero' },
+        'policy-zero-approve',
+      )
+    ).status,
+    200,
+  );
+  assert.equal((await adminOpening(second, 'reverse-path-duplicate')).status, 409);
+  assert.equal(
+    (await database.read('SELECT id FROM leave_ledger WHERE employee_id=?', [second])).length,
+    0,
+  );
+  const file = ((await (await call(`/admin/employees/${second}`, hr)).json()) as any).file;
+  assert.equal(file.leaveSummary.openingBalance, 0);
+  assert.equal(file.leaveSummary.balanceKnown, true);
+  assert.equal(file.leaveSummary.available, 0);
+  assert.equal(file.leaveSummary.policyApproved, true);
+  assert.ok(file.leaveMovements.some((row: any) => row.kind === 'opening' && row.days === 0));
+  const unassigned = ((await (await call('/admin/employees/emp-sara', hr)).json()) as any).file;
+  assert.equal(
+    unassigned.leaveSummary.policyApproved,
+    false,
+    'Another employee must not inherit an approved policy',
+  );
+  const third = await employee('MERGE-OPEN-3');
+  const effectiveFrom = addDays(today, -3);
+  assert.equal(
+    (
+      await call(
+        `/leave-policies/${policyId}/assign`,
+        hr,
+        {
+          employeeId: third,
+          effectiveFrom,
+          effectiveTo: addDays(today, 30),
+          openingBalance: 7,
+          approvalReference: 'positive-opening-reference',
+        },
+        'positive-opening-create',
+      )
+    ).status,
+    201,
+  );
+  assert.equal(
+    (
+      await call(
+        `/leave-policy-assignments/${await pendingId(third)}/approve`,
+        approver,
+        { approvalReference: 'positive-opening-reviewed' },
+        'positive-opening-approve',
+      )
+    ).status,
+    200,
+  );
+  const positive = ((await (await call(`/admin/employees/${third}`, hr)).json()) as any).file;
+  assert.equal(positive.leaveSummary.openingBalance, 7);
+  assert.equal(positive.leaveSummary.available, 7);
+  assert.equal(positive.leaveSummary.policyApproved, true);
+  assert.equal(
+    positive.leaveMovements.find((row: any) => row.kind === 'allocation')?.effectiveAt,
+    effectiveFrom,
+  );
 });
