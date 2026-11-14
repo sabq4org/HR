@@ -39,6 +39,7 @@ HR_FINANCE_API_KEY_HASHES="sha256:…" npm run finance:sandbox
 | PDF عرض السعر                           | `GET /api/finance/quotes/:id/document.pdf`                                                       |
 | الفاتورة                                | `POST /api/finance/quotes/:id/convert`                                                           |
 | PDF نسخة الفاتورة                       | `GET /api/finance/invoices/:id/document.pdf` (نسخة داخلية، ليست فاتورة ضريبية)                   |
+| PDF كشف حساب العميل                     | `GET /api/finance/customers/:id/statement.pdf?from=YYYY-MM-DD&to=YYYY-MM-DD` (أفقي)              |
 | PDF الرسمي                              | `GET /api/finance/invoices/:id/pdf` (من المزود بعد القبول فقط)                                   |
 | تهيئة الدفاتر                           | `POST /api/finance/ledger/setup` (مرة واحدة)                                                     |
 | ترحيل الفاتورة وتسجيل الدفع             | `POST /api/finance/ledger/invoices/:id/post`، `POST /api/finance/ledger/invoices/:id/receipts`   |
@@ -48,4 +49,28 @@ HR_FINANCE_API_KEY_HASHES="sha256:…" npm run finance:sandbox
 | الموازنة                                | `GET /api/finance/ledger/reports/budget?year=`، `PATCH /api/finance/ledger/budgets/:year`        |
 | ضريبة القيمة المضافة الربعية            | `GET /api/finance/ledger/vat?start=YYYY-MM-DD`                                                   |
 
-المبالغ في الردود بالهللة. الاختبارات في `tests/domain/finance-service-api.test.ts`.
+المبالغ في الردود بالهللة. الاختبارات في `tests/domain/finance-service-api.test.ts` و`tests/domain/finance-document-pdf.test.ts`.
+
+## ملفات PDF
+
+ثلاثة مسارات تطبع المستند نفسه الذي تعرضه معاينة الطباعة في الواجهة، بالمكونات نفسها (`src/finance/paper.tsx` و`src/finance/statement-paper.tsx`) وأوراق الأنماط نفسها، عبر Chromium دون واجهة:
+
+| المستند         | المسار                                                   | الورق    | سجل التدقيق                 |
+| --------------- | -------------------------------------------------------- | -------- | --------------------------- |
+| عرض السعر       | `GET /api/finance/quotes/:id/document.pdf`               | A4 عمودي | `quote_pdf_exported`        |
+| نسخة الفاتورة   | `GET /api/finance/invoices/:id/document.pdf`             | A4 عمودي | `invoice_copy_pdf_exported` |
+| كشف حساب العميل | `GET /api/finance/customers/:id/statement.pdf?from=&to=` | A4 أفقي  | `statement_pdf_exported`    |
+
+- بيانات المنشأة والحساب البنكي من المصدر الذي تستخدمه المعاينة: بيانات البائع المحفوظة في المستند، وما نقص منها يُكمَّل من إعدادات المالية الحالية. الشعار `public/brand/sabq-logo.svg`.
+- كشف الحساب يقبل معاملات الواجهة نفسها: `from` اختياري، و`to` افتراضيًا تاريخ اليوم بتوقيت الرياض. بداية بعد النهاية تعطي `400 INVALID_DATE_RANGE`. وهي معاملات مسار JSON `GET /api/finance/customers/:id/statement` نفسها.
+- كل طلب PDF ناجح يضيف سطرًا في سجل التدقيق.
+- الترويسة `x-pdf-renderer` تبيّن المحرك: `chromium`، أو `pdfkit` إذا لم يتوفر Chromium، فيرجع عرض السعر والفاتورة بالتخطيط القديم، ويرجع كشف الحساب `503 PDF_RENDERER_UNAVAILABLE`.
+- يبحث الخادم عن Chromium في `HR_PDF_CHROMIUM_PATH`، ثم `/usr/bin/chromium` و`/usr/bin/chromium-browser`، ثم نسخة Playwright المثبتة. على Railway يثبّته `railpack.json` (حزمة `chromium` في صورة التشغيل).
+- الصفحة المطبوعة لا تصل إلى الشبكة: تُخدم الخطوط والشعار من الملفات المحلية ويُحجب أي طلب آخر. متصفح واحد يعمل عند الطلب، والطلبات بالتتابع، ويُغلق بعد دقيقة من الخمول.
+- نسخة الفاتورة داخلية وليست فاتورة ضريبية، ولا تحمل رمز QR. الملف الرسمي على `GET /api/finance/invoices/:id/pdf` من المزود بعد القبول فقط.
+
+```bash
+curl -fsS -H "Authorization: Bearer $KEY" -o quote.pdf "$HOST/api/finance/quotes/$QUOTE_ID/document.pdf"
+curl -fsS -H "Authorization: Bearer $KEY" -o invoice.pdf "$HOST/api/finance/invoices/$INVOICE_ID/document.pdf"
+curl -fsS -H "Authorization: Bearer $KEY" -o statement.pdf "$HOST/api/finance/customers/$CUSTOMER_ID/statement.pdf?from=2026-01-01&to=2026-11-14"
+```

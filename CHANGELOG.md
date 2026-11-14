@@ -17,6 +17,15 @@
 - **الاختبارات:** `tests/domain/work-status-switch.test.ts` واختبار المتصفح في `tests/e2e/administration.spec.ts`.
 - **المرجع:** [قرار 011](docs/decisions/011-team-directory-duty-switch.md).
 
+## 2026-11-14 — ملفات PDF من الواجهة البرمجية بقالب معاينة الطباعة (فرع `grok/finance-pdf-match-ui`)
+
+- **القالب:** `quotes/:id/document.pdf` و`invoices/:id/document.pdf` تُطبع الآن بـChromium من مكونات الورقة نفسها التي تعرضها المعاينة (`src/finance/paper.tsx`، `src/finance/statement-paper.tsx`) وأوراق الأنماط نفسها، بدل رسم pdfkit المستقل. الصفحة بلا شبكة: الخطوط والشعار من الملفات المحلية فقط.
+- **كشف الحساب:** مسار جديد `GET /api/finance/customers/:id/statement.pdf?from=&to=` بمعاملات الواجهة، A4 أفقي، ضمن نطاق مفتاح المحاسب، ويسجَّل `statement_pdf_exported`.
+- **المصدر:** بيانات المنشأة والحساب البنكي كما في المعاينة: المحفوظ في المستند مكمَّلًا من إعدادات المالية الحالية.
+- **بلا Chromium:** العرض والفاتورة يعودان إلى pdfkit، وكشف الحساب `503 PDF_RENDERER_UNAVAILABLE`. الترويسة `x-pdf-renderer` تبيّن المحرك.
+- **النشر:** `railpack.json` يضيف حزمة `chromium` إلى صورة التشغيل (يؤثر على كل خدمة تبني من `main`). اعتماد جديد: `playwright-core`.
+- **الاختبارات:** `tests/domain/finance-document-pdf.test.ts`.
+
 ## 2026-11-14 — كشف حساب العميل بمقاس A4 عرضي (فرع `claude/project-thread-otvn16`)
 
 - **الكشف:** زر «كشف حساب» لكل عميل في صفحة العملاء يعرض الفواتير الصادرة له، وما سُدّد أو أُشعر به دائنًا عليها، والرصيد القائم بعد كل حركة، مع جدول الفواتير غير المسددة وأيام تأخرها. فترة اختيارية، وما قبلها يُرحَّل رصيدًا افتتاحيًا.

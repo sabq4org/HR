@@ -10,7 +10,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
+import express from 'express';
 import { dirname, resolve } from 'node:path';
 import { createApp } from '../server/app.js';
 import { createDatabase } from '../server/database.js';
@@ -72,6 +73,13 @@ const app = createApp(db, {
   financeApiKeyHashes: liveHashes,
   financeClientFactory: () => provider,
 });
+// After `npm run build`, the sandbox also serves the app so the finance UI (and its print
+// preview) can be compared with the API output. Sign in as the synthetic finance persona.
+const client = resolve('dist/client');
+if (existsSync(resolve(client, 'index.html'))) {
+  app.use(express.static(client, { index: false }));
+  app.get('/{*path}', (_req, res) => res.sendFile('index.html', { root: client }));
+}
 const server = createServer(app);
 await new Promise<void>((done) => server.listen(port, '127.0.0.1', done));
 const base = `http://127.0.0.1:${port}`;
@@ -100,6 +108,12 @@ try {
         vatNumber: '300000000000003',
         commercialRegistration: '1010000000',
         address: { line: 'طريق تجريبي 1', city: 'الرياض', postalCode: '12345', country: 'SA' },
+        bankAccount: {
+          beneficiaryName: 'مؤسسة سبق التجريبية (بيانات وهمية)',
+          bankName: 'بنك تجريبي',
+          accountNumber: '0000000000000',
+          iban: 'SA6000000000000000001234',
+        },
       },
       revenueAccountId: '',
       standardTaxRateId: '',
