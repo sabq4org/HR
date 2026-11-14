@@ -12,6 +12,8 @@ import {
   type AgingRow,
   type BalanceSheet,
   type BudgetReport,
+  type CustomerStatement,
+  type CustomerStatementRow,
   type IncomeStatement,
   type InvoiceLedgerState,
   type JournalEntry,
@@ -1514,6 +1516,176 @@ export async function aging(
       };
     })
     .sort((a, b) => b.daysOverdue - a.daysOverdue);
+}
+const dayGap = (from: string, to: string) =>
+  Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+/**
+ * Movements of one customer: invoices issued to them, then the receipts and credit notes recorded
+ * on those invoices. An approved invoice counts even before it is posted to the books.
+ */
+export async function customerStatement(
+  db: AsyncDb,
+  ownerId: string,
+  customerId: string,
+  from: string | null,
+  to: string,
+): Promise<Omit<CustomerStatement, 'customer' | 'seller'>> {
+  const invoices = (
+    await db.read<InvoiceRow>(
+      'SELECT i.* FROM finance_invoices i JOIN finance_quotes q ON q.owner_id=i.owner_id AND q.id=i.quote_id WHERE i.owner_id=? AND q.customer_id=?',
+      [ownerId, customerId],
+    )
+  ).map((row) => safeJson<FinanceInvoice>(row.invoice_ciphertext, `finance:invoice:${row.id}`));
+  const vouchers = invoices.length
+    ? await db.read<VoucherRow>(
+        `${voucherSelect} WHERE v.owner_id=? AND v.kind IN ('invoice','receipt','credit_note')`,
+        [ownerId],
+      )
+    : [];
+  const postedByInvoice = new Map(
+    vouchers
+      .filter((row) => row.kind === 'invoice' && row.status === 'posted')
+      .map((row) => [row.related_id, row]),
+  );
+  // A reversed receipt or credit note stays on the statement with its reversal as a later
+  // movement, so a balance already reported for an earlier date never changes.
+  const reversedOn = new Map(
+    vouchers.some((row) => row.status === 'reversed')
+      ? (
+          await db.read<{ reversal_of: string; entry_date: string }>(
+            "SELECT reversal_of, entry_date FROM finance_journal_entries WHERE owner_id=? AND kind='reversal' AND reversal_of IS NOT NULL",
+            [ownerId],
+          )
+        ).map((row) => [row.reversal_of, row.entry_date])
+      : [],
+  );
+  type Movement = Omit<CustomerStatementRow, 'balanceHalalas'> & {
+    order: number;
+    key: string;
+    of?: 'receipt' | 'credit_note';
+  };
+  const movements: Movement[] = [];
+  const byVoucher = new Map<string, string>();
+  let unpostedInvoices = 0;
+  for (const invoice of invoices) {
+    const posted = postedByInvoice.get(invoice.id);
+    const approved = invoice.status === 'cleared' || invoice.status === 'reported';
+    if (!posted && !approved) continue;
+    if (!posted) unpostedInvoices += 1;
+    // Settlements may hang on an earlier posting of the same invoice that was later reversed.
+    for (const row of vouchers)
+      if (row.kind === 'invoice' && row.related_id === invoice.id)
+        byVoucher.set(row.id, invoice.number);
+    movements.push({
+      date: invoice.issueDate,
+      kind: 'invoice',
+      number: invoice.number,
+      invoiceNumber: invoice.number,
+      description: invoice.title,
+      dueDate: invoice.dueDate,
+      debitHalalas: invoice.totalHalalas,
+      creditHalalas: 0,
+      order: 0,
+      key: invoice.number,
+    });
+  }
+  for (const row of vouchers) {
+    const invoiceNumber = row.related_id ? byVoucher.get(row.related_id) : undefined;
+    if (row.kind === 'invoice' || !invoiceNumber) continue;
+    const reference = voucherDetails(row).reference;
+    const kind = row.kind as 'receipt' | 'credit_note';
+    const reversal = row.status === 'reversed' ? reversedOn.get(row.entry_id) : undefined;
+    if (row.status === 'reversed' && !reversal) continue;
+    if (reversal)
+      movements.push({
+        date: reversal,
+        kind: 'reversal',
+        number: row.number,
+        invoiceNumber,
+        description: `${kind === 'receipt' ? 'عكس سداد فاتورة' : 'عكس إشعار دائن على فاتورة'} ${invoiceNumber}`,
+        dueDate: '',
+        debitHalalas: n(row.total),
+        creditHalalas: 0,
+        order: 2,
+        key: row.number,
+        of: kind,
+      });
+    movements.push({
+      date: row.doc_date,
+      kind,
+      number: row.number,
+      invoiceNumber,
+      description:
+        `${row.kind === 'receipt' ? 'سداد فاتورة' : 'إشعار دائن على فاتورة'} ${invoiceNumber}` +
+        (reference && reference !== invoiceNumber ? ` · ${reference}` : ''),
+      dueDate: '',
+      debitHalalas: 0,
+      creditHalalas: n(row.total),
+      order: 1,
+      key: row.number,
+    });
+  }
+  movements.sort(
+    (a, b) => a.date.localeCompare(b.date) || a.order - b.order || a.key.localeCompare(b.key),
+  );
+  let balance = 0,
+    openingHalalas = 0,
+    invoicedHalalas = 0,
+    paidHalalas = 0,
+    creditedHalalas = 0;
+  const rows: CustomerStatementRow[] = [];
+  // Per-invoice balance on the closing date, whatever the start of the period is.
+  const open = new Map<string, { total: number; settled: number; date: string; due: string }>();
+  for (const { order: _order, key: _key, of, ...item } of movements) {
+    if (item.date > to) continue;
+    balance += item.debitHalalas - item.creditHalalas;
+    const state = open.get(item.invoiceNumber);
+    if (item.kind === 'invoice')
+      open.set(item.invoiceNumber, {
+        total: item.debitHalalas,
+        settled: state?.settled ?? 0,
+        date: item.date,
+        due: item.dueDate || item.date,
+      });
+    else if (state) state.settled += item.creditHalalas - item.debitHalalas;
+    if (from && item.date < from) {
+      openingHalalas = balance;
+      continue;
+    }
+    if (item.kind === 'invoice') invoicedHalalas += item.debitHalalas;
+    if (item.kind === 'receipt' || of === 'receipt')
+      paidHalalas += item.creditHalalas - item.debitHalalas;
+    if (item.kind === 'credit_note' || of === 'credit_note')
+      creditedHalalas += item.creditHalalas - item.debitHalalas;
+    rows.push({ ...item, balanceHalalas: balance });
+  }
+  const openInvoices = [...open.entries()]
+    .map(([number, state]) => ({
+      number,
+      date: state.date,
+      dueDate: state.due,
+      totalHalalas: state.total,
+      settledHalalas: state.settled,
+      outstandingHalalas: state.total - state.settled,
+      daysOverdue: Math.max(0, dayGap(state.due, to)),
+    }))
+    .filter((item) => item.outstandingHalalas !== 0)
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.number.localeCompare(b.number));
+  return {
+    from,
+    to,
+    openingHalalas,
+    invoicedHalalas,
+    paidHalalas,
+    creditedHalalas,
+    closingHalalas: balance,
+    overdueHalalas: openInvoices
+      .filter((item) => item.daysOverdue > 0)
+      .reduce((sum, item) => sum + item.outstandingHalalas, 0),
+    rows,
+    openInvoices,
+    unpostedInvoices,
+  };
 }
 async function monthlyActuals(db: AsyncDb, ownerId: string, from: string, to: string) {
   return db.read<{ code: string; month: string; d: unknown; c: unknown }>(

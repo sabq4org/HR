@@ -42,6 +42,9 @@ import type {
 } from '../../shared/finance';
 import { useSearchParams } from 'react-router-dom';
 import { api, Modal, PageHeading, useApp } from '../lib';
+import { CustomerStatementModal } from './Statement';
+import { SellerBlock } from './SellerBlock';
+import { completeSeller } from '../../shared/finance';
 import './finance.css';
 
 type Tab = 'customers' | 'catalog' | 'quotes' | 'invoices' | 'settings';
@@ -226,6 +229,11 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
   const [selectedCustomer, setSelectedCustomer] = useState<FinanceCustomer | null>(null);
   const [selectedQuote, setSelectedQuote] = useState<FinanceQuote | null>(null);
   const [preview, setPreview] = useState<FinanceQuote | null>(null);
+  // A document saved before the company details were complete borrows the empty fields from the
+  // current settings; whatever it froze at the time stays as it was.
+  const docSeller = (seller: FinanceSeller) =>
+    overview ? completeSeller(seller, overview.settings.seller) : seller;
+  const [statementCustomer, setStatementCustomer] = useState<FinanceCustomer | null>(null);
   const [customerForm, setCustomerForm] = useState<FinanceCustomerInput>(blankCustomer());
   const [quoteForm, setQuoteForm] = useState<FinanceQuoteInput>(() => ({
     customerId: '',
@@ -766,6 +774,9 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                             <button className="text-button" onClick={() => beginCustomer(c)}>
                               تعديل
                             </button>
+                            <button className="text-button" onClick={() => setStatementCustomer(c)}>
+                              كشف حساب
+                            </button>
                             <button
                               className="text-button"
                               disabled={
@@ -1172,6 +1183,32 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                           update('seller', {
                             ...settingsForm.seller,
                             address: { ...settingsForm.seller.address, line: e.target.value },
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="رقم المبنى">
+                      <input
+                        dir="ltr"
+                        value={settingsForm.seller.address.buildingNumber ?? ''}
+                        onChange={(e) =>
+                          update('seller', {
+                            ...settingsForm.seller,
+                            address: {
+                              ...settingsForm.seller.address,
+                              buildingNumber: e.target.value,
+                            },
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="الحي">
+                      <input
+                        value={settingsForm.seller.address.district ?? ''}
+                        onChange={(e) =>
+                          update('seller', {
+                            ...settingsForm.seller,
+                            address: { ...settingsForm.seller.address, district: e.target.value },
                           })
                         }
                       />
@@ -1763,6 +1800,12 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
           </form>
         </FormPage>
       )}
+      {statementCustomer && (
+        <CustomerStatementModal
+          customer={statementCustomer}
+          close={() => setStatementCustomer(null)}
+        />
+      )}
       {preview && (
         <Modal title={`معاينة عرض السعر · ${preview.number}`} close={() => setPreview(null)} wide>
           <div className="fin-preview-actions">
@@ -1773,7 +1816,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
           </div>
           <article className="fin-document-paper fin-quote-paper" dir="rtl" lang="ar">
             <DocumentHeader
-              seller={preview.seller}
+              seller={docSeller(preview.seller)}
               kind="quote"
               title="عرض سعر"
               number={preview.number}
@@ -1800,7 +1843,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                 totalLabel="الإجمالي / Total"
                 noVat={preview.documentType === 'out_of_scope'}
               />
-              <BankAccountDetails seller={preview.seller} />
+              <BankAccountDetails seller={docSeller(preview.seller)} />
               {preview.notes && <NotesBox notes={preview.notes} />}
               <PaperFooter>
                 عرض سعر محفوظ كمسودة. لم يُرسل إلى العميل، ولا يمثل فاتورة ضريبية.
@@ -1841,7 +1884,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
           </div>
           <article className="fin-document-paper fin-invoice-paper" dir="rtl" lang="ar">
             <DocumentHeader
-              seller={finalInvoice.seller}
+              seller={docSeller(finalInvoice.seller)}
               kind="invoice"
               title={invoiceTitle(finalInvoice.documentType, finalInvoice.invoiceType).ar}
               subtitle={invoiceTitle(finalInvoice.documentType, finalInvoice.invoiceType).en}
@@ -1896,7 +1939,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                   ) : null
                 }
               />
-              <BankAccountDetails seller={finalInvoice.seller} />
+              <BankAccountDetails seller={docSeller(finalInvoice.seller)} />
               {finalInvoice.notes && <NotesBox notes={finalInvoice.notes} />}
               <PaperFooter>
                 {finalInvoice.documentType === 'out_of_scope'
@@ -1941,19 +1984,7 @@ function DocumentHeader({
 }) {
   return (
     <header className="fin-doc-head">
-      <div className="fin-doc-brand">
-        <img src="/brand/sabq-logo.svg" alt="سبق" />
-        <div>
-          <b>{seller.name || 'سبق'}</b>
-          {seller.address.line || seller.address.city ? (
-            <span>{[seller.address.line, seller.address.city].filter(Boolean).join('، ')}</span>
-          ) : null}
-          {seller.vatNumber && <span>الرقم الضريبي / VAT No: {seller.vatNumber}</span>}
-          {seller.commercialRegistration && (
-            <span>السجل التجاري / CR: {seller.commercialRegistration}</span>
-          )}
-        </div>
-      </div>
+      <SellerBlock seller={seller} />
       <aside className="fin-doc-heading">
         <h1>{title}</h1>
         <span>{subtitle ?? (kind === 'quote' ? 'Price Quotation' : 'Tax Invoice')}</span>

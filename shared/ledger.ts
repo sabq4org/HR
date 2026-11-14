@@ -2,6 +2,8 @@
  * Accounting ledger contract for the private finance workspace.
  * All money is integer halalas. Journal entries are append-only; corrections are reversals.
  */
+import type { FinanceCustomerInput, FinanceSeller } from './finance.js';
+
 export type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
 export type NormalSide = 'debit' | 'credit';
 /**
@@ -331,6 +333,49 @@ export interface AgingRow {
   outstandingHalalas: number;
   daysOverdue: number;
   bucket: 'current' | '1-30' | '31-60' | '61-90' | '90+';
+}
+export interface CustomerStatementRow {
+  date: string;
+  /** `reversal` undoes an earlier receipt or credit note and carries its number. */
+  kind: 'invoice' | 'receipt' | 'credit_note' | 'reversal';
+  /** Invoice number, or the receipt / credit note voucher number. */
+  number: string;
+  /** For a receipt or credit note: the invoice it settles. */
+  invoiceNumber: string;
+  description: string;
+  dueDate: string;
+  debitHalalas: number;
+  creditHalalas: number;
+  /** Running balance after this movement. */
+  balanceHalalas: number;
+}
+export interface CustomerStatementInvoice {
+  number: string;
+  date: string;
+  dueDate: string;
+  totalHalalas: number;
+  settledHalalas: number;
+  outstandingHalalas: number;
+  daysOverdue: number;
+}
+/** What one customer was invoiced, what they settled and what remains, up to a date. */
+export interface CustomerStatement {
+  customer: FinanceCustomerInput;
+  seller: FinanceSeller;
+  /** Null when the statement starts from the first movement. */
+  from: string | null;
+  to: string;
+  openingHalalas: number;
+  invoicedHalalas: number;
+  paidHalalas: number;
+  creditedHalalas: number;
+  closingHalalas: number;
+  overdueHalalas: number;
+  rows: CustomerStatementRow[];
+  /** Invoices still carrying a balance on the closing date. */
+  openInvoices: CustomerStatementInvoice[];
+  /** Issued invoices not yet posted to the books, so no receipt can be recorded on them. */
+  unpostedInvoices: number;
 }
 export interface BudgetLine {
   accountCode: string;
