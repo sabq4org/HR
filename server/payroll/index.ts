@@ -29,6 +29,11 @@ import {
 import { ensureServiceAccountRow } from '../service-api/service-account.js';
 import { decryptSensitive, encryptSensitive } from '../administration/security.js';
 import { approvesPayroll } from '../system-owner.js';
+import {
+  applyLeaveAdvances,
+  LEAVE_ADVANCE_COMPONENTS,
+  LEAVE_ADVANCE_PROBLEM_LABEL,
+} from '../leave/advance.js';
 
 type Actor = {
   id: string;
@@ -140,6 +145,7 @@ const EXCLUSION_LABEL: Record<string, string> = {
   employment_type_missing: 'نوع الارتباط (رسمي أو متعاون) غير محدد في الملف',
   contractor_amount_missing: 'المبلغ الشهري المقطوع للمتعاون غير مدخل',
   ...GOSI_PROBLEM_LABEL,
+  ...LEAVE_ADVANCE_PROBLEM_LABEL,
 };
 const paymentMethodOf = (value: unknown): PayrollPaymentMethod =>
   value === 'direct' || value === 'wps' ? value : 'unspecified';
@@ -240,6 +246,7 @@ export function createPayrollCommands(db: AsyncDb) {
         amountMinor: Number(l.amount_minor),
         source: actor.role === 'auditor' ? 'مصدر مالي معتمد' : l.source,
         sourceRequestId: actor.role === 'auditor' ? null : l.source_request_id,
+        sourceLeaveId: actor.role === 'auditor' ? null : (l.source_leave_id ?? null),
       })),
       people: people.map((p) => ({
         employeeId: actor.role === 'auditor' ? '' : p.employee_id,
@@ -747,6 +754,8 @@ export function createPayrollCommands(db: AsyncDb) {
             }
           }
           if (gosi) await applyInsurance(tx, id, gosi, policyId);
+          // Leave advances are not exclusions: the person is in the run, only the advance is missing.
+          for (const [code, n] of await applyLeaveAdvances(tx, id)) exclusions.set(code, n);
           const count = (
             await tx.read<Row>('SELECT COUNT(*) count FROM payroll_lines WHERE run_id=?', [id])
           )[0];
@@ -865,6 +874,8 @@ export function createPayrollCommands(db: AsyncDb) {
         const gosi = await policyGosi(tx, run.policy_id);
         await reconcilePeople(tx, run.id, gosi);
         if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
+        // A leave approved after the draft was prepared still gets its advance.
+        await applyLeaveAdvances(tx, run.id);
         await validateRunNet(tx, run, false);
       }
       if (next === 'closed') {
@@ -1092,6 +1103,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
           (l) =>
             l.employee_id === person.id &&
             !l.source_request_id &&
+            !l.source_leave_id &&
             l.component !== PAYROLL_COMPONENTS.insurance,
         );
         if (!prior || !lines.length) {
@@ -1150,6 +1162,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         );
       }
       if (gosi) await applyInsurance(tx, id, gosi, policy.id);
+      for (const [code, n] of await applyLeaveAdvances(tx, id)) exclusions.set(code, n);
       const count = (
         await tx.read<Row>('SELECT COUNT(*) count FROM payroll_lines WHERE run_id=?', [id])
       )[0];
@@ -1172,7 +1185,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
       return {
         run: await getRun(id, actor, tx),
         excludedCount: [...exclusions]
-          .filter(([code]) => !['copy_added'].includes(code))
+          .filter(([code]) => code !== 'copy_added' && !(code in LEAVE_ADVANCE_PROBLEM_LABEL))
           .reduce((n, [, c]) => n + c, 0),
         exclusions: [...exclusions].map(([code, count]) => ({
           code,
@@ -1198,9 +1211,17 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         body.reason.trim().length < 3
       )
         throw fail(400, 'invalid_input', 'الأسطر والسبب مطلوبان.');
+      // Leave-wage advance lines follow the approved leave and the rule, not hand edits: the
+      // ones sent back are dropped here and written again below (art. 109, decision 015).
+      const lines = run.correction_of
+        ? body.lines
+        : body.lines.filter(
+            (line: { component?: unknown }) =>
+              !LEAVE_ADVANCE_COMPONENTS.includes(String(line?.component ?? '')),
+          );
       const ids = new Set<string>();
       const sources = new Set<string>();
-      for (const line of body.lines) {
+      for (const line of lines) {
         const identity = `${line.employeeId}:${line.component}:${line.kind}`;
         if (
           !line.employeeId ||
@@ -1277,10 +1298,10 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
           if (consumed) throw fail(409, 'source_consumed', 'سبق استخدام مصدر الطلب في مسير آخر.');
         }
       }
-      if (!body.lines.length)
+      if (!lines.length)
         throw fail(400, 'empty_run', 'يجب أن يحتوي المسير على سطر واحد على الأقل.');
       await tx.execute('DELETE FROM payroll_lines WHERE run_id=?', [run.id]);
-      for (const l of body.lines)
+      for (const l of lines)
         await tx.execute(
           'INSERT INTO payroll_lines(id,run_id,employee_id,component,kind,amount_minor,source,source_request_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
           [
@@ -1304,6 +1325,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         const gosi = await policyGosi(tx, run.policy_id);
         await reconcilePeople(tx, run.id, gosi);
         if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
+        await applyLeaveAdvances(tx, run.id);
       }
       await validateRunNet(tx, run, false);
       await tx.execute(

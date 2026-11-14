@@ -1070,3 +1070,8 @@
 .gosi-example td.num {
   font-variant-numeric: tabular-nums;
 }
+
+.payroll-muted {
+  color: var(--payroll-muted);
+  font-size: 0.85rem;
+}

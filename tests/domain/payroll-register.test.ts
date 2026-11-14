@@ -145,6 +145,7 @@ test('register: template columns, payment-method groups, totals and correction p
     'بدل النقل',
     'بدلات أخرى',
     'المكافأة',
+    'أجر إجازة مقدم',
     'إجمالي الراتب',
     'تأمين الموظف',
     'الخصومات',

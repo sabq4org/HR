@@ -13,6 +13,7 @@ import {
   ArrowLeft,
   ArrowUpLeft,
   Bell,
+  CalendarClock,
   CalendarDays,
   Check,
   CheckCheck,
@@ -75,6 +76,7 @@ import { PayrollPage } from './payroll';
 import { EmployeeImportPage } from './imports';
 import { AccountLogin, AccountActivationPage, AccountsPage } from './access';
 import { LeavePoliciesPage } from './leave';
+import { LeaveEntitlementPage } from './leave/Entitlement';
 import { OperationsPage } from './operations';
 import { FinancePortal } from './finance/portal';
 
@@ -429,6 +431,7 @@ export default function App() {
       '/employees/import': 'استيراد ملفات الموظفين',
       '/settings/accounts': 'الحسابات والوصول',
       '/settings/leave': 'سياسات الإجازات',
+      '/leave-entitlement': 'استحقاق الإجازات والتصفية',
       '/settings/operations': 'حالة التشغيل',
     };
     document.title = `${titles[location.pathname] || 'الملف الوظيفي'} | مساحة فريق سبق`;
@@ -543,6 +546,9 @@ export default function App() {
             : []),
           { to: '/settings/leave', label: 'سياسات الإجازات', Icon: CalendarDays },
         ]
+      : []),
+    ...(['hr', 'finance', 'approver'].includes(data.me.role)
+      ? [{ to: '/leave-entitlement', label: 'استحقاق الإجازات والتصفية', Icon: CalendarClock }]
       : []),
     ...(accountMode
       ? [{ to: '/settings/accounts', label: 'الحسابات والوصول', Icon: ShieldCheck }]
@@ -734,6 +740,7 @@ export default function App() {
                 element={accountMode ? <Navigate replace to="/settings/leave" /> : <PoliciesPage />}
               />
               <Route path="/settings/leave" element={<LeavePoliciesPage />} />
+              <Route path="/leave-entitlement" element={<LeaveEntitlementPage />} />
               <Route
                 path="/settings/accounts"
                 element={accountMode ? <AccountsPage /> : <Navigate replace to="/" />}

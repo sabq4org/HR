@@ -223,6 +223,8 @@ export interface PayrollLine {
   amountMinor: number;
   source: string;
   sourceRequestId?: string | null;
+  /** Approved annual leave a leave-wage advance or its recovery comes from (art. 109). */
+  sourceLeaveId?: string | null;
 }
 export interface PayrollPayment {
   employeeId: string;

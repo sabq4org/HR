@@ -1,6 +1,10 @@
 import type { AsyncDb } from '../database.js';
 import type { FormValues, PolicyRecord } from '../../shared/administration.js';
 import { parseGosiRule } from '../../shared/gosi.js';
+import {
+  LEAVE_ENTITLEMENT_POLICY_KEY,
+  parseLeaveEntitlementValues,
+} from '../../shared/leave-entitlement.js';
 import { approvesPayroll } from '../system-owner.js';
 import { idempotent, newId, requiredString, requireRecord, versionValue } from './common.js';
 import { appendEvent, validIsoDate, type Actor } from './service.js';
@@ -117,6 +121,10 @@ export async function createPolicyDraft(
   )
     throw fault(400, 'INVALID_DATE', 'فترة السريان غير صالحة.');
   assertPayrollValues(key, values);
+  if (key === LEAVE_ENTITLEMENT_POLICY_KEY) {
+    const parsed = parseLeaveEntitlementValues(values);
+    if (!parsed.ok) throw fault(400, 'INVALID_POLICY', parsed.message);
+  }
   const id = newId();
   return idempotent(
     db,

@@ -116,3 +116,135 @@
     min-width: 0;
   }
 }
+
+/* Leave entitlement and settlement (decision 015) */
+.ent-rule {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 0 0 12px;
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+.ent-rule-head,
+.ent-settlement header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.ent-source {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  background: #fff6e3;
+  color: #8b6624;
+}
+.ent-source.official {
+  background: #e8f5ee;
+  color: #176a48;
+}
+.ent-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 18px;
+  margin: 0;
+  width: 100%;
+}
+.ent-facts div {
+  min-width: 0;
+}
+.ent-facts dt {
+  font-size: 12px;
+  color: var(--muted);
+}
+.ent-facts dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.ent-facts dd small {
+  display: block;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.ent-wide {
+  grid-column: 1 / -1;
+}
+.ent-total dd {
+  font-size: 18px;
+  color: #176a48;
+}
+.ent-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-top: 6px;
+}
+.ent-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: 8px 0 14px;
+}
+.ent-table td.num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ent-note {
+  font-size: 12px;
+  color: #8b6624;
+  min-width: 180px;
+}
+.ent-calc {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 14px 0;
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+.ent-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+.ent-settlement {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 12px;
+}
+.ent-muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+.ent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.ent-actions input {
+  flex: 1 1 220px;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font: inherit;
+}
+.ent-footnote {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+@media (max-width: 640px) {
+  .policy-form {
+    grid-template-columns: 1fr;
+  }
+}

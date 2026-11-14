@@ -632,7 +632,7 @@ export function PayrollPage({ actor }: Props) {
                       {(editing ? draftLines : selected.lines).map((line, index) => (
                         <tr key={line.id}>
                           <td>
-                            {editing ? (
+                            {editing && !line.sourceLeaveId ? (
                               <select
                                 aria-label="الموظف"
                                 value={line.employeeId}
@@ -672,7 +672,7 @@ export function PayrollPage({ actor }: Props) {
                             )}
                           </td>
                           <td>
-                            {editing ? (
+                            {editing && !line.sourceLeaveId ? (
                               <input
                                 aria-label="اسم المكوّن"
                                 value={line.component}
@@ -689,7 +689,7 @@ export function PayrollPage({ actor }: Props) {
                             )}
                           </td>
                           <td>
-                            {editing ? (
+                            {editing && !line.sourceLeaveId ? (
                               <select
                                 aria-label="نوع المكوّن"
                                 value={line.kind}
@@ -713,7 +713,7 @@ export function PayrollPage({ actor }: Props) {
                             )}
                           </td>
                           <td>
-                            {editing ? (
+                            {editing && !line.sourceLeaveId ? (
                               <input
                                 aria-label="المبلغ بالريال"
                                 type="number"
@@ -737,7 +737,7 @@ export function PayrollPage({ actor }: Props) {
                             )}
                           </td>
                           <td>
-                            {editing ? (
+                            {editing && !line.sourceLeaveId ? (
                               <select
                                 aria-label="مصدر الطلب المعتمد"
                                 value={line.sourceRequestId || ''}
@@ -785,6 +785,8 @@ export function PayrollPage({ actor }: Props) {
                                     </option>
                                   ))}
                               </select>
+                            ) : line.sourceLeaveId ? (
+                              'إجازة سنوية معتمدة (م109)'
                             ) : line.sourceRequestId ? (
                               <a
                                 href={`/requests/${line.sourceRequestId}`}
@@ -799,16 +801,20 @@ export function PayrollPage({ actor }: Props) {
                           <td>{line.source}</td>
                           {editing && (
                             <td>
-                              <button
-                                type="button"
-                                className="payroll-button secondary"
-                                onClick={() =>
-                                  setDraftLines((lines) => lines.filter((_, i) => i !== index))
-                                }
-                                aria-label="حذف السطر"
-                              >
-                                حذف
-                              </button>
+                              {line.sourceLeaveId ? (
+                                <span className="payroll-muted">من الإجازة</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="payroll-button secondary"
+                                  onClick={() =>
+                                    setDraftLines((lines) => lines.filter((_, i) => i !== index))
+                                  }
+                                  aria-label="حذف السطر"
+                                >
+                                  حذف
+                                </button>
+                              )}
                             </td>
                           )}
                         </tr>
