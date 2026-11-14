@@ -1159,3 +1159,13 @@
   font-size: 11px;
   color: var(--adm-muted);
 }
+
+.dialog-body > .adm-form {
+  padding-block: 0;
+}
+.dialog-body > .adm-note:first-child {
+  margin-top: 0;
+}
+.dialog-confirm .adm-field {
+  margin: 0;
+}

@@ -3,7 +3,8 @@ export interface FinanceAddress {
   line: string;
   city: string;
   postalCode: string;
-  country: 'SA';
+  /** ISO 3166-1 alpha-2. The seller is always SA; customers may be abroad. */
+  country: string;
   district?: string;
   buildingNumber?: string;
   additionalNumber?: string;
@@ -19,7 +20,10 @@ export interface FinanceCustomerInput {
   phone?: string;
   mobile?: string;
   notes?: string;
+  /** Language of the quotes and invoices issued to this customer. Older records read as Arabic. */
+  language?: FinanceDocumentLanguage;
 }
+export type FinanceDocumentLanguage = 'ar' | 'en';
 export interface FinanceCustomer extends FinanceCustomerInput {
   id: string;
   version: number;
@@ -35,7 +39,7 @@ export interface WafeqImportCandidate {
   vatNumber: string;
   email: string;
   city: string;
-  /** `unsupported`: an address outside Saudi Arabia, which local customers cannot hold. */
+  /** `unsupported`: a country that cannot be read as an ISO code. */
   status: 'new' | 'exists' | 'unsupported';
 }
 export interface FinanceSeller {
@@ -43,6 +47,9 @@ export interface FinanceSeller {
   vatNumber: string;
   commercialRegistration: string;
   address: FinanceAddress;
+  /** Printed on English documents in place of the Arabic name and address when set. */
+  nameEnglish?: string;
+  addressEnglish?: string;
   /** Display-only bank details, encrypted with and frozen into the seller snapshot. */
   bankAccount?: {
     beneficiaryName: string;
@@ -154,6 +161,8 @@ export interface FinanceQuoteInput {
   validUntil: string;
   notes: string;
   lines: FinanceLineInput[];
+  /** Fixed per document; defaults to the customer's language. */
+  language?: FinanceDocumentLanguage;
 }
 export interface FinanceQuote extends FinanceQuoteInput {
   documentType: FinanceDocumentType;
@@ -195,6 +204,7 @@ export interface FinanceInvoice {
   cancelledAt?: string;
   invoiceType?: 'standard' | 'simplified';
   documentType?: FinanceDocumentType;
+  language?: FinanceDocumentLanguage;
   purchaseOrder?: string;
   currency: 'SAR';
   customer: FinanceCustomerInput;
@@ -262,3 +272,36 @@ export interface FinanceOverview {
 // GET /api/finance/invoices/:id/pdf -> private provider PDF, only cleared.
 // POST /api/finance/settings/api-key {apiKey} -> {settings: FinanceSettings}, private only.
 // POST /api/finance/settings/test {} -> {settings: FinanceSettings}, read-only connection test.
+
+/** Countries offered for a customer address; SA keeps the Saudi national address fields. */
+export const financeCountries: ReadonlyArray<{ code: string; ar: string; en: string }> = [
+  { code: 'SA', ar: 'المملكة العربية السعودية', en: 'Saudi Arabia' },
+  { code: 'AE', ar: 'الإمارات العربية المتحدة', en: 'United Arab Emirates' },
+  { code: 'KW', ar: 'الكويت', en: 'Kuwait' },
+  { code: 'QA', ar: 'قطر', en: 'Qatar' },
+  { code: 'BH', ar: 'البحرين', en: 'Bahrain' },
+  { code: 'OM', ar: 'عُمان', en: 'Oman' },
+  { code: 'EG', ar: 'مصر', en: 'Egypt' },
+  { code: 'JO', ar: 'الأردن', en: 'Jordan' },
+  { code: 'LB', ar: 'لبنان', en: 'Lebanon' },
+  { code: 'MA', ar: 'المغرب', en: 'Morocco' },
+  { code: 'TR', ar: 'تركيا', en: 'Türkiye' },
+  { code: 'GB', ar: 'المملكة المتحدة', en: 'United Kingdom' },
+  { code: 'US', ar: 'الولايات المتحدة', en: 'United States' },
+  { code: 'CA', ar: 'كندا', en: 'Canada' },
+  { code: 'FR', ar: 'فرنسا', en: 'France' },
+  { code: 'DE', ar: 'ألمانيا', en: 'Germany' },
+  { code: 'NL', ar: 'هولندا', en: 'Netherlands' },
+  { code: 'CH', ar: 'سويسرا', en: 'Switzerland' },
+  { code: 'IN', ar: 'الهند', en: 'India' },
+  { code: 'PK', ar: 'باكستان', en: 'Pakistan' },
+  { code: 'CN', ar: 'الصين', en: 'China' },
+  { code: 'SG', ar: 'سنغافورة', en: 'Singapore' },
+];
+export const countryName = (code: string, language: FinanceDocumentLanguage = 'ar') =>
+  financeCountries.find((c) => c.code === code)?.[language] ?? code;
+/** A document's language: its own choice, else its customer's, else Arabic. */
+export const documentLanguage = (doc: {
+  language?: FinanceDocumentLanguage;
+  customer: { language?: FinanceDocumentLanguage };
+}): FinanceDocumentLanguage => doc.language ?? doc.customer.language ?? 'ar';

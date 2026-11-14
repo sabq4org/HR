@@ -1,6 +1,7 @@
 import { FileSpreadsheet, Pencil } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { FinanceCustomer, FinanceInvoice, FinanceQuote } from '../../shared/finance';
+import { countryName } from '../../shared/finance';
 import { Modal } from '../lib';
 import { Status } from './paper';
 
@@ -98,6 +99,9 @@ export function CustomerCard({
         <section>
           <h4>البيانات النظامية</h4>
           <dl>
+            <Field label="لغة المستندات">
+              {customer.language === 'en' ? 'English' : 'العربية'}
+            </Field>
             <Field label="الرقم الضريبي" ltr>
               {customer.vatNumber}
             </Field>
@@ -121,7 +125,7 @@ export function CustomerCard({
           </dl>
         </section>
         <section>
-          <h4>العنوان الوطني</h4>
+          <h4>{a.country && a.country !== 'SA' ? 'العنوان' : 'العنوان الوطني'}</h4>
           <dl>
             <Field label="الشارع">{a.line}</Field>
             <Field label="رقم المبنى" ltr>
@@ -129,6 +133,7 @@ export function CustomerCard({
             </Field>
             <Field label="الحي">{a.district}</Field>
             <Field label="المدينة">{a.city}</Field>
+            <Field label="الدولة">{countryName(a.country || 'SA')}</Field>
             <Field label="الرمز البريدي" ltr>
               {a.postalCode}
             </Field>
