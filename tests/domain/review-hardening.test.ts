@@ -456,3 +456,22 @@ test('isSystemOwner holds only for HR accounts listed in system_owners', async (
     await db.close();
   }
 });
+
+test('a run with no complete salary profile names the reasons and their counts', async () => {
+  const f = await payrollHarness();
+  try {
+    await f.db.execute(
+      "UPDATE employee_profile_data SET public_values_json='{}',encrypted_values_json='{}'",
+    );
+    const created = await f.api('hr', '', 'POST', {
+      period: '2027-01',
+      policyId: 'payroll-policy-demo-v1',
+      reason: 'لا ملفات مكتملة',
+    });
+    assert.equal(created.status, 400);
+    assert.equal(created.body.error.code, 'no_salary_profiles');
+    assert.match(created.body.error.message, /الأسباب: .+: \d+/);
+  } finally {
+    await f.close();
+  }
+});

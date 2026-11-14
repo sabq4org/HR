@@ -1,5 +1,5 @@
 import { money, PayslipPaper } from './PayslipPaper';
-import { PayrollRegisterPaper, PayrollRegisterView } from './PayrollRegister';
+import { PayrollRegisterPaper, PayrollRegisterView, periodName } from './PayrollRegister';
 import { PayrollPolicyForm } from './PayrollPolicyForm';
 import { GosiExplainer } from './GosiExplainer';
 import { GOSI_CATEGORIES, GOSI_CATEGORY_LABEL } from '../../shared/gosi';
@@ -77,7 +77,7 @@ export function PayrollPage({ actor }: Props) {
     [error, setError] = useState(''),
     [excludedCount, setExcludedCount] = useState(0),
     [period, setPeriod] = useState(currentPeriodInRiyadh),
-    [reason, setReason] = useState(''),
+    [reason, setReason] = useState(() => `مسير رواتب ${periodName(currentPeriodInRiyadh())}`),
     [actionReason, setActionReason] = useState(''),
     [editing, setEditing] = useState(false),
     [draftLines, setDraftLines] = useState<PayrollLine[]>([]),
@@ -455,10 +455,26 @@ export function PayrollPage({ actor }: Props) {
         <section className="payroll-create">
           <h2>إعداد مسير جديد</h2>
           <label>
-            الفترة <input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} />
+            الفترة{' '}
+            <input
+              type="month"
+              value={period}
+              onChange={(e) => {
+                const next = e.target.value;
+                // Keep the reason in step with the month while it is still the suggested text.
+                if (!reason.trim() || (period && reason === `مسير رواتب ${periodName(period)}`))
+                  setReason(next ? `مسير رواتب ${periodName(next)}` : '');
+                setPeriod(next);
+              }}
+            />
           </label>
           <label>
-            سبب الإنشاء <input value={reason} onChange={(e) => setReason(e.target.value)} />
+            سبب الإنشاء{' '}
+            <input
+              value={reason}
+              placeholder={period ? `مسير رواتب ${periodName(period)}` : ''}
+              onChange={(e) => setReason(e.target.value)}
+            />
           </label>
           <button
             className="payroll-button"
@@ -467,7 +483,7 @@ export function PayrollPage({ actor }: Props) {
           >
             <FileText size={16} /> إنشاء مسودة
           </button>
-          <small>تُستبعد رواتب معدّ المسير والمالية والمعتمد من هذا المسير.</small>
+          <small>يسحب المسير كل من هم على رأس العمل، ومنهم معدّ المسير والمالية والمعتمد.</small>
         </section>
       )}
       <div className="payroll-layout">
