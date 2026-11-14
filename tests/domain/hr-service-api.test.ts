@@ -1,4 +1,5 @@
-// «محاسب سبق» HR service key (phase 1): scoped read-only access. Synthetic data only.
+// «محاسب سبق» HR service key (phase 1): scoped read access. Synthetic data only.
+// Phase-2 writes are covered in hr-service-write.test.ts.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -8,6 +9,7 @@ import { createDatabase, createPostgresDatabase, type Db } from '../../server/da
 import { readEmployee, saveProfileValues } from '../../server/administration/service.js';
 import { generateServiceKey, hashServiceKey } from '../../server/finance/service-keys.js';
 import {
+  HR_DEFERRED_SCOPES,
   HR_FORBIDDEN_SCOPES,
   HR_READ_SCOPES,
   HR_WRITE_SCOPES,
@@ -111,9 +113,11 @@ test('HR service keys are random, digest-only, and distinct from finance keys', 
   assert.equal(serviceActorName('someone-else'), 'مستخدم');
 });
 
-test('scopes: read only in phase 1; payroll approve/close can never be granted', () => {
+test('scopes: phase-2 writes wired; leave.write deferred; approve/close never granted', () => {
   assert.deepEqual(parseHrServiceScopes(HR_READ_SCOPES.join(',')), [...HR_READ_SCOPES]);
-  for (const scope of HR_WRITE_SCOPES) assert.throws(() => parseHrServiceScopes(scope), /phase 2/);
+  assert.deepEqual(parseHrServiceScopes(HR_WRITE_SCOPES.join(',')), [...HR_WRITE_SCOPES]);
+  for (const scope of HR_DEFERRED_SCOPES)
+    assert.throws(() => parseHrServiceScopes(scope), /not available yet/);
   for (const scope of HR_FORBIDDEN_SCOPES)
     assert.throws(() => parseHrServiceScopes(`hr.employees.read,${scope}`), /never be granted/);
   assert.throws(() => parseHrServiceScopes('hr.everything'), /Unknown/);
@@ -121,9 +125,18 @@ test('scopes: read only in phase 1; payroll approve/close can never be granted',
   assert.equal(serviceMayRunPayrollAction('approve', everything), false);
   assert.equal(serviceMayRunPayrollAction('close', everything), false);
   assert.equal(serviceMayRunPayrollAction('review', everything), false);
+  assert.equal(serviceMayRunPayrollAction('reject', everything), false);
   assert.equal(serviceMayRunPayrollAction('submit', [...HR_READ_SCOPES]), false);
+  assert.equal(serviceMayRunPayrollAction('submit', ['hr.payroll.submit']), true);
   assert.ok(inHrServiceScope('GET', '/api/service/hr/employees'));
   assert.ok(!inHrServiceScope('POST', '/api/service/hr/employees'));
+  assert.ok(inHrServiceScope('PATCH', '/api/service/hr/employees/emp-sara'));
+  assert.ok(!inHrServiceScope('PATCH', '/api/service/hr/employees/emp-sara/compensation'));
+  assert.ok(!inHrServiceScope('DELETE', '/api/service/hr/employees/emp-sara'));
+  assert.ok(inHrServiceScope('POST', '/api/service/hr/payroll'));
+  assert.ok(inHrServiceScope('POST', '/api/service/hr/payroll/run-1/actions'));
+  assert.ok(!inHrServiceScope('PATCH', '/api/service/hr/payroll/run-1'));
+  assert.ok(!inHrServiceScope('POST', '/api/admin/payroll/run-1/actions'));
   assert.ok(!inHrServiceScope('GET', '/api/finance'));
   assert.ok(!inHrServiceScope('GET', '/api/admin/payroll'));
 });
