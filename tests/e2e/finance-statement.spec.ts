@@ -57,7 +57,9 @@ test('customer statement: invoices, payments and balance due on landscape A4', a
         dueDate: due,
       })
     ).invoice.id;
-    const accepted = await page.request.post(`/__test__/accept-invoice/${id}`);
+    const accepted = await page.request.post(`/__test__/accept-invoice/${id}`, {
+      headers: headers(),
+    });
     expect(accepted.ok(), await accepted.text()).toBeTruthy();
     await post(page, `/ledger/invoices/${id}/post`, { revenueAccountCode: '4101' });
     return id;
