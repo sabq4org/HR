@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { RiyalSign } from './RiyalSign';
 import {
+  ArrowRight,
   Check,
   CircleAlert,
   ClipboardList,
@@ -142,6 +143,28 @@ function Alert({ children }: { children: string }) {
     </p>
   );
 }
+function FormPage({
+  title,
+  close,
+  children,
+}: {
+  title: string;
+  close: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <section className="fin-form-page" aria-labelledby="fin-form-title">
+      <header className="fin-form-page-head">
+        <button type="button" className="button secondary small" onClick={close}>
+          <ArrowRight size={16} />
+          رجوع
+        </button>
+        <h2 id="fin-form-title">{title}</h2>
+      </header>
+      {children}
+    </section>
+  );
+}
 function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
     <label className="fin-field">
@@ -168,7 +191,7 @@ function Status({
 
 export function FinancePage() {
   const { data, notify } = useApp();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const access = (data as typeof data & { financeAccess?: boolean }).financeAccess === true;
   const [overview, setOverview] = useState<FinanceOverview | null>(null);
   const [tab, setTab] = useState<Tab>(() =>
@@ -177,6 +200,18 @@ export function FinancePage() {
   const [loadError, setLoadError] = useState('');
   const [busy, setBusy] = useState('');
   const [dialog, setDialog] = useState<'customer' | 'catalog' | 'quote' | 'convert' | null>(null);
+  const openForm = (kind: 'customer' | 'catalog' | 'quote' | 'convert') => {
+    setDialog(kind);
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+      next.set('form', kind);
+      return next;
+    });
+    window.scrollTo({ top: 0 });
+  };
+  useEffect(() => {
+    if (!searchParams.get('form')) setDialog(null);
+  }, [searchParams]);
   const [selectedItem, setSelectedItem] = useState<FinanceCatalogItem | null>(null);
   const [catalogForm, setCatalogForm] = useState<FinanceCatalogItemInput>(blankCatalogItem());
   const [catalogPick, setCatalogPick] = useState('');
@@ -240,7 +275,7 @@ export function FinancePage() {
         ? { ...blankCustomer(), ...customer, address: { ...blankAddress(), ...customer.address } }
         : blankCustomer(),
     );
-    setDialog('customer');
+    openForm('customer');
   };
   const beginQuote = (quote?: FinanceQuote) => {
     setSelectedQuote(quote ?? null);
@@ -274,7 +309,7 @@ export function FinancePage() {
           },
     );
     setCatalogPick('');
-    setDialog('quote');
+    openForm('quote');
   };
   const quoteType = quoteForm.documentType ?? 'standard';
   // Switching the document type re-applies its tax rule to every line.
@@ -326,7 +361,7 @@ export function FinancePage() {
           }
         : blankCatalogItem(),
     );
-    setDialog('catalog');
+    openForm('catalog');
   };
   const saveCatalogItem = async (item: FinanceCatalogItem | null, active: boolean) => {
     const path = item ? `/finance/catalog/${item.id}` : '/finance/catalog';
@@ -359,7 +394,16 @@ export function FinancePage() {
       setBusy('');
     }
   };
-  const closeDialog = () => setDialog(null);
+  // Entry forms open as their own page (?form=...) so browser back returns to the list.
+  const closeDialog = () => {
+    setDialog(null);
+    if (searchParams.get('form'))
+      setSearchParams((params) => {
+        const next = new URLSearchParams(params);
+        next.delete('form');
+        return next;
+      });
+  };
   const onCustomerSave = async (event: FormEvent) => {
     event.preventDefault();
     const path = selectedCustomer
@@ -442,7 +486,7 @@ export function FinancePage() {
   const beginConvert = (quote: FinanceQuote) => {
     setSelectedQuote(quote);
     setConvertDates({ issueDate: today(), dueDate: quote.validUntil || '' });
-    setDialog('convert');
+    openForm('convert');
   };
   const convertQuote = async (event: FormEvent) => {
     event.preventDefault();
@@ -636,7 +680,7 @@ export function FinancePage() {
             </>
           )}
         </section>
-      ) : (
+      ) : dialog ? null : (
         <>
           <nav className="fin-tabs" aria-label="أقسام المالية">
             {(
@@ -1212,10 +1256,9 @@ export function FinancePage() {
         </>
       )}
       {dialog === 'customer' && (
-        <Modal
+        <FormPage
           title={selectedCustomer ? 'تعديل بيانات العميل' : 'إضافة عميل'}
           close={closeDialog}
-          wide
         >
           <form className="fin-dialog-form" onSubmit={onCustomerSave}>
             <div className="fin-grid">
@@ -1359,10 +1402,10 @@ export function FinancePage() {
               </button>
             </div>
           </form>
-        </Modal>
+        </FormPage>
       )}
       {dialog === 'catalog' && (
-        <Modal title={selectedItem ? 'تعديل بند محفوظ' : 'بند محفوظ جديد'} close={closeDialog}>
+        <FormPage title={selectedItem ? 'تعديل بند محفوظ' : 'بند محفوظ جديد'} close={closeDialog}>
           <form
             className="fin-dialog-form"
             onSubmit={(event) => {
@@ -1424,10 +1467,10 @@ export function FinancePage() {
               </button>
             </div>
           </form>
-        </Modal>
+        </FormPage>
       )}
       {dialog === 'quote' && (
-        <Modal title={selectedQuote ? 'تعديل عرض السعر' : 'عرض سعر جديد'} close={closeDialog} wide>
+        <FormPage title={selectedQuote ? 'تعديل عرض السعر' : 'عرض سعر جديد'} close={closeDialog}>
           <form className="fin-dialog-form" onSubmit={onQuoteSave}>
             <div className="fin-grid">
               <Field label="نوع الفاتورة">
@@ -1649,10 +1692,10 @@ export function FinancePage() {
               </button>
             </div>
           </form>
-        </Modal>
+        </FormPage>
       )}
       {dialog === 'convert' && selectedQuote && (
-        <Modal title="تحويل عرض السعر إلى مسودة فاتورة" close={closeDialog}>
+        <FormPage title="تحويل عرض السعر إلى مسودة فاتورة" close={closeDialog}>
           <form className="fin-dialog-form" onSubmit={convertQuote}>
             <p className="fin-convert-note">
               سيُنشأ سجل فاتورة بحالة <b>مسودة</b> مرتبط بالعرض {selectedQuote.number}. لن تُصدر
@@ -1708,7 +1751,7 @@ export function FinancePage() {
               </button>
             </div>
           </form>
-        </Modal>
+        </FormPage>
       )}
       {preview && (
         <Modal title={`معاينة عرض السعر · ${preview.number}`} close={() => setPreview(null)} wide>

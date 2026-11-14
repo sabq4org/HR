@@ -1073,3 +1073,27 @@
   flex: 1;
   min-width: 0;
 }
+
+/* Entry forms as full pages instead of dialogs. */
+.fin-form-page {
+  margin-top: 4px;
+  border: 1px solid var(--line, #e3eaf0);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+.fin-form-page-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--line, #e3eaf0);
+}
+.fin-form-page-head h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.fin-form-page .fin-dialog-form {
+  max-height: none;
+  overflow: visible;
+  padding: 22px;
+}

@@ -60,7 +60,9 @@ test('private finance customer, quote, invoice, Wafeq readiness, and official ou
 
   await page.getByRole('button', { name: 'العملاء', exact: true }).click();
   await page.getByRole('button', { name: 'إضافة عميل', exact: true }).click();
-  const customerDialog = page.getByRole('dialog');
+  const customerDialog = page.locator('.fin-form-page');
+  await expect(page).toHaveURL(/form=customer/);
+  await expect(page.getByRole('heading', { name: 'إضافة عميل' })).toBeVisible();
   await customerDialog.getByLabel('اسم العميل بالعربية').fill(customerName);
   await customerDialog
     .getByLabel('البريد الإلكتروني')
@@ -76,7 +78,7 @@ test('private finance customer, quote, invoice, Wafeq readiness, and official ou
 
   await page.getByRole('button', { name: 'عروض الأسعار', exact: true }).click();
   await page.getByRole('button', { name: 'عرض سعر جديد', exact: true }).click();
-  const quoteDialog = page.getByRole('dialog');
+  const quoteDialog = page.locator('.fin-form-page');
   await quoteDialog.getByLabel('العميل').selectOption({ label: customerName });
   await quoteDialog.getByLabel('عنوان العرض').fill(quoteTitle);
   await quoteDialog.getByLabel('صالح حتى').fill('2027-12-31');
@@ -133,7 +135,7 @@ test('private finance customer, quote, invoice, Wafeq readiness, and official ou
   }
   await page.getByRole('button', { name: 'إغلاق' }).last().click();
   await quoteRow.getByRole('button', { name: 'تحويل إلى مسودة فاتورة' }).click();
-  const convertDialog = page.getByRole('dialog');
+  const convertDialog = page.locator('.fin-form-page');
   await convertDialog.getByLabel('رقم أمر الشراء (اختياري)').fill('PO-SYN-204');
   await expect(convertDialog.getByLabel('نوع الفاتورة')).toHaveValue(/B2B/);
   await convertDialog.getByRole('button', { name: 'إنشاء مسودة الفاتورة', exact: true }).click();
@@ -178,7 +180,7 @@ test('private finance customer, quote, invoice, Wafeq readiness, and official ou
   // Saved items are inserted into a zero-rated quote with the type's tax rule applied.
   await page.getByRole('button', { name: 'البنود المحفوظة', exact: true }).click();
   await page.getByRole('button', { name: 'إضافة بند محفوظ', exact: true }).click();
-  const itemDialog = page.getByRole('dialog');
+  const itemDialog = page.locator('.fin-form-page');
   const itemName = `استشارة تحريرية ${testInfo.project.name}`;
   await itemDialog.getByLabel('وصف البند').fill(itemName);
   await itemDialog.getByLabel('سعر الوحدة (ر.س)').fill('900.00');
@@ -186,7 +188,7 @@ test('private finance customer, quote, invoice, Wafeq readiness, and official ou
   await expect(page.getByRole('row', { name: new RegExp(itemName) })).toContainText('15٪');
   await page.getByRole('button', { name: 'عروض الأسعار', exact: true }).click();
   await page.getByRole('button', { name: 'عرض سعر جديد', exact: true }).click();
-  const zeroDialog = page.getByRole('dialog');
+  const zeroDialog = page.locator('.fin-form-page');
   await zeroDialog.getByLabel('نوع الفاتورة').selectOption('zero_rated');
   await zeroDialog.getByLabel('العميل').selectOption({ label: customerName });
   await zeroDialog.getByLabel('عنوان العرض').fill(`خدمة دولية ${testInfo.project.name}`);
@@ -199,7 +201,7 @@ test('private finance customer, quote, invoice, Wafeq readiness, and official ou
   await expect(zeroDialog.getByLabel('سبب عدم احتساب الضريبة')).not.toHaveValue('');
   await zeroDialog.getByRole('button', { name: 'حفظ عرض السعر', exact: true }).click();
   const zeroRow = page.getByRole('row', { name: new RegExp(`خدمة دولية`) }).first();
-  await expect(zeroRow).toContainText('بدون ضريبة');
+  await expect(zeroRow).toContainText('نسبة صفرية');
   await zeroRow.getByRole('button', { name: 'معاينة' }).click();
   await expect(page.locator('.fin-quote-paper .fin-paper-reason')).toHaveCount(1);
   await page.getByRole('button', { name: 'إغلاق' }).last().click();
