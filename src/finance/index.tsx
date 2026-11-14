@@ -135,7 +135,7 @@ function mutationKey(path: string, ref: MutableRefObject<Record<string, string>>
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : 'تعذّر إكمال العملية. أعد المحاولة.';
 }
-function Alert({ children }: { children: string }) {
+export function Alert({ children }: { children: string }) {
   return (
     <p className="fin-alert" role="alert">
       <CircleAlert size={17} />
@@ -143,7 +143,7 @@ function Alert({ children }: { children: string }) {
     </p>
   );
 }
-function FormPage({
+export function FormPage({
   title,
   close,
   children,
@@ -165,7 +165,15 @@ function FormPage({
     </section>
   );
 }
-function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
+export function Field({
+  label,
+  children,
+  hint,
+}: {
+  label: string;
+  children: ReactNode;
+  hint?: string;
+}) {
   return (
     <label className="fin-field">
       <span>{label}</span>
@@ -174,7 +182,7 @@ function Field({ label, children, hint }: { label: string; children: ReactNode; 
     </label>
   );
 }
-function Status({
+export function Status({
   text,
   kind = 'neutral',
 }: {
@@ -189,7 +197,7 @@ function Status({
   );
 }
 
-export function FinancePage() {
+export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
   const { data, notify } = useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const access = (data as typeof data & { financeAccess?: boolean }).financeAccess === true;
@@ -644,17 +652,19 @@ export function FinancePage() {
       </section>
     );
   return (
-    <section className="finance-page" dir="rtl">
-      <PageHeading
-        title="المالية"
-        subtitle="العملاء وعروض الأسعار والفواتير المرتبطة بوافق."
-        action={
-          <button className="button secondary" onClick={() => void load()} disabled={!!busy}>
-            <RefreshCw size={16} />
-            تحديث البيانات
-          </button>
-        }
-      />
+    <section className={`finance-page${embedded ? ' embedded' : ''}`} dir="rtl">
+      {!embedded && (
+        <PageHeading
+          title="المالية"
+          subtitle="العملاء وعروض الأسعار والفواتير المرتبطة بوافق."
+          action={
+            <button className="button secondary" onClick={() => void load()} disabled={!!busy}>
+              <RefreshCw size={16} />
+              تحديث البيانات
+            </button>
+          }
+        />
+      )}
       <div className="fin-banner">
         <div>
           <b>مساحة مالية خاصة</b>
@@ -1902,7 +1912,7 @@ export function FinancePage() {
     </section>
   );
 }
-function Empty({ title, detail }: { title: string; detail: string }) {
+export function Empty({ title, detail }: { title: string; detail: string }) {
   return (
     <div className="fin-empty">
       <span>

@@ -177,7 +177,7 @@ test('migrations and synthetic reference records persist when the database is re
           'SELECT version FROM schema_migrations ORDER BY version',
         )
       ).map((r) => r.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 10, 11],
+      [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12],
     );
     assert.equal(
       (await first.read<{ n: number }>('SELECT count(*) AS n FROM employment_periods'))[0].n,
@@ -286,7 +286,7 @@ test('migrations and synthetic reference records persist when the database is re
     );
     assert.equal(
       (await reopened.read<{ n: number }>('SELECT count(*) AS n FROM schema_migrations'))[0].n,
-      10,
+      11,
     );
     await reopened.close();
   } finally {
