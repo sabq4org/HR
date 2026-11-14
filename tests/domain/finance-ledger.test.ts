@@ -33,6 +33,7 @@ const provider: WafeqClientLike = {
   getOrganization: async () => ({ id: 'org-test', name: 'Test organization' }),
   createCustomer: async () => ({ id: 'w-customer-1' }),
   getCustomer: async (id) => ({ id }),
+  listCustomers: async () => [],
   findCustomerByExternalId: async () => null,
   createInvoice: async () => ({ id: 'w-invoice-1', status: 'unknown', qrCode: null }),
   findInvoiceByExternalId: async () => null,

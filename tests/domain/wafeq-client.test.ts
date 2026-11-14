@@ -407,3 +407,50 @@ test('translates request timeouts without leaking fetch exception details', asyn
     },
   );
 });
+
+test('lists customer contacts across pages leniently and skips supplier-only rows', async () => {
+  const urls: string[] = [];
+  const client = new WafeqClient(apiKey, async (input, init = {}) => {
+    urls.push(String(input));
+    assert.equal(init.method, 'GET');
+    if (String(input).includes('page=2'))
+      return json({
+        count: 4,
+        next: null,
+        results: [{ id: 'c-4', name: { ar: 'عميل اصطناعي', en: 'Synthetic' }, external_id: null }],
+      });
+    return json({
+      count: 4,
+      next: 'https://elsewhere.example/ignored',
+      results: [
+        {
+          id: 'c-1',
+          name: 'Synthetic One',
+          email: null,
+          tax_registration_number: '300000000000003',
+          city: 'Riyadh',
+          postal_code: 12345,
+          is_customer: true,
+        },
+        { id: 'c-2', name: 'Supplier only', is_customer: false },
+        { id: 'c-3', name: 'Supplier tagged', relationship: ['SUPPLIER'] },
+      ],
+    });
+  });
+  const contacts = await client.listCustomers();
+  assert.deepEqual(
+    contacts.map((c) => [c.id, c.name, c.nameEnglish, c.vatNumber, c.address.postalCode]),
+    [
+      ['c-1', 'Synthetic One', '', '300000000000003', '12345'],
+      ['c-4', 'عميل اصطناعي', 'Synthetic', '', ''],
+    ],
+  );
+  assert.deepEqual(urls, [
+    'https://api.wafeq.com/v1/contacts/?page_size=100',
+    'https://api.wafeq.com/v1/contacts/?page_size=100&page=2',
+  ]);
+  await assert.rejects(
+    () => new WafeqClient(apiKey, async () => json({ results: 'no' })).listCustomers(),
+    /invalid_response/,
+  );
+});

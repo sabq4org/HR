@@ -1442,3 +1442,71 @@
     font-size: 15px;
   }
 }
+
+/* Import from Wafeq: review list before anything is saved. */
+.fin-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.fin-import {
+  display: grid;
+  gap: 14px;
+  padding: 18px 24px 22px;
+}
+.fin-import-intro {
+  margin: 0;
+  color: #52657a;
+  line-height: 1.8;
+}
+.fin-import-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.fin-import-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #52657a;
+  font-size: 13px;
+}
+.fin-import-list {
+  max-height: min(52vh, 460px);
+  overflow: auto;
+}
+.fin-import-list input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+}
+.fin-import-exists td {
+  color: #8493a3;
+}
+.fin-import > footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #e3eaf0;
+}
+@media (max-width: 560px) {
+  .fin-import {
+    padding: 14px 16px 18px;
+  }
+}
+.fin-import-list .fin-table {
+  min-width: 560px;
+}
+.fin-import-list .fin-table td small {
+  display: block;
+  margin-top: 4px;
+  color: var(--fin-muted);
+  font-size: 11px;
+}
+.fin-import-list .fin-status {
+  white-space: nowrap;
+}
