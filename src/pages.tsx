@@ -488,8 +488,12 @@ export function PeoplePage() {
       notify(onDuty ? `${e.name}: صار على رأس العمل.` : `${e.name}: لم يعد على رأس العمل.`);
     } catch (error) {
       notify(error instanceof Error ? error.message : 'تعذّر تغيير الحالة.');
-    } finally {
+    }
+    try {
       await refresh();
+    } catch {
+      notify('تعذّر تحديث القائمة؛ أعد تحميل الصفحة للتأكد من الحالة.');
+    } finally {
       setSwitching((current) => {
         const next = new Set(current);
         next.delete(e.id);
