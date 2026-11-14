@@ -21,11 +21,14 @@ import {
   DOCUMENT_ORIGIN,
   PREVIEW_PAGE_CSS,
   documentAsset,
+  documentStylesheet,
   invoiceHtml,
   quoteHtml,
   statementHtml,
 } from '../../server/finance/document-html.js';
-import { completeSeller, type FinanceSeller } from '../../shared/finance.js';
+import { invoiceQrSrc } from '../../server/finance/qr-image.js';
+import { completeSeller, formatIban, type FinanceSeller } from '../../shared/finance.js';
+import { INTERNAL_COPY_LABEL, quoteFooterText } from '../../src/finance/paper.js';
 
 process.env.HR_DATA_KEY ??= randomBytes(32).toString('base64url');
 const OWNER = 'emp-finance-pdf-owner';
@@ -175,7 +178,7 @@ test('document HTML is the preview paper with the settings seller and bank detai
       app.quote.number,
       'عميل اختبار الطباعة (وهمي)',
       'إعلان بانر رقمي',
-      'SA6000000000000000001234',
+      'SA60 0000 0000 0000 0000 1234',
       'بنك تجريبي',
       '/brand/sabq-logo.svg',
       '@page finance-document',
@@ -191,6 +194,107 @@ test('document HTML is the preview paper with the settings seller and bank detai
     assert.ok(html.includes('fin-document-paper fin-statement-paper'));
     assert.ok(html.includes('@page { size: A4 landscape; margin: 10mm 12mm; }'));
     assert.ok(html.includes(app.invoice.number));
+  } finally {
+    await app.close();
+  }
+});
+
+test('formatIban groups in blocks of 4 and leaves the stored value untouched', () => {
+  assert.equal(formatIban('SA5680000305608010040444'), 'SA56 8000 0305 6080 1004 0444');
+  assert.equal(formatIban('SA56 8000 0305 6080 1004 0444'), 'SA56 8000 0305 6080 1004 0444');
+  assert.equal(formatIban(' sa5680000305608010040444 '), 'SA56 8000 0305 6080 1004 0444');
+});
+
+test('quote HTML follows the real status, groups the IBAN and right-aligns bank values', async () => {
+  const app = await serve();
+  try {
+    const full = completeSeller(app.quote.seller, seller);
+    const draft = quoteHtml(app.quote, full);
+    assert.equal(app.quote.status, 'draft');
+    assert.ok(draft.includes('مسودة عرض سعر'), 'draft badge');
+    assert.ok(!draft.includes('تم التحويل إلى فاتورة'), 'draft is not converted');
+    assert.ok(draft.includes('SA60 0000 0000 0000 0000 1234'), 'grouped IBAN');
+    assert.ok(!draft.includes('SA6000000000000000001234'), 'ungrouped IBAN stays out of the paper');
+    assert.match(
+      draft,
+      /<dd class="fin-bank-value" dir="ltr">\s*SA60 0000 0000 0000 0000 1234\s*<\/dd>/,
+    );
+    assert.match(draft, /<dd class="fin-bank-value" dir="ltr">\s*0000000000000\s*<\/dd>/);
+
+    const converted = quoteHtml({ ...app.quote, status: 'converted' }, full);
+    assert.ok(converted.includes('تم التحويل إلى فاتورة'), 'converted badge');
+    assert.ok(!converted.includes('مسودة عرض سعر'), 'converted is not a draft badge');
+
+    const invoice = invoiceHtml(app.invoice, completeSeller(app.invoice.seller, seller));
+    assert.equal(app.invoice.status, 'draft');
+    assert.ok(invoice.includes('مسودة فاتورة'), 'draft invoice badge stays');
+
+    const css = documentStylesheet();
+    assert.match(
+      css,
+      /\.fin-bank-card dd\.fin-bank-value\s*\{[^}]*text-align:\s*right/,
+      'bank values right-aligned under their labels',
+    );
+    assert.match(css, /\.fin-bank-card dd\.fin-bank-value\s*\{[^}]*unicode-bidi:\s*isolate/);
+    assert.match(css, /\.fin-bank-card dd\.fin-bank-value\s*\{[^}]*direction:\s*ltr/);
+  } finally {
+    await app.close();
+  }
+});
+
+test('converted quote footer follows the real status', async () => {
+  const app = await serve();
+  try {
+    const full = completeSeller(app.quote.seller, seller);
+    const draft = quoteHtml(app.quote, full);
+    assert.ok(draft.includes(quoteFooterText.draft));
+    assert.ok(!draft.includes(quoteFooterText.converted));
+    const converted = quoteHtml({ ...app.quote, status: 'converted' }, full);
+    assert.ok(converted.includes(quoteFooterText.converted));
+    assert.ok(!converted.includes('عرض سعر محفوظ كمسودة'));
+  } finally {
+    await app.close();
+  }
+});
+
+test('cleared invoice HTML shows the stored QR and an internal-copy label', async () => {
+  const app = await serve();
+  try {
+    const full = completeSeller(app.invoice.seller, seller);
+    const payload = 'SA-TEST-QR-PAYLOAD-001';
+    const cleared = invoiceHtml(
+      { ...app.invoice, status: 'cleared', zatcaStatus: 'cleared', qrCode: payload },
+      full,
+    );
+    const qrSrc = invoiceQrSrc(payload);
+    assert.ok(qrSrc, 'QR data URL');
+    assert.ok(cleared.includes('class="fin-qr"'), 'QR image is present');
+    assert.ok(cleared.includes(qrSrc), 'QR encodes the stored payload');
+    assert.ok(cleared.includes(INTERNAL_COPY_LABEL));
+    assert.ok(cleared.includes('نسخة داخلية – ليست الفاتورة الضريبية الرسمية'));
+    assert.ok(
+      !cleared.includes('فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'),
+      'API copy must not claim ZATCA compliance',
+    );
+    assert.ok(!cleared.includes('/api/finance/invoices/') && !cleared.includes('"/qr"'));
+
+    const draft = invoiceHtml(app.invoice, full);
+    assert.equal(app.invoice.status, 'draft');
+    assert.ok(draft.includes('هذه معاينة داخلية للمسودة وليست فاتورة صادرة أو مستندًا ضريبيًا.'));
+    assert.ok(draft.includes(INTERNAL_COPY_LABEL));
+    assert.ok(draft.includes('مسودة فاتورة · للمعاينة الداخلية فقط'));
+    assert.ok(!draft.includes('class="fin-qr"'));
+    assert.ok(!draft.includes('فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'));
+
+    const acceptedNoQr = invoiceHtml(
+      { ...app.invoice, status: 'cleared', zatcaStatus: 'cleared', qrCode: null },
+      full,
+    );
+    assert.ok(acceptedNoQr.includes(INTERNAL_COPY_LABEL));
+    assert.ok(!acceptedNoQr.includes('class="fin-qr"'));
+    assert.ok(
+      !acceptedNoQr.includes('فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'),
+    );
   } finally {
     await app.close();
   }

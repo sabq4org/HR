@@ -19,6 +19,8 @@ import type {
   FinanceSeller,
   FinanceCustomerInput,
 } from '../../shared/finance.js';
+import { formatIban } from '../../shared/finance.js';
+import { INTERNAL_COPY_LABEL, quoteFooterText, quoteStatusText } from '../../src/finance/paper.js';
 
 const bidi = bidiFactory();
 const ARABIC = /[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
@@ -321,10 +323,15 @@ function render(p: Printable): Promise<Buffer> {
   const extras: string[] = [];
   if (p.notes.trim()) extras.push(`ملاحظات: ${p.notes.trim()}`);
   const bank = p.seller.bankAccount;
-  if (bank?.iban)
-    extras.push(
-      `التحويل البنكي: ${bank.bankName} — ${bank.beneficiaryName} — ${ltr(`IBAN ${bank.iban}`)}`,
-    );
+  if (bank && Object.values(bank).some((value) => value.trim())) {
+    const parts = [
+      bank.beneficiaryName && `المستفيد: ${bank.beneficiaryName}`,
+      bank.bankName && `البنك: ${bank.bankName}`,
+      bank.accountNumber && `رقم الحساب: ${ltr(bank.accountNumber)}`,
+      bank.iban && `الآيبان: ${ltr(formatIban(bank.iban))}`,
+    ].filter(Boolean);
+    extras.push(`التحويل البنكي: ${parts.join(' — ')}`);
+  }
   y += 8;
   for (const text of extras)
     for (const row of wrap(doc, text, width, 9.5)) {
@@ -350,6 +357,7 @@ export function quotePdf(quote: FinanceQuote): Promise<Buffer> {
       ['العنوان', quote.title],
       ['تاريخ العرض', ltr(quote.issueDate)],
       ['صالح حتى', ltr(quote.validUntil)],
+      ['الحالة', quoteStatusText[quote.status]],
       ['نوع المستند عند الفوترة', typeLabel[quote.documentType ?? 'standard']],
     ],
     seller: quote.seller,
@@ -359,7 +367,7 @@ export function quotePdf(quote: FinanceQuote): Promise<Buffer> {
     taxHalalas: quote.taxHalalas,
     totalHalalas: quote.totalHalalas,
     notes: quote.notes,
-    footer: `عرض سعر صادر من النظام المالي لمساحة الفريق، صالح حتى ${ltr(quote.validUntil)}. لا يُعد فاتورة ولا مطالبة بالدفع.`,
+    footer: `${quoteFooterText[quote.status]} صالح حتى ${ltr(quote.validUntil)}.`,
   });
 }
 
@@ -385,7 +393,6 @@ export function invoicePdf(invoice: FinanceInvoice): Promise<Buffer> {
     taxHalalas: invoice.taxHalalas,
     totalHalalas: invoice.totalHalalas,
     notes: invoice.notes,
-    footer:
-      'نسخة داخلية للمراجعة من مساحة الفريق، وليست فاتورة ضريبية معتمدة: لا تحمل رمز QR ولا ختم الهيئة. الفاتورة الضريبية الرسمية تصدر عبر المزود المعتمد.',
+    footer: `${INTERNAL_COPY_LABEL}. الفاتورة الضريبية الرسمية تصدر عبر المزود المعتمد على /api/finance/invoices/:id/pdf.`,
   });
 }
