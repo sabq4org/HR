@@ -16,7 +16,8 @@ import type {
   FinanceSettings,
 } from '../../shared/finance.js';
 import { financeDocumentTypes, zeroLineDocumentTypes } from '../../shared/finance.js';
-import type { AsyncDb } from '../database.js';
+import { todayInRiyadh, type AsyncDb } from '../database.js';
+import type { CustomerStatement } from '../../shared/ledger.js';
 import { decryptSensitive, encryptSensitive } from '../administration/security.js';
 import type { Actor } from '../administration/service.js';
 import {
@@ -35,7 +36,7 @@ import {
   type WafeqClientLike as WafeqProvider,
 } from '../integrations/wafeq.js';
 export type { WafeqClientLike } from '../integrations/wafeq.js';
-import { autoPostInvoice } from './ledger.js';
+import { autoPostInvoice, customerStatement } from './ledger.js';
 import { registerLedger } from './ledger-routes.js';
 
 export type FinanceAccessOptions = { privateMode: boolean; allowedActorId?: string };
@@ -1645,6 +1646,23 @@ export function registerFinance(
       throw fault(409, 'ARTIFACT_UNAVAILABLE', 'رمز QR الرسمي لا يتاح قبل تأكيد الاعتماد.');
     // The provider has no documented QR image contract yet; do not return JSON to an <img> caller.
     throw fault(409, 'ARTIFACT_UNAVAILABLE', 'صيغة صورة QR الرسمية لم تثبت بعد.');
+  });
+  registerRoute(app, 'get', '/api/finance/customers/:id/statement', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    const customer = await readCustomer(db, actor.id, routeId(req.params.id));
+    const bound = (name: string) =>
+      typeof req.query[name] === 'string' && req.query[name] ? dateValue(req.query[name]) : null;
+    const from = bound('from'),
+      to = bound('to') ?? todayInRiyadh();
+    if (from && from > to)
+      throw fault(400, 'INVALID_DATE_RANGE', 'بداية الفترة يجب ألا تتجاوز نهايتها.');
+    const statement: CustomerStatement = {
+      customer: customerSnapshot(customer),
+      seller: (await getSettings(db, actor.id, privateMode)).seller,
+      ...(await customerStatement(db, actor.id, customer.id, from, to)),
+    };
+    res.json({ statement });
   });
   registerLedger(app, { db, requireActor, access });
 }

@@ -12,6 +12,7 @@ import type {
   AgingRow,
   BalanceSheet,
   BudgetReport,
+  CustomerStatement,
   IncomeStatement,
   JournalEntry,
   LedgerOverview,
@@ -720,3 +721,120 @@ test('VAT periods: quarterly and monthly boundaries with a fixed due date', () =
   assert.equal(vatPeriod('2028-01-15', 'monthly').periodEnd, '2028-01-31');
   assert.equal(vatPeriod('2028-01-15', 'monthly').dueDate, '2028-02-29');
 });
+
+async function statementScenario(db: AsyncDb) {
+  process.env.HR_DATA_KEY ??= Buffer.alloc(32, 7).toString('base64url');
+  const h = await harness(db);
+  try {
+    await h.send('/api/finance/ledger/setup', {});
+    const invoiceId = await invoice(h);
+    await invoice(h); // another customer's invoice must never leak into this statement
+    const customers = (await h.get<{ customers: { id: string }[] }>('/api/finance')).body.customers;
+    assert.equal(customers.length, 2);
+    const posted = await Promise.all(
+      (
+        await h.get<{ invoices: { id: string; quoteId: string }[] }>('/api/finance')
+      ).body.invoices.map((item) =>
+        h.send<{ voucher: LedgerVoucher }>(`/api/finance/ledger/invoices/${item.id}/post`, {
+          revenueAccountCode: '4101',
+        }),
+      ),
+    );
+    assert.ok(posted.every((item) => item.status === 201));
+    assert.equal(
+      (
+        await h.send(`/api/finance/ledger/invoices/${invoiceId}/receipts`, {
+          date: '2026-07-20',
+          amount: '5000.00',
+          cashAccountCode: '1102',
+          reference: 'TRF-1',
+        })
+      ).status,
+      201,
+    );
+    const statements = await Promise.all(
+      customers.map((item) =>
+        h.get<{ statement: CustomerStatement }>(
+          `/api/finance/customers/${item.id}/statement?to=2026-09-30`,
+        ),
+      ),
+    );
+    const paid = statements.find((item) => item.body.statement.rows.length === 2)!.body.statement;
+    const unpaid = statements.find((item) => item.body.statement.rows.length === 1)!.body.statement;
+    assert.deepEqual(
+      paid.rows.map((row) => [
+        row.kind,
+        row.date,
+        row.debitHalalas,
+        row.creditHalalas,
+        row.balanceHalalas,
+      ]),
+      [
+        ['invoice', '2026-07-10', 1_150_000, 0, 1_150_000],
+        ['receipt', '2026-07-20', 0, 500_000, 650_000],
+      ],
+    );
+    assert.equal(paid.invoicedHalalas, 1_150_000);
+    assert.equal(paid.paidHalalas, 500_000);
+    assert.equal(paid.closingHalalas, 650_000);
+    assert.equal(paid.overdueHalalas, 650_000, 'due 2026-08-09, statement closes 2026-09-30');
+    assert.deepEqual(
+      paid.openInvoices.map((item) => [
+        item.settledHalalas,
+        item.outstandingHalalas,
+        item.daysOverdue,
+      ]),
+      [[500_000, 650_000, 52]],
+    );
+    assert.equal(unpaid.closingHalalas, 1_150_000);
+    assert.equal(unpaid.paidHalalas, 0);
+
+    // A period that starts after the invoice carries it as the opening balance.
+    const customerId = customers[statements.findIndex((item) => item.body.statement === paid)]!.id;
+    const later = (
+      await h.get<{ statement: CustomerStatement }>(
+        `/api/finance/customers/${customerId}/statement?from=2026-07-15&to=2026-07-31`,
+      )
+    ).body.statement;
+    assert.equal(later.openingHalalas, 1_150_000);
+    assert.equal(later.invoicedHalalas, 0);
+    assert.equal(later.rows.length, 1);
+    assert.equal(later.closingHalalas, 650_000);
+    assert.equal(later.overdueHalalas, 0);
+    const before = (
+      await h.get<{ statement: CustomerStatement }>(
+        `/api/finance/customers/${customerId}/statement?to=2026-07-01`,
+      )
+    ).body.statement;
+    assert.equal(before.rows.length, 0);
+    assert.equal(before.closingHalalas, 0);
+    assert.equal(
+      (
+        await h.get<Fail>(
+          `/api/finance/customers/${customerId}/statement?from=2026-08-01&to=2026-07-01`,
+        )
+      ).body.error.code,
+      'INVALID_DATE_RANGE',
+    );
+    h.actor.current = { id: 'other-hr', role: 'hr' };
+    assert.equal((await h.get(`/api/finance/customers/${customerId}/statement`)).status, 403);
+  } finally {
+    await h.close();
+  }
+}
+test('customer statement: invoices, receipts and the balance due per customer and period', async () => {
+  await statementScenario(await createDatabase());
+});
+test(
+  'customer statement: the same scenario on PostgreSQL',
+  { skip: !process.env.HR_TEST_DATABASE_URL },
+  async () => {
+    await statementScenario(
+      await createPostgresDatabase(
+        process.env.HR_TEST_DATABASE_URL!,
+        `hr_preview_${randomUUID().replaceAll('-', '')}`,
+        { seed: false },
+      ),
+    );
+  },
+);

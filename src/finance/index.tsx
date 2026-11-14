@@ -42,6 +42,7 @@ import type {
 } from '../../shared/finance';
 import { useSearchParams } from 'react-router-dom';
 import { api, Modal, PageHeading, useApp } from '../lib';
+import { CustomerStatementModal } from './Statement';
 import './finance.css';
 
 type Tab = 'customers' | 'catalog' | 'quotes' | 'invoices' | 'settings';
@@ -226,6 +227,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
   const [selectedCustomer, setSelectedCustomer] = useState<FinanceCustomer | null>(null);
   const [selectedQuote, setSelectedQuote] = useState<FinanceQuote | null>(null);
   const [preview, setPreview] = useState<FinanceQuote | null>(null);
+  const [statementCustomer, setStatementCustomer] = useState<FinanceCustomer | null>(null);
   const [customerForm, setCustomerForm] = useState<FinanceCustomerInput>(blankCustomer());
   const [quoteForm, setQuoteForm] = useState<FinanceQuoteInput>(() => ({
     customerId: '',
@@ -765,6 +767,9 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                           <td className="fin-actions">
                             <button className="text-button" onClick={() => beginCustomer(c)}>
                               تعديل
+                            </button>
+                            <button className="text-button" onClick={() => setStatementCustomer(c)}>
+                              كشف حساب
                             </button>
                             <button
                               className="text-button"
@@ -1762,6 +1767,12 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
             </div>
           </form>
         </FormPage>
+      )}
+      {statementCustomer && (
+        <CustomerStatementModal
+          customer={statementCustomer}
+          close={() => setStatementCustomer(null)}
+        />
       )}
       {preview && (
         <Modal title={`معاينة عرض السعر · ${preview.number}`} close={() => setPreview(null)} wide>

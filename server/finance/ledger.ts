@@ -12,6 +12,8 @@ import {
   type AgingRow,
   type BalanceSheet,
   type BudgetReport,
+  type CustomerStatement,
+  type CustomerStatementRow,
   type IncomeStatement,
   type InvoiceLedgerState,
   type JournalEntry,
@@ -1514,6 +1516,136 @@ export async function aging(
       };
     })
     .sort((a, b) => b.daysOverdue - a.daysOverdue);
+}
+const dayGap = (from: string, to: string) =>
+  Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+/**
+ * Movements of one customer: invoices issued to them, then the receipts and credit notes recorded
+ * on those invoices. An approved invoice counts even before it is posted to the books.
+ */
+export async function customerStatement(
+  db: AsyncDb,
+  ownerId: string,
+  customerId: string,
+  from: string | null,
+  to: string,
+): Promise<Omit<CustomerStatement, 'customer' | 'seller'>> {
+  const invoices = (
+    await db.read<InvoiceRow>(
+      'SELECT i.* FROM finance_invoices i JOIN finance_quotes q ON q.owner_id=i.owner_id AND q.id=i.quote_id WHERE i.owner_id=? AND q.customer_id=?',
+      [ownerId, customerId],
+    )
+  ).map((row) => safeJson<FinanceInvoice>(row.invoice_ciphertext, `finance:invoice:${row.id}`));
+  const vouchers = invoices.length
+    ? await db.read<VoucherRow>(
+        `${voucherSelect} WHERE v.owner_id=? AND v.status='posted' AND v.kind IN ('invoice','receipt','credit_note')`,
+        [ownerId],
+      )
+    : [];
+  const postedByInvoice = new Map(
+    vouchers.filter((row) => row.kind === 'invoice').map((row) => [row.related_id, row]),
+  );
+  type Movement = Omit<CustomerStatementRow, 'balanceHalalas'> & { order: number; key: string };
+  const movements: Movement[] = [];
+  const byVoucher = new Map<string, string>();
+  let unpostedInvoices = 0;
+  for (const invoice of invoices) {
+    const posted = postedByInvoice.get(invoice.id);
+    const approved = invoice.status === 'cleared' || invoice.status === 'reported';
+    if (!posted && !approved) continue;
+    if (!posted) unpostedInvoices += 1;
+    else byVoucher.set(posted.id, invoice.number);
+    movements.push({
+      date: invoice.issueDate,
+      kind: 'invoice',
+      number: invoice.number,
+      invoiceNumber: invoice.number,
+      description: invoice.title,
+      dueDate: invoice.dueDate,
+      debitHalalas: invoice.totalHalalas,
+      creditHalalas: 0,
+      order: 0,
+      key: invoice.number,
+    });
+  }
+  for (const row of vouchers) {
+    const invoiceNumber = row.related_id ? byVoucher.get(row.related_id) : undefined;
+    if (row.kind === 'invoice' || !invoiceNumber) continue;
+    const reference = voucherDetails(row).reference;
+    movements.push({
+      date: row.doc_date,
+      kind: row.kind as 'receipt' | 'credit_note',
+      number: row.number,
+      invoiceNumber,
+      description:
+        `${row.kind === 'receipt' ? 'سداد فاتورة' : 'إشعار دائن على فاتورة'} ${invoiceNumber}` +
+        (reference && reference !== invoiceNumber ? ` · ${reference}` : ''),
+      dueDate: '',
+      debitHalalas: 0,
+      creditHalalas: n(row.total),
+      order: 1,
+      key: row.number,
+    });
+  }
+  movements.sort(
+    (a, b) => a.date.localeCompare(b.date) || a.order - b.order || a.key.localeCompare(b.key),
+  );
+  let balance = 0,
+    openingHalalas = 0,
+    invoicedHalalas = 0,
+    paidHalalas = 0,
+    creditedHalalas = 0;
+  const rows: CustomerStatementRow[] = [];
+  // Per-invoice balance on the closing date, whatever the start of the period is.
+  const open = new Map<string, { total: number; settled: number; date: string; due: string }>();
+  for (const { order: _order, key: _key, ...item } of movements) {
+    if (item.date > to) continue;
+    balance += item.debitHalalas - item.creditHalalas;
+    const state = open.get(item.invoiceNumber);
+    if (item.kind === 'invoice')
+      open.set(item.invoiceNumber, {
+        total: item.debitHalalas,
+        settled: state?.settled ?? 0,
+        date: item.date,
+        due: item.dueDate || item.date,
+      });
+    else if (state) state.settled += item.creditHalalas;
+    if (from && item.date < from) {
+      openingHalalas = balance;
+      continue;
+    }
+    invoicedHalalas += item.debitHalalas;
+    if (item.kind === 'receipt') paidHalalas += item.creditHalalas;
+    if (item.kind === 'credit_note') creditedHalalas += item.creditHalalas;
+    rows.push({ ...item, balanceHalalas: balance });
+  }
+  const openInvoices = [...open.entries()]
+    .map(([number, state]) => ({
+      number,
+      date: state.date,
+      dueDate: state.due,
+      totalHalalas: state.total,
+      settledHalalas: state.settled,
+      outstandingHalalas: state.total - state.settled,
+      daysOverdue: Math.max(0, dayGap(state.due, to)),
+    }))
+    .filter((item) => item.outstandingHalalas !== 0)
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.number.localeCompare(b.number));
+  return {
+    from,
+    to,
+    openingHalalas,
+    invoicedHalalas,
+    paidHalalas,
+    creditedHalalas,
+    closingHalalas: balance,
+    overdueHalalas: openInvoices
+      .filter((item) => item.daysOverdue > 0)
+      .reduce((sum, item) => sum + item.outstandingHalalas, 0),
+    rows,
+    openInvoices,
+    unpostedInvoices,
+  };
 }
 async function monthlyActuals(db: AsyncDb, ownerId: string, from: string, to: string) {
   return db.read<{ code: string; month: string; d: unknown; c: unknown }>(
