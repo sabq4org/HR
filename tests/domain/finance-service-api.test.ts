@@ -1,5 +1,5 @@
 // Accountant service key: finance-only machine access, hashed keys, server PDFs. Synthetic data.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
@@ -13,10 +13,12 @@ import {
   parseServiceKeyHashes,
 } from '../../server/finance/service-keys.js';
 import { visualRuns } from '../../server/finance/pdf.js';
+import { closeChromium } from '../../server/finance/chromium-pdf.js';
 
 process.env.HR_DATA_KEY ??= randomBytes(32).toString('base64url');
 const OWNER = 'emp-finance-key-owner';
 const OTHER = 'emp-hr-key-other';
+after(() => closeChromium());
 
 async function seed(): Promise<Db> {
   const db = await createDatabase(':memory:', { seed: false });
