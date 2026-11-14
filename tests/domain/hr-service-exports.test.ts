@@ -42,6 +42,7 @@ async function seed(db: Db) {
         iban: SYNTHETIC_IBAN,
         nationalId: SYNTHETIC_ID,
         medicalProvider: SYNTHETIC_PROVIDER,
+        medicalCoverageStatus: 'covered',
       },
       'بيانات اختبار اصطناعية',
       '2026-01-01',
@@ -169,20 +170,21 @@ async function scenario(db: Db) {
   assert.ok(full.includes(SYNTHETIC_IBAN), 'bank shown with compensation');
   assert.ok(full.includes('12,345'), 'salary shown with compensation');
   assert.ok(full.includes(SYNTHETIC_ID), 'national ID shown with sensitive');
-  assert.ok(full.includes(SYNTHETIC_PROVIDER), 'medical shown with sensitive');
-  assert.ok(full.includes('البيانات البنكية') && full.includes('الراتب والمزايا'));
+  // The report carries the essential fields only: medical coverage status, not the provider.
+  assert.ok(full.includes('حالة التغطية الطبية'), 'medical shown with sensitive');
+  assert.ok(full.includes('الراتب والبنك') && full.includes('التأمينات والتغطية الطبية'));
   assert.ok(full.includes('synthetic-iban-letter.pdf') && full.includes('synthetic-id-copy.pdf'));
   assert.ok(full.includes('الإجازات'));
   const basic = await html(['hr.employees.read']);
-  for (const hidden of [SYNTHETIC_IBAN, '12,345', SYNTHETIC_ID, SYNTHETIC_PROVIDER])
+  for (const hidden of [SYNTHETIC_IBAN, '12,345', SYNTHETIC_ID, 'حالة التغطية الطبية'])
     assert.ok(!basic.includes(hidden), `hidden without scopes: ${hidden}`);
-  assert.ok(!basic.includes('البيانات البنكية') && !basic.includes('الراتب والمزايا'));
-  assert.ok(!basic.includes('التأمين الطبي'));
+  assert.ok(!basic.includes('الراتب والبنك'));
+  assert.ok(!basic.includes('التغطية الطبية'));
   assert.ok(
     !basic.includes('synthetic-iban-letter.pdf') && !basic.includes('synthetic-id-copy.pdf'),
   );
   assert.ok(basic.includes('synthetic-degree.pdf'));
-  assert.ok(basic.includes('البيانات الوظيفية'));
+  assert.ok(basic.includes('البيانات الأساسية') && basic.includes('العمل والعقد'));
   assert.ok(!basic.includes('<h3>الإجازات</h3>'), 'leave needs hr.leave.read');
   const comp = await html(['hr.employees.read', 'hr.compensation.read']);
   assert.ok(comp.includes(SYNTHETIC_IBAN) && !comp.includes(SYNTHETIC_ID));
@@ -237,7 +239,7 @@ async function scenario(db: Db) {
         personalAndMedical: true,
         leave: true,
       });
-      assert.ok(details.sections.includes('البنك') && details.sections.includes('الراتب'));
+      assert.ok(details.sections.includes('الراتب') && details.sections.includes('التأمينات'));
       assert.ok(details.fields.includes('iban') && details.fields.includes('nationalId'));
       const raw = JSON.stringify(event);
       for (const value of [SYNTHETIC_IBAN, SYNTHETIC_ID, SYNTHETIC_PROVIDER, '12345'])
@@ -251,7 +253,7 @@ async function scenario(db: Db) {
         personalAndMedical: false,
         leave: false,
       });
-      assert.ok(!basicDetails.sections.includes('البنك'));
+      assert.ok(!basicDetails.sections.includes('الراتب'));
       assert.deepEqual(basicDetails.fields, []);
     } else {
       assert.equal(report.status, 503);

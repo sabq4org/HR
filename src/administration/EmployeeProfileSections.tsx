@@ -1,51 +1,18 @@
 export { isProfileFieldVisible, profileTabs, visibleEmployeeFields } from './profile-visibility';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowUpRight, CalendarDays, CircleHelp, FileClock, ShieldCheck } from 'lucide-react';
+import { ArrowUpRight, CalendarDays, CircleHelp, ShieldCheck } from 'lucide-react';
 import type { EmployeeFile, FormField } from '../../shared/administration';
-import { employeeFields } from '../../shared/catalog';
+import { useApp } from '../lib';
 import {
   allowedFieldKeys,
-  profileTabs,
-  visibleEmployeeFields,
   authorizedFields,
+  hasFieldValue,
   profileGroups as groups,
+  splitFields,
+  visibleEmployeeFields,
 } from './profile-visibility';
 
-const readinessGroups: Record<string, string[]> = {
-  البيانات: ['البيانات الأساسية', 'التواصل', 'العمل', 'المؤهلات', 'انتهاء العلاقة'],
-  العقد: ['العقد'],
-  الراتب: ['المالية'],
-  البنك: ['البنك'],
-  التأمينات: ['التأمينات'],
-  'التأمين الطبي': ['التأمين الطبي'],
-  الإجازات: ['الإجازات'],
-};
-type Readiness = {
-  completed: number;
-  total: number;
-  missing: string[];
-  status: EmployeeFile['sectionReadiness'][string]['status'];
-};
-function readinessFor(file: EmployeeFile, tab: string): Readiness | undefined {
-  const entries = (readinessGroups[tab] || [])
-    .map((group) => file.sectionReadiness?.[group])
-    .filter((entry) => entry && entry.total > 0);
-  return entries.length
-    ? {
-        completed: entries.reduce((sum, entry) => sum + entry.completed, 0),
-        total: entries.reduce((sum, entry) => sum + entry.total, 0),
-        missing: entries.flatMap((entry) => entry.missing),
-        status: entries.some((entry) => entry.status === 'incomplete')
-          ? 'incomplete'
-          : entries.some((entry) => entry.status === 'unverified')
-            ? 'unverified'
-            : entries.every((entry) => entry.status === 'not_applicable')
-              ? 'not_applicable'
-              : 'complete',
-      }
-    : undefined;
-}
 const date = (value: string | null | undefined) =>
   value
     ? new Intl.DateTimeFormat('ar-SA-u-ca-gregory-nu-latn', {
@@ -54,112 +21,75 @@ const date = (value: string | null | undefined) =>
       }).format(new Date(value.length === 10 ? `${value}T12:00:00Z` : value))
     : '—';
 const statusLabels: Record<string, string> = {
-  unverified: 'غير متحقق',
-  pending: 'قيد التحقق',
-  verified: 'متحقق',
-  rejected: 'مرفوض',
-  active: 'ساري',
-  inactive: 'غير ساري',
-  covered: 'مشمول',
-  not_covered: 'غير مشمول',
-  employee: 'موظف',
-  collaborator: 'متعاون',
   allocation: 'تخصيص',
   reserve: 'حجز',
   release: 'إعادة رصيد',
   consume: 'استهلاك',
   adjustment: 'تسوية',
+  opening: 'رصيد افتتاحي',
 };
-const readinessLabels: Record<Readiness['status'], string> = {
-  complete: 'مكتمل وفق السجل',
-  incomplete: 'يحتاج استكمالًا',
-  unverified: 'بانتظار التحقق',
-  not_applicable: 'لا ينطبق',
-};
-function valueLabel(value: unknown, field?: FormField) {
+const money = (value: number) =>
+  `${new Intl.NumberFormat('ar-SA-u-nu-latn', { maximumFractionDigits: 2 }).format(value)} ر.س`;
+function valueLabel(
+  value: unknown,
+  field?: FormField,
+  employees: { id: string; name: string }[] = [],
+) {
   if (value === null || value === undefined || value === '') return 'غير مسجل';
   if (typeof value === 'boolean') return value ? 'نعم' : 'لا';
   if (field?.type === 'date' && typeof value === 'string') return date(value);
   if (field?.type === 'select')
-    return (
-      field.options?.find((o) => o.value === String(value))?.label ||
-      statusLabels[String(value)] ||
-      String(value)
-    );
-  return statusLabels[String(value)] || String(value);
+    return field.options?.find((o) => o.value === String(value))?.label || String(value);
+  if (field?.type === 'employee')
+    return employees.find((employee) => employee.id === String(value))?.name || 'غير متاح';
+  if (field?.type === 'money' && Number.isFinite(Number(value))) return money(Number(value));
+  return String(value);
 }
-function Details({ file, tab }: { file: EmployeeFile; tab: string }) {
-  const items = authorizedFields(file, tab);
-  const visibleKeys = new Set(items.map((item) => item.key));
-  for (const key of groups[tab]?.keys || []) {
-    if (allowedFieldKeys(file).has(key) && !visibleKeys.has(key)) {
-      items.push({ key, label: key, type: 'text' });
-    }
-  }
-  const labelOverrides: Record<string, string> = {
-    relationshipType: 'نوع العلاقة',
-    bio: 'نبذة وظيفية',
-    salaryEffectiveDate: 'سريان الراتب من',
-    salarySource: 'مصدر بيانات الراتب',
-    wagesProtectionAmount: 'مبلغ حماية الأجور',
-    wagesProtectionSource: 'مصدر حماية الأجور',
-    wagesProtectionDate: 'تاريخ حماية الأجور',
-    bankName: 'البنك',
-    iban: 'الآيبان',
-    bankCountry: 'دولة البنك',
-    bankAccountName: 'الاسم لدى البنك',
-    accountNumber: 'رقم الحساب',
-    accountType: 'نوع الحساب',
-    currency: 'العملة',
-    bankUpdatedAt: 'آخر تحديث للبيانات البنكية',
-    bankVerificationStatus: 'حالة التحقق البنكي',
-    bankVerificationSource: 'مصدر التحقق البنكي',
-    bankVerifiedAt: 'تاريخ التحقق البنكي',
-    swiftCode: 'رمز سويفت',
-    bankBranch: 'فرع البنك',
-    insuranceRegistrationStatus: 'حالة التسجيل',
-    insuranceStartDate: 'تاريخ بدء التسجيل',
-    employeeContributionPercent: 'نسبة اشتراك الموظف',
-    employerContributionPercent: 'نسبة اشتراك جهة العمل',
-    insuranceSource: 'مصدر البيانات',
-    insuranceEffectiveDate: 'سريان البيانات من',
-    insuranceVerificationStatus: 'حالة التحقق',
-    medicalCoverageStatus: 'حالة التغطية',
-    medicalProvider: 'شركة التأمين',
-    medicalPolicyNumber: 'رقم الوثيقة',
-    medicalMemberNumber: 'رقم العضوية',
-    medicalStartDate: 'بداية التغطية',
-    medicalEndDate: 'نهاية التغطية',
-  };
-  return items.length ? (
+
+function FieldList({ file, items }: { file: EmployeeFile; items: FormField[] }) {
+  const { data } = useApp();
+  return (
     <dl className="adm-details">
       {items.map((field) => (
         <div key={field.key}>
-          <dt>{labelOverrides[field.key] || field.label}</dt>
-          <dd>{valueLabel(file.values[field.key], field)}</dd>
+          <dt>{field.label}</dt>
+          <dd>{valueLabel(file.values[field.key], field, data.employees)}</dd>
         </div>
       ))}
     </dl>
-  ) : (
-    <p className="profile-unavailable">
-      <CircleHelp size={16} /> لا توجد بيانات متاحة لهذا القسم.
-    </p>
+  );
+}
+
+/** Essential fields first; optional fields appear only when they hold a value, folded away. */
+function Details({ file, tab }: { file: EmployeeFile; tab: string }) {
+  const { essential, extra } = splitFields(authorizedFields(file, tab), file.values);
+  const recordedExtras = extra.filter((field) => hasFieldValue(file.values, field.key));
+  if (!essential.length && !recordedExtras.length)
+    return (
+      <p className="profile-unavailable">
+        <CircleHelp size={16} /> لا توجد بيانات متاحة لهذا القسم.
+      </p>
+    );
+  return (
+    <>
+      {essential.length > 0 && <FieldList file={file} items={essential} />}
+      {recordedExtras.length > 0 && (
+        <details className="profile-extra">
+          <summary>بيانات إضافية مسجلة ({recordedExtras.length})</summary>
+          <FieldList file={file} items={recordedExtras} />
+        </details>
+      )}
+    </>
   );
 }
 
 export function ProfileTab({ file, tab }: { file: EmployeeFile; tab: string }) {
   if (tab === 'الإجازات') return <LeaveProfile file={file} />;
-  const readiness = readinessFor(file, tab);
   return (
     <section className="adm-section profile-section">
       <div className="profile-section-heading">
         <div>
           <h3>{groups[tab]?.title || tab}</h3>
-          {readiness && (
-            <p>
-              {readiness.completed} من {readiness.total} حقول · {readinessLabels[readiness.status]}
-            </p>
-          )}
         </div>
         {tab === 'الراتب' && file.closedPayslips.length > 0 && (
           <Link
@@ -170,8 +100,8 @@ export function ProfileTab({ file, tab }: { file: EmployeeFile; tab: string }) {
           </Link>
         )}
       </div>
-      <Details file={file} tab={tab} />
       {tab === 'الراتب' && <SalarySummary file={file} />}
+      <Details file={file} tab={tab} />
     </section>
   );
 }
@@ -180,30 +110,18 @@ function SalarySummary({ file }: { file: EmployeeFile }) {
   const salaryKeys = ['basicSalary', 'housingAllowance', 'transportAllowance', 'otherAllowance'];
   const allowed = allowedFieldKeys(file);
   if (!salaryKeys.some((key) => allowed.has(key))) return null;
-  const present = salaryKeys.every(
-    (key) =>
-      allowed.has(key) &&
-      Object.prototype.hasOwnProperty.call(file.values, key) &&
-      file.values[key] !== null &&
-      file.values[key] !== '',
-  );
-  const total = present ? salaryKeys.reduce((sum, key) => sum + Number(file.values[key]), 0) : null;
+  // Absent components are not zero: the total needs the basic salary and counts only what is recorded.
+  const present = salaryKeys.filter((key) => allowed.has(key) && hasFieldValue(file.values, key));
+  const total = present.includes('basicSalary')
+    ? present.reduce((sum, key) => sum + Number(file.values[key]), 0)
+    : null;
   return (
     <div className="profile-total">
       <span>إجمالي العناصر الثابتة المسجلة</span>
-      <strong>
-        {total === null
-          ? 'غير متاح'
-          : `${new Intl.NumberFormat('ar-SA-u-nu-latn').format(total)} ر.س`}
-      </strong>
-      <small>
-        {total === null
-          ? 'يلزم اكتمال جميع مكونات الراتب لعرض الإجمالي.'
-          : `يشمل العناصر الثابتة الظاهرة أعلاه. السريان: ${valueLabel(file.values.salaryEffectiveDate, { key: 'salaryEffectiveDate', label: '', type: 'date' })}`}
-      </small>
+      <strong>{total === null ? 'غير مسجل' : money(total)}</strong>
       {file.closedPayslips.length > 0 && (
         <ul className="profile-payslips">
-          {file.closedPayslips.map((run) => (
+          {file.closedPayslips.slice(0, 3).map((run) => (
             <li key={run.runId}>
               <Link
                 to={`/payroll?run=${encodeURIComponent(run.runId)}&employee=${encodeURIComponent(file.employee.id)}`}
@@ -219,18 +137,15 @@ function SalarySummary({ file }: { file: EmployeeFile }) {
 }
 
 function LeaveProfile({ file }: { file: EmployeeFile }) {
-  const entitlement = Object.prototype.hasOwnProperty.call(file.values, 'annualLeaveEntitlement')
+  const entitlement = hasFieldValue(file.values, 'annualLeaveEntitlement')
     ? file.values.annualLeaveEntitlement
     : null;
-  const source = file.values.annualLeaveSource;
   const movements = file.leaveMovements || [];
-  const additionalLeaveFields = visibleEmployeeFields(file).filter(
+  const extraLeaveFields = visibleEmployeeFields(file).filter(
     (field) =>
       field.group === 'الإجازات' &&
       field.key !== 'annualLeaveEntitlement' &&
-      field.key !== 'annualLeaveSource' &&
-      field.key !== 'annualLeaveEffectiveDate' &&
-      field.key !== 'annualLeaveVerificationStatus',
+      hasFieldValue(file.values, field.key),
   );
   const [showAll, setShowAll] = useState(false);
   return (
@@ -238,77 +153,42 @@ function LeaveProfile({ file }: { file: EmployeeFile }) {
       <div className="profile-section-heading">
         <div>
           <h3>الإجازات</h3>
-          <p>أرصدة وحركات مسجلة وفق البيانات المتاحة</p>
         </div>
         <Link className="adm-link" to="/services?kind=leave_adjustment">
-          <CalendarDays size={15} /> طلب تصحيح أو افتتاح رصيد
+          <CalendarDays size={15} /> طلب تصحيح رصيد
         </Link>
       </div>
       <div className="profile-leave-stats">
         <div>
-          <span>الاستحقاق السنوي المسجل</span>
+          <span>الاستحقاق السنوي</span>
           <strong>{entitlement === null ? 'غير مسجل' : `${entitlement} يوم`}</strong>
-          <small>
-            {source ? `المصدر: ${source}` : 'لا يوجد مصدر مسجل'}
-            {file.values.annualLeaveEffectiveDate
-              ? ` · السريان: ${date(String(file.values.annualLeaveEffectiveDate))}`
-              : ''}
-          </small>
         </div>
         <div>
-          <span>الرصيد الافتتاحي المسجل</span>
-          <strong>
-            {file.leaveSummary.openingBalance === null
-              ? 'غير محدد'
-              : `${file.leaveSummary.openingBalance} يوم`}
-          </strong>
-          <small>قيد افتتاحي معروف من سجل الحركات</small>
-        </div>
-        <div>
-          <span>الرصيد المتاح المسجل</span>
+          <span>الرصيد المتاح</span>
           <strong>
             {Number.isFinite(file.leaveSummary.available)
               ? `${file.leaveSummary.available} يوم`
               : 'غير متاح'}
           </strong>
-          <small>آخر رصيد محفوظ</small>
         </div>
         <div>
-          <span>الرصيد المحجوز</span>
+          <span>المحجوز</span>
           <strong>{file.leaveSummary.reserved} يوم</strong>
-          <small>طلبات مرتبطة بحركات الحجز</small>
         </div>
         <div>
-          <span>الإجازات المسجلة</span>
+          <span>المستهلك</span>
           <strong>{file.leaveSummary.taken} يوم</strong>
-          <small>المستهلك حسب السجل</small>
-        </div>
-        <div>
-          <span>سياسة الإجازة السنوية</span>
-          <strong>{file.leaveSummary.policyApproved ? 'معتمدة' : 'غير معتمدة'}</strong>
-          <small>حالة اعتماد السياسة السارية</small>
         </div>
       </div>
-      {Object.prototype.hasOwnProperty.call(file.values, 'annualLeaveVerificationStatus') && (
-        <p className="profile-policy-state">
-          حالة التحقق من الاستحقاق: {valueLabel(file.values.annualLeaveVerificationStatus)}
-        </p>
-      )}
-      {additionalLeaveFields.length > 0 && (
-        <dl className="adm-details profile-leave-details">
-          {additionalLeaveFields.map((field) => (
-            <div key={field.key}>
-              <dt>{field.label}</dt>
-              <dd>{valueLabel(file.values[field.key], field)}</dd>
-            </div>
-          ))}
-        </dl>
+      {extraLeaveFields.length > 0 && (
+        <details className="profile-extra">
+          <summary>بيانات إضافية مسجلة ({extraLeaveFields.length})</summary>
+          <FieldList file={file} items={extraLeaveFields} />
+        </details>
       )}
       {movements.length ? (
-        <>
-          <h4 className="profile-subheading">
-            <FileClock size={17} /> سجل الحركات
-          </h4>
+        <details className="profile-extra">
+          <summary>سجل حركات الرصيد ({movements.length})</summary>
           <div className="profile-movements">
             {(showAll ? movements : movements.slice(0, 5)).map((movement) => (
               <div key={movement.id}>
@@ -327,43 +207,12 @@ function LeaveProfile({ file }: { file: EmployeeFile }) {
               {showAll ? 'عرض أقل' : `عرض كل الحركات (${movements.length})`}
             </button>
           )}
-        </>
+        </details>
       ) : (
         <p className="profile-unavailable">
           <ShieldCheck size={16} /> لا توجد حركات رصيد مسجلة.
         </p>
       )}
     </section>
-  );
-}
-
-export function ProfileReadiness({ file }: { file: EmployeeFile }) {
-  const sections = profileTabs(file).map((tab) => {
-    const readiness = readinessFor(file, tab);
-    return { tab, readiness };
-  });
-  return (
-    <div className="profile-readiness" aria-label="اكتمال أقسام الملف">
-      {sections.map(({ tab, readiness }) => (
-        <div key={tab}>
-          <span>{tab}</span>
-          <strong>
-            {readiness && readiness.total
-              ? `${Math.round((readiness.completed / readiness.total) * 100)}٪`
-              : tab === 'الإجازات'
-                ? 'سجل'
-                : '—'}
-          </strong>
-          {readiness && <small>{readinessLabels[readiness.status]}</small>}
-          <div className="profile-progress">
-            <i
-              style={{
-                width: `${readiness?.total ? Math.round((readiness.completed / readiness.total) * 100) : 0}%`,
-              }}
-            />
-          </div>
-        </div>
-      ))}
-    </div>
   );
 }

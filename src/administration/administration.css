@@ -1169,3 +1169,28 @@
 .dialog-confirm .adm-field {
   margin: 0;
 }
+/* Optional fields and long lists stay folded so the profile shows only what is used daily. */
+.profile-extra {
+  margin-top: 12px;
+}
+.profile-extra > summary {
+  cursor: pointer;
+  color: var(--adm-muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 0;
+}
+.profile-extra > summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.profile-extra[open] > summary {
+  margin-bottom: 8px;
+}
+details.adm-section.profile-extra > summary {
+  color: inherit;
+  font-size: 15px;
+}
+.profile-section .profile-total {
+  margin: 0 0 14px;
+}

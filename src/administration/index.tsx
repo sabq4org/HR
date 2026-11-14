@@ -20,11 +20,17 @@ import { api, Avatar, ConfirmDialog, Modal, PageHeading, useApp } from '../lib';
 import { EmployeeProfileReport } from './EmployeeProfileReport';
 import {
   isProfileFieldVisible,
-  ProfileReadiness,
   ProfileTab,
   profileTabs,
   visibleEmployeeFields,
 } from './EmployeeProfileSections';
+import {
+  hasFieldValue,
+  profileGroups,
+  profileSectionOrder,
+  sectionOfField,
+  splitFields,
+} from './profile-visibility';
 import type {
   AdministrativeOverview,
   AdministrativeRequest,
@@ -424,6 +430,7 @@ function EmployeeWizard({
   const panel = useRef<HTMLFormElement>(null);
   const [validation, setValidation] = useState('');
   const review = step === names.length;
+  const stepFields = splitFields(groups[names[step]] || [], values);
   const validate = () => {
     const required = groups[names[step]]?.filter((f) => f.required && !values[f.key]);
     if (required?.length) {
@@ -437,11 +444,11 @@ function EmployeeWizard({
     e.preventDefault();
     const missing = fields.filter((f) => f.required && !values[f.key]);
     if (missing.length) {
-      const groupIndex = names.indexOf(missing[0].group || 'البيانات الأساسية');
+      const groupIndex = names.indexOf(sectionOfField(missing[0]));
       setStep(Math.max(0, groupIndex));
       setValidation(
         `أكمل الحقول المطلوبة: ${missing
-          .filter((f) => (f.group || 'البيانات الأساسية') === names[Math.max(0, groupIndex)])
+          .filter((f) => sectionOfField(f) === names[Math.max(0, groupIndex)])
           .map((f) => f.label)
           .join('، ')}`,
       );
@@ -474,12 +481,14 @@ function EmployeeWizard({
         <section className="adm-section">
           <h3>راجع البيانات قبل الحفظ</h3>
           <dl className="adm-details">
-            {fields.map((f) => (
-              <div key={f.key}>
-                <dt>{f.label}</dt>
-                <dd>{displayValue(values[f.key], f)}</dd>
-              </div>
-            ))}
+            {fields
+              .filter((f) => !splitFields([f], values).extra.length || hasFieldValue(values, f.key))
+              .map((f) => (
+                <div key={f.key}>
+                  <dt>{f.label}</dt>
+                  <dd>{displayValue(values[f.key], f)}</dd>
+                </div>
+              ))}
           </dl>
           {reasonRequired && (
             <label className="adm-field">
@@ -494,9 +503,9 @@ function EmployeeWizard({
         </section>
       ) : (
         <section className="adm-section">
-          <h3>{names[step]}</h3>
+          <h3>{profileGroups[names[step]]?.title || names[step]}</h3>
           <div className="adm-fields">
-            {groups[names[step]].map((f) => (
+            {stepFields.essential.map((f) => (
               <Field
                 key={f.key}
                 field={f}
@@ -505,6 +514,21 @@ function EmployeeWizard({
               />
             ))}
           </div>
+          {stepFields.extra.length > 0 && (
+            <details className="profile-extra" key={names[step]}>
+              <summary>حقول إضافية اختيارية ({stepFields.extra.length})</summary>
+              <div className="adm-fields">
+                {stepFields.extra.map((f) => (
+                  <Field
+                    key={f.key}
+                    field={f}
+                    value={values[f.key]}
+                    onChange={(v) => setValues((x) => ({ ...x, [f.key]: v }))}
+                  />
+                ))}
+              </div>
+            </details>
+          )}
         </section>
       )}
       {(error || validation) && (
@@ -537,11 +561,14 @@ function EmployeeWizard({
     </form>
   );
 }
+/** Wizard steps follow the profile sections, so the form has the same few steps as the file. */
 function fieldsByGroup(fields: FormField[]) {
-  return fields.reduce<Record<string, FormField[]>>((a, f) => {
-    (a[f.group || 'البيانات الأساسية'] ??= []).push(f);
-    return a;
-  }, {});
+  const steps: Record<string, FormField[]> = {};
+  for (const tab of profileSectionOrder) {
+    const list = fields.filter((f) => sectionOfField(f) === tab);
+    if (list.length) steps[tab] = list;
+  }
+  return steps;
 }
 
 export function EmployeeFilePage({
@@ -620,7 +647,7 @@ export function EmployeeFilePage({
   const employee = file.employee;
   const editableEmployeeFields = visibleEmployeeFields(file);
   const detailsTabs = profileTabs(file);
-  const tabs = [...detailsTabs, 'الوثائق', 'فترات العمل', 'الطلبات', 'سجل التغييرات'];
+  const tabs = [...detailsTabs, 'الوثائق', 'السجل'];
   return (
     <Shell
       title={title}
@@ -630,7 +657,7 @@ export function EmployeeFilePage({
           <button className="adm-button secondary" onClick={() => setReportOpen(true)}>
             <FileText size={16} /> تقرير PDF
           </button>
-          {editable && tab === 'البيانات' && (
+          {editable && detailsTabs.includes(tab) && (
             <ActionButton onClick={() => setEditing(!editing)}>
               {editing ? 'إلغاء' : 'تعديل الملف'}
             </ActionButton>
@@ -663,7 +690,6 @@ export function EmployeeFilePage({
           عرض الملخص الوظيفي <ArrowRight size={14} />
         </Link>
       </div>
-      <ProfileReadiness file={file} />
       {!editable && (
         <p className="adm-note">
           <ShieldCheck size={16} /> بياناتك للعرض فقط. تواصل مع الشؤون الإدارية لتصحيحها.
@@ -705,26 +731,42 @@ export function EmployeeFilePage({
           />
         </>
       )}
-      {tab === 'فترات العمل' && (
-        <Table headers={['الفترة', 'نوع العلاقة', 'المصدر']}>
-          {file.periods.map((p) => (
-            <tr key={p.id}>
-              <td>
-                {date(p.startDate)} — {date(p.endDate)}
-              </td>
-              <td>{p.relationshipType}</td>
-              <td>{p.source}</td>
-            </tr>
-          ))}
-        </Table>
+      {tab === 'السجل' && (
+        <>
+          <section className="adm-section profile-section">
+            <h3>الطلبات</h3>
+            <RequestRows requests={file.requests} />
+          </section>
+          {file.periods.length > 0 && (
+            <details className="adm-section profile-section profile-extra">
+              <summary>فترات العمل ({file.periods.length})</summary>
+              <Table headers={['الفترة', 'نوع العلاقة', 'المصدر']}>
+                {file.periods.map((p) => (
+                  <tr key={p.id}>
+                    <td>
+                      {date(p.startDate)} — {date(p.endDate)}
+                    </td>
+                    <td>
+                      {p.relationshipType === 'collaborator'
+                        ? 'متعاون'
+                        : p.relationshipType === 'employee'
+                          ? 'موظف'
+                          : p.relationshipType}
+                    </td>
+                    <td>{p.source}</td>
+                  </tr>
+                ))}
+              </Table>
+            </details>
+          )}
+        </>
       )}
-      {tab === 'الطلبات' && <RequestRows requests={file.requests} />}
-      {tab === 'سجل التغييرات' && (
+      {tab === 'السجل' && (
         <>
           {file.fieldHistory.filter((entry) => isProfileFieldVisible(file, entry.fieldKey)).length >
             0 && (
-            <section className="adm-section profile-section">
-              <h3>تغييرات البيانات</h3>
+            <details className="adm-section profile-section profile-extra">
+              <summary>تغييرات البيانات</summary>
               <Table
                 headers={[
                   'الحقل',
@@ -761,10 +803,10 @@ export function EmployeeFilePage({
                     );
                   })}
               </Table>
-            </section>
+            </details>
           )}
-          <section className="adm-section profile-section">
-            <h3>سجل الإجراءات</h3>
+          <details className="adm-section profile-section profile-extra">
+            <summary>سجل الإجراءات</summary>
             <Table headers={['التاريخ', 'المنفذ', 'الإجراء', 'السبب']}>
               {file.history.map((h) => (
                 <tr key={h.id}>
@@ -775,7 +817,7 @@ export function EmployeeFilePage({
                 </tr>
               ))}
             </Table>
-          </section>
+          </details>
         </>
       )}
     </Shell>
