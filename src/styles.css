@@ -2270,6 +2270,42 @@
     display: flex;
     gap: 9px;
   }
+  .dialog-confirm {
+    display: grid;
+    gap: 16px;
+  }
+  .dialog-confirm > p {
+    margin: 0;
+    line-height: 1.85;
+    text-align: start;
+  }
+  .dialog-warning,
+  .confirmation-note {
+    margin: 0;
+    padding: 12px 14px;
+    border: 1px solid #edd3cf;
+    border-radius: 10px;
+    background: #fff8f6;
+    color: #7c3a32;
+    font-size: 13px;
+    line-height: 1.85;
+    text-align: start;
+  }
+  .confirmation-note {
+    margin-top: 4px;
+    font-size: 12px;
+  }
+  .dialog-footer-confirm {
+    justify-content: flex-start;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .dialog-footer-confirm .button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
   .dialog-intro {
     color: #5e6e7e;
     font-size: 12px;
@@ -2614,14 +2650,6 @@
   .request-note + .form-field,
   .next-step + .form-field {
     margin-top: 22px;
-  }
-  .confirmation-note {
-    margin-top: 20px;
-    font-size: 12px;
-    color: #9b5458;
-    background: #fbefef;
-    padding: 12px;
-    border-radius: 8px;
   }
   .empty-state {
     padding: 45px 20px;
@@ -4047,6 +4075,15 @@
       font-size: 10px;
       padding-inline: 12px;
       min-height: 41px;
+    }
+    .dialog-footer-confirm {
+      gap: 8px;
+    }
+    .dialog-footer-confirm .button {
+      flex: 1 1 calc(50% - 8px);
+    }
+    .dialog-confirm {
+      gap: 14px;
     }
     .form-stepper {
       gap: 10px;

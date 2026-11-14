@@ -180,6 +180,64 @@ export function Modal({
     </dialog>
   );
 }
+/** Shared confirm/alert chrome: padded body, inset warning, footer aligned with the header. */
+export function ConfirmDialog({
+  title,
+  close,
+  children,
+  warning,
+  error,
+  confirmLabel,
+  cancelLabel = 'تراجع',
+  onConfirm,
+  busy = false,
+  danger = false,
+  confirmDisabled = false,
+}: {
+  title: string;
+  close: () => void;
+  children?: ReactNode;
+  warning?: ReactNode;
+  error?: ReactNode;
+  confirmLabel: ReactNode;
+  cancelLabel?: string;
+  onConfirm: () => void;
+  busy?: boolean;
+  danger?: boolean;
+  confirmDisabled?: boolean;
+}) {
+  return (
+    <Modal
+      title={title}
+      close={() => {
+        if (!busy) close();
+      }}
+    >
+      <div className="dialog-body dialog-confirm">
+        {children}
+        {warning ? <div className="dialog-warning">{warning}</div> : null}
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
+      <footer className="dialog-footer dialog-footer-confirm">
+        <button type="button" className="button secondary" disabled={busy} onClick={close}>
+          {cancelLabel}
+        </button>
+        <button
+          type="button"
+          className={`button ${danger ? 'danger' : 'primary'}`}
+          disabled={busy || confirmDisabled}
+          onClick={() => void onConfirm()}
+        >
+          {confirmLabel}
+        </button>
+      </footer>
+    </Modal>
+  );
+}
 export function Empty({
   title,
   detail,

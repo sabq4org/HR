@@ -44,7 +44,7 @@ import { WafeqImportModal } from './WafeqImport';
 import type { InvoiceLedgerState, LedgerAccount, LedgerOverview } from '../../shared/ledger';
 import { InvoicePaymentForm } from './InvoicePaymentForm';
 import { useSearchParams } from 'react-router-dom';
-import { api, Modal, PageHeading, useApp } from '../lib';
+import { api, ConfirmDialog, Modal, PageHeading, useApp } from '../lib';
 import { CustomerStatementModal } from './Statement';
 import {
   InvoicePaper,
@@ -1926,51 +1926,35 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
         />
       )}
       {cancelling && (
-        <Modal
+        <ConfirmDialog
           title={cancelling.kind === 'quote' ? 'إلغاء عرض السعر' : 'إلغاء مسودة الفاتورة'}
           close={() => {
-            if (busy) return;
             setCancelling(null);
             setCancelError('');
           }}
-        >
-          <div className="fin-cancel-confirm">
-            <p>
-              سيُلغى {cancelling.kind === 'quote' ? 'عرض السعر' : 'مسودة الفاتورة'}{' '}
-              <b dir="ltr">{cancelling.doc.number}</b> للعميل «{cancelling.doc.customer.name}».
-            </p>
-            <p className="fin-cancel-note">
+          warning={
+            <>
               الإلغاء ليس حذفًا: يبقى المستند في القائمة برقمه وعليه علامة «ملغي»، ولا يمكن بعدها
               تعديله أو {cancelling.kind === 'quote' ? 'تحويله إلى فاتورة' : 'إصداره'}. ولا يمكن
               التراجع عن الإلغاء.
-            </p>
-            {cancelError && (
-              <p className="fin-alert" role="alert">
-                {cancelError}
-              </p>
-            )}
-            <footer>
-              <button
-                className="button secondary"
-                disabled={Boolean(busy)}
-                onClick={() => {
-                  setCancelling(null);
-                  setCancelError('');
-                }}
-              >
-                تراجع
-              </button>
-              <button
-                className="button danger"
-                disabled={Boolean(busy)}
-                onClick={() => void cancelDocument()}
-              >
-                <X size={16} />
-                {busy ? 'جارٍ الإلغاء…' : 'تأكيد الإلغاء'}
-              </button>
-            </footer>
-          </div>
-        </Modal>
+            </>
+          }
+          error={cancelError || undefined}
+          confirmLabel={
+            <>
+              <X size={16} />
+              {busy ? 'جارٍ الإلغاء…' : 'تأكيد الإلغاء'}
+            </>
+          }
+          danger
+          busy={Boolean(busy)}
+          onConfirm={() => void cancelDocument()}
+        >
+          <p>
+            سيُلغى {cancelling.kind === 'quote' ? 'عرض السعر' : 'مسودة الفاتورة'}{' '}
+            <b dir="ltr">{cancelling.doc.number}</b> للعميل «{cancelling.doc.customer.name}».
+          </p>
+        </ConfirmDialog>
       )}
       {preview && (
         <Modal title={`معاينة عرض السعر · ${preview.number}`} close={() => setPreview(null)} wide>
