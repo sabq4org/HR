@@ -1867,16 +1867,10 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
         >
           <div className="fin-preview-actions">
             {['cleared', 'reported'].includes(finalInvoice.status) && finalInvoice.qrCode ? (
-              <>
-                <ExportPdfButton
-                  path={`/invoices/${encodeURIComponent(finalInvoice.id)}/document.pdf`}
-                  filename={finalInvoice.number}
-                />
-                <button className="button secondary" onClick={() => window.print()}>
-                  <Printer size={16} />
-                  طباعة فاتورة سبق
-                </button>
-              </>
+              <button className="button primary" onClick={() => window.print()}>
+                <Printer size={16} />
+                طباعة فاتورة سبق
+              </button>
             ) : (
               <Status text="معاينة داخلية غير صالحة للإصدار أو الطباعة" kind="waiting" />
             )}
@@ -1891,7 +1885,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
             )}
             {finalInvoice.canDownload && (
               <button className="button secondary" onClick={() => void download(finalInvoice)}>
-                النسخة الأصلية من وافق
+                تصدير PDF الأصلي من وافق
               </button>
             )}
             {(() => {
