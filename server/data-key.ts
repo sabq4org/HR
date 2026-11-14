@@ -29,21 +29,7 @@ export async function verifyDataKeyBinding(db: Db): Promise<'verified' | 'bound'
     if (a.length !== b.length || !timingSafeEqual(a, b)) throw mismatch();
     return 'verified';
   }
-  const samples: { value: string; context: string }[] = [
-    ...(
-      await db.read<{ employee_id: string; encrypted_values_json: string }>(
-        "SELECT employee_id,encrypted_values_json FROM employee_profile_data WHERE encrypted_values_json<>'{}' ORDER BY employee_id LIMIT 3",
-      )
-    ).map((r) => ({
-      value: r.encrypted_values_json,
-      context: `employee-profile:${r.employee_id}`,
-    })),
-    ...(
-      await db.read<{ id: string; encrypted_content: string }>(
-        'SELECT id,encrypted_content FROM employee_documents ORDER BY id LIMIT 3',
-      )
-    ).map((r) => ({ value: r.encrypted_content, context: `employee-document:${r.id}` })),
-  ];
+  const samples = await encryptedSamples(db);
   for (const sample of samples) {
     try {
       decryptSensitive(sample.value, sample.context);
@@ -58,4 +44,71 @@ export async function verifyDataKeyBinding(db: Db): Promise<'verified' | 'bound'
   // A concurrent first start may have bound a different key first; re-check, never assume.
   await verifyDataKeyBinding(db);
   return 'bound';
+}
+
+type Sample = { value: string; context: string };
+// Every column written by encryptSensitive, with the context it was bound to. A legacy
+// database is bound only after each kind that holds data proves decryptable, so a key
+// that cannot read any stored record is never recorded (PR #3 review).
+const SOURCES: { sql: string; map: (row: Record<string, string>) => Sample[] }[] = [
+  {
+    sql: "SELECT employee_id,encrypted_values_json AS v FROM employee_profile_data WHERE encrypted_values_json<>'{}' ORDER BY employee_id LIMIT 3",
+    map: (r) => [{ value: r.v, context: `employee-profile:${r.employee_id}` }],
+  },
+  {
+    sql: 'SELECT id,old_value_ciphertext AS o,new_value_ciphertext AS n,reason_ciphertext AS r FROM employee_profile_history ORDER BY id LIMIT 3',
+    map: (r) =>
+      [
+        { value: r.o, context: `employee-history:${r.id}:old` },
+        { value: r.n, context: `employee-history:${r.id}:new` },
+        { value: r.r, context: `employee-history:${r.id}:reason` },
+      ].filter((x) => x.value),
+  },
+  {
+    sql: 'SELECT id,encrypted_content AS v FROM employee_documents ORDER BY id LIMIT 3',
+    map: (r) => [{ value: r.v, context: `employee-document:${r.id}` }],
+  },
+  {
+    sql: "SELECT id,reason AS v FROM administration_events WHERE reason LIKE 'v1.%' ORDER BY id LIMIT 3",
+    map: (r) => [{ value: r.v, context: `administration-event:${r.id}:reason` }],
+  },
+  {
+    sql: "SELECT id,issued_document_json AS v FROM administrative_requests WHERE issued_document_json LIKE 'v1.%' ORDER BY id LIMIT 3",
+    map: (r) => [{ value: r.v, context: `issued-document:${r.id}` }],
+  },
+  {
+    sql: "SELECT id,values_json AS v FROM administrative_requests WHERE values_json LIKE '%__encryptedSensitive%' ORDER BY id LIMIT 3",
+    map: (r) => {
+      const value = (JSON.parse(r.v) as { __encryptedSensitive?: unknown }).__encryptedSensitive;
+      return typeof value === 'string' ? [{ value, context: `admin-request:${r.id}:values` }] : [];
+    },
+  },
+  {
+    sql: "SELECT id,encrypted_note AS n,encrypted_reason AS r FROM attendance_records WHERE encrypted_note LIKE 'v1.%' OR encrypted_reason LIKE 'v1.%' ORDER BY id LIMIT 3",
+    map: (r) =>
+      [
+        { value: r.n, context: `attendance:${r.id}:note` },
+        { value: r.r, context: `attendance:${r.id}:reason` },
+      ].filter((x) => x.value?.startsWith('v1.')),
+  },
+  {
+    sql: "SELECT id,source_ciphertext AS v FROM leave_balance_openings WHERE source_ciphertext LIKE 'v1.%' ORDER BY id LIMIT 3",
+    map: (r) => [{ value: r.v, context: `leave-opening:${r.id}:source` }],
+  },
+  {
+    sql: "SELECT id,source_ciphertext AS v FROM leave_balance_adjustments WHERE source_ciphertext LIKE 'v1.%' ORDER BY id LIMIT 3",
+    map: (r) => [{ value: r.v, context: `leave-adjustment:${r.id}:source` }],
+  },
+  {
+    sql: "SELECT run_id,employee_id,encrypted_reference AS v FROM payroll_payments WHERE encrypted_reference LIKE 'v1.%' ORDER BY id LIMIT 3",
+    map: (r) => [{ value: r.v, context: `payroll-payment:${r.run_id}:${r.employee_id}` }],
+  },
+];
+
+async function encryptedSamples(db: Db): Promise<Sample[]> {
+  const samples: Sample[] = [];
+  for (const source of SOURCES)
+    for (const row of await db.read<Record<string, string>>(source.sql))
+      samples.push(...source.map(row));
+  return samples;
 }

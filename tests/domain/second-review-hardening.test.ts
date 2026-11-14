@@ -256,6 +256,46 @@ test('a database is bound to its data key and refuses a different one', async ()
   }
 });
 
+test('a legacy binding checks every encrypted record kind, not only profiles and files', async () => {
+  const { verifyDataKeyBinding } = await import('../../server/data-key.js');
+  const { encryptSensitive } = await import('../../server/administration/security.js');
+  process.env.HR_DATA_KEY = keyA;
+  const db = await createDatabase(':memory:');
+  try {
+    // Only an attendance note holds encrypted data (reproduces the PR #3 review case).
+    await db.execute("UPDATE employee_profile_data SET encrypted_values_json='{}'");
+    const id = 'att-legacy-1';
+    const now = new Date().toISOString();
+    await db.execute(
+      `INSERT INTO attendance_records(id,employee_id,work_date,check_in,check_out,minutes,work_mode,encrypted_note,created_at,updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?)`,
+      [
+        id,
+        'emp-omar',
+        '2026-11-01',
+        '08:00',
+        '16:00',
+        480,
+        'office',
+        encryptSensitive('ملاحظة', `attendance:${id}:note`),
+        now,
+        now,
+      ],
+    );
+    process.env.HR_DATA_KEY = keyB;
+    await assert.rejects(verifyDataKeyBinding(db), { code: 'DATA_KEY_MISMATCH' });
+    assert.equal(
+      (await db.read<{ n: number }>('SELECT count(*) AS n FROM data_key_binding'))[0].n,
+      0,
+    );
+    process.env.HR_DATA_KEY = keyA;
+    assert.equal(await verifyDataKeyBinding(db), 'bound');
+  } finally {
+    process.env.HR_DATA_KEY = keyA;
+    await db.close();
+  }
+});
+
 // Note 9: applied migrations could be edited without anyone noticing.
 test('an applied migration that changed on disk stops startup', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'hr-migration-checksum-'));
