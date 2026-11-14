@@ -1,3 +1,4 @@
+import { money, PayslipPaper } from './PayslipPaper';
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Check, CircleDollarSign, Download, FileText, RefreshCw, Send } from 'lucide-react';
@@ -32,11 +33,7 @@ const currentPeriodInRiyadh = () => {
   }).formatToParts(new Date());
   return `${parts.find((part) => part.type === 'year')!.value}-${parts.find((part) => part.type === 'month')!.value}`;
 };
-const money = (n: number) =>
-  new Intl.NumberFormat('ar-SA-u-nu-latn', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(n / 100) + ' ر.س';
+
 const parseRiyal = (value: string): number | null => {
   const match = value.trim().match(/^(\d+)(?:\.(\d{1,2}))?$/);
   if (!match) return null;
@@ -238,13 +235,6 @@ export function PayrollPage({ actor }: Props) {
         line.employeeId ===
         (actor.role === 'employee' || actor.role === 'manager' ? actor.id : printEmployeeId),
     ) ?? [];
-  const printableEarnings = printableLines
-    .filter((line) => line.kind === 'earning')
-    .reduce((sum, line) => sum + line.amountMinor, 0);
-  const printableDeductions = printableLines
-    .filter((line) => line.kind === 'deduction')
-    .reduce((sum, line) => sum + line.amountMinor, 0);
-  const printableEmployee = printableLines[0]?.employeeName ?? '';
   return (
     <section className="payroll-page" dir="rtl" aria-label="إدارة مسيرات الرواتب">
       <header className="payroll-heading">
@@ -834,41 +824,7 @@ export function PayrollPage({ actor }: Props) {
         </section>
       )}
       {selected?.state === 'closed' && printableLines.length > 0 && (
-        <section className="payroll-print-sheet" aria-label="كشف راتب الموظف">
-          <header>
-            <div>
-              <h1>كشف راتب تجريبي</h1>
-              <p>{printableEmployee}</p>
-              <p>الفترة {selected.period}</p>
-            </div>
-            <strong>{selected.correctionOf ? 'فرق تصحيحي مرتبط' : 'مسير مغلق'}</strong>
-          </header>
-          <div className="print-total">
-            صافي {selected.correctionOf ? 'فرق التصحيح' : 'الراتب'}:{' '}
-            {money(printableEarnings - printableDeductions)}
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>المكوّن</th>
-                <th>النوع</th>
-                <th>المبلغ</th>
-              </tr>
-            </thead>
-            <tbody>
-              {printableLines.map((line) => (
-                <tr key={line.id}>
-                  <td>{line.component}</td>
-                  <td>{line.kind === 'earning' ? 'استحقاق' : 'استقطاع'}</td>
-                  <td>{money(line.amountMinor)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <footer>
-            هذا كشف داخلي لبيانات اصطناعية، ولا يمثل احتسابًا نظاميًا أو أمر تحويل مالي.
-          </footer>
-        </section>
+        <PayslipPaper run={selected} employeeId={printableLines[0]!.employeeId} />
       )}
     </section>
   );
