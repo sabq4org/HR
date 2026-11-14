@@ -5,6 +5,7 @@ import { employeeFields, formByKind, documentCategories } from '../../shared/cat
 import { todayInRiyadh, type AsyncDb } from '../database.js';
 import { decryptSensitive, encryptSensitive } from './security.js';
 import { fault, roleFromState, validateValues } from './validation.js';
+import { serviceActorName } from '../service-api/keys.js';
 
 export type Actor = { id: string; role: Role };
 export type EmployeeRow = {
@@ -740,7 +741,7 @@ export async function getEmployeeFile(
       return {
         id: event.id,
         actorId: event.actor_id,
-        actorName: actorRow?.name ?? 'مستخدم',
+        actorName: actorRow?.name ?? serviceActorName(event.actor_id),
         role: event.actor_role as Role,
         action: event.action,
         reason,

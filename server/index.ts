@@ -6,6 +6,7 @@ import { createApp } from './app.js';
 import { createDatabase, createPostgresDatabase } from './database.js';
 import { createHostedDemoApp } from './hosted-demo.js';
 import { parseServiceKeyHashes } from './finance/service-keys.js';
+import { parseHrServiceKeyHashes, parseHrServiceScopes } from './service-api/keys.js';
 import { startOperations } from './operations/index.js';
 import { readRuntimeConfig } from './runtime-config.js';
 
@@ -22,6 +23,14 @@ if (financeApiKeyHashes.length && !['private-local', 'private-hosted'].includes(
   throw new Error(
     'HR_FINANCE_API_KEY_HASHES applies only to private-local and private-hosted modes.',
   );
+const hrServiceKeyHashes = parseHrServiceKeyHashes(process.env.HR_SERVICE_API_KEY_HASHES);
+const hrServiceScopes = parseHrServiceScopes(process.env.HR_SERVICE_API_KEY_SCOPES);
+if (hrServiceKeyHashes.length && !['private-local', 'private-hosted'].includes(config.mode))
+  throw new Error(
+    'HR_SERVICE_API_KEY_HASHES applies only to private-local and private-hosted modes.',
+  );
+if (hrServiceKeyHashes.length && !hrServiceScopes.length)
+  throw new Error('HR_SERVICE_API_KEY_HASHES requires HR_SERVICE_API_KEY_SCOPES.');
 const runtime = hostedDemo
   ? await createHostedDemoApp({
       publicOrigin: config.publicOrigin ?? '',
@@ -56,6 +65,10 @@ const runtime = hostedDemo
               : undefined,
           financeApiKeyHashes:
             !operational && config.dataMode === 'private' ? financeApiKeyHashes : undefined,
+          hrServiceKeyHashes:
+            !operational && config.dataMode === 'private' ? hrServiceKeyHashes : undefined,
+          hrServiceScopes:
+            !operational && config.dataMode === 'private' ? hrServiceScopes : undefined,
         }),
         close: async () => {
           await jobs?.close();
