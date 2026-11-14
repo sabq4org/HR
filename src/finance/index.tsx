@@ -49,8 +49,9 @@ import {
   QuotePaper,
   Status,
   documentTypeShort,
-  quoteStatusText,
-  statusText,
+  quoteStatus,
+  invoiceStatusText,
+  invoiceStatusKind,
 } from './paper';
 import { completeSeller } from '../../shared/finance';
 import './finance.css';
@@ -524,7 +525,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
       );
       closeDialog();
       setTab('invoices');
-      notify('تم إنشاء مسودة الفاتورة المرتبطة بعرض السعر.');
+      notify('تم إنشاء مسودة فاتورة بنجاح، ويمكنك إصدارها من صفحة الفواتير.');
     } catch (e) {
       setLoadError(errorText(e));
     } finally {
@@ -872,7 +873,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
               <div className="fin-section-head">
                 <div>
                   <h2>عروض الأسعار</h2>
-                  <p>العروض محفوظة كمسودات قابلة للتعديل قبل تحويلها إلى فاتورة.</p>
+                  <p>العروض محفوظة كمسودات قابلة للتعديل قبل تحويلها إلى مسودة فاتورة.</p>
                 </div>
                 <button
                   className="button primary"
@@ -909,8 +910,10 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                           <td className="num">{money(q.totalHalalas)}</td>
                           <td>
                             <Status
-                              text={quoteStatusText[q.status]}
-                              kind={q.status === 'draft' ? 'waiting' : 'good'}
+                              {...quoteStatus(
+                                q,
+                                overview.invoices.find((i) => i.id === q.invoiceId),
+                              )}
                             />
                           </td>
                           <td className="fin-actions">
@@ -973,16 +976,8 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                           <td className="num">{money(i.totalHalalas)}</td>
                           <td>
                             <Status
-                              text={statusText[i.status]}
-                              kind={
-                                ['cleared', 'reported'].includes(i.status)
-                                  ? 'good'
-                                  : ['rejected', 'reconciliation_required'].includes(i.status)
-                                    ? 'bad'
-                                    : i.status === 'draft'
-                                      ? 'waiting'
-                                      : 'neutral'
-                              }
+                              text={invoiceStatusText(i)}
+                              kind={invoiceStatusKind(i.status)}
                             />
                             {i.syncMessage && (
                               <small className="fin-message">{i.syncMessage}</small>

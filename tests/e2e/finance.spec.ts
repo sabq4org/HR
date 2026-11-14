@@ -153,7 +153,15 @@ test('private finance customer, quote, invoice, Wafeq readiness, and official ou
     'page',
   );
   const invoiceRow = page.getByRole('row', { name: /HR-INV-/ }).first();
-  await expect(invoiceRow).toContainText('مسودة فاتورة');
+  await expect(
+    page.getByText('تم إنشاء مسودة فاتورة بنجاح، ويمكنك إصدارها من صفحة الفواتير.'),
+  ).toBeVisible();
+  await expect(invoiceRow.locator('.fin-status')).toHaveText('مسودة فاتورة');
+  await expect(invoiceRow.locator('.fin-status')).toHaveClass(/waiting/);
+  await page.getByRole('button', { name: 'عروض الأسعار', exact: true }).click();
+  await expect(quoteRow.locator('.fin-status')).toHaveText('تم التحويل إلى مسودة فاتورة');
+  await expect(quoteRow.locator('.fin-status')).toHaveClass(/waiting/);
+  await page.getByRole('button', { name: 'الفواتير', exact: true }).click();
   await invoiceRow.getByRole('button', { name: 'معاينة المسودة' }).click();
   await expect(page.locator('.fin-invoice-paper .fin-draft-watermark')).toContainText(
     'للمعاينة الداخلية فقط',
@@ -170,10 +178,24 @@ test('private finance customer, quote, invoice, Wafeq readiness, and official ou
   await invoiceRow.getByRole('button', { name: 'إصدار ومزامنة مع وافق', exact: true }).click();
   expect((await send).ok()).toBeTruthy();
   await expect(invoiceRow).toContainText('بانتظار نتيجة التحقق');
+  await expect(invoiceRow.locator('.fin-status')).toHaveClass(/waiting/);
+  await page.getByRole('button', { name: 'عروض الأسعار', exact: true }).click();
+  await expect(quoteRow.locator('.fin-status')).toHaveText('بانتظار نتيجة التحقق');
+  await expect(quoteRow.locator('.fin-status')).toHaveClass(/waiting/);
+  await page.getByRole('button', { name: 'الفواتير', exact: true }).click();
   await invoiceRow.getByRole('button', { name: 'تحديث حالة التحقق', exact: true }).click();
-  await expect(invoiceRow).toContainText('معتمدة');
+  await expect(invoiceRow.locator('.fin-status')).toHaveText('فاتورة ضريبية صادرة');
+  await expect(invoiceRow.locator('.fin-status')).toHaveClass(/good/);
   await expect(invoiceRow).toContainText('بانتظار مستند الاعتماد ورمز التحقق');
   await expect(invoiceRow.getByRole('button', { name: 'طباعة فاتورة سبق' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'عروض الأسعار', exact: true }).click();
+  await expect(quoteRow.locator('.fin-status')).toHaveText('تم إصدار الفاتورة');
+  await expect(quoteRow.locator('.fin-status')).toHaveClass(/good/);
+  await page.reload();
+  await page.getByRole('button', { name: 'عروض الأسعار', exact: true }).click();
+  await expect(quoteRow.locator('.fin-status')).toHaveText('تم إصدار الفاتورة');
+  await expect(quoteRow.locator('.fin-status')).toHaveClass(/good/);
+  await page.getByRole('button', { name: 'الفواتير', exact: true }).click();
 
   if (testInfo.project.name === 'chromium') {
     await page.setViewportSize({ width: 1440, height: 1000 });

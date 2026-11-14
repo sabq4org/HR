@@ -11,7 +11,7 @@ import type {
   FinanceQuote,
   FinanceSeller,
 } from '../../shared/finance';
-import { formatIban } from '../../shared/finance';
+import { formatIban, isTaxAcceptedInvoice } from '../../shared/finance';
 import { RiyalSign } from './RiyalSign';
 import { SellerBlock } from './SellerBlock';
 
@@ -33,30 +33,49 @@ export const statusText: Record<FinanceInvoice['status'], string> = {
   draft: 'مسودة فاتورة',
   syncing: 'جارٍ الإرسال',
   pending: 'بانتظار نتيجة التحقق',
-  cleared: 'معتمدة',
-  reported: 'تم الإبلاغ عنها',
+  cleared: 'فاتورة ضريبية صادرة',
+  reported: 'فاتورة ضريبية صادرة',
   rejected: 'مرفوضة',
   reconciliation_required: 'تحتاج إلى مطابقة الحالة',
 };
 export const quoteStatusText: Record<FinanceQuote['status'], string> = {
   draft: 'مسودة عرض سعر',
-  converted: 'تم التحويل إلى فاتورة',
+  converted: 'تم التحويل إلى مسودة فاتورة',
 };
 export const quoteFooterText: Record<FinanceQuote['status'], string> = {
   draft: 'عرض سعر محفوظ كمسودة. لم يُرسل إلى العميل، ولا يمثل فاتورة ضريبية.',
-  converted: 'تم تحويل عرض السعر إلى فاتورة. لا يمثل فاتورة ضريبية.',
+  converted: 'تم إنشاء مسودة فاتورة من عرض السعر. عرض السعر لا يمثل فاتورة ضريبية.',
 };
+export function invoiceStatusText(invoice: FinanceInvoice): string {
+  return isTaxAcceptedInvoice(invoice.status)
+    ? `${invoiceTitle(invoice.documentType, invoice.invoiceType).ar} صادرة`
+    : statusText[invoice.status];
+}
+type StatusKind = 'neutral' | 'good' | 'bad' | 'waiting';
+export function invoiceStatusKind(status: FinanceInvoice['status']): StatusKind {
+  return isTaxAcceptedInvoice(status)
+    ? 'good'
+    : status === 'rejected' || status === 'reconciliation_required'
+      ? 'bad'
+      : status === 'draft' || status === 'pending'
+        ? 'waiting'
+        : 'neutral';
+}
+/** A converted quote is only green once its linked invoice has confirmed acceptance. */
+export function quoteStatus(quote: FinanceQuote, invoice?: FinanceInvoice) {
+  if (quote.status === 'draft' || !invoice || invoice.status === 'draft') {
+    return { text: quoteStatusText[quote.status], kind: 'waiting' as const };
+  }
+  return {
+    text: isTaxAcceptedInvoice(invoice.status) ? 'تم إصدار الفاتورة' : statusText[invoice.status],
+    kind: invoiceStatusKind(invoice.status),
+  };
+}
 /** Always shown on API document.pdf copies; the official tax invoice is /api/finance/invoices/:id/pdf. */
 export const INTERNAL_COPY_LABEL =
   'نسخة داخلية – ليست الفاتورة الضريبية الرسمية / Internal copy – not the official tax invoice';
 
-export function Status({
-  text,
-  kind = 'neutral',
-}: {
-  text: string;
-  kind?: 'neutral' | 'good' | 'bad' | 'waiting';
-}) {
+export function Status({ text, kind = 'neutral' }: { text: string; kind?: StatusKind }) {
   return (
     <span className={`fin-status ${kind}`}>
       <i aria-hidden="true" />
@@ -128,7 +147,7 @@ export function InvoicePaper({
         title={invoiceTitle(invoice.documentType, invoice.invoiceType).ar}
         subtitle={invoiceTitle(invoice.documentType, invoice.invoiceType).en}
         number={invoice.number}
-        status={statusText[invoice.status]}
+        status={invoiceStatusText(invoice)}
       />
       <div className="fin-document-rule" />
       {internalCopy && (
@@ -140,7 +159,7 @@ export function InvoicePaper({
       {accepted ? (
         <div className="fin-final-banner">
           <Check size={17} />
-          {statusText[invoice.status]} · حالة مصدرها وافق والهيئة
+          {invoiceStatusText(invoice)} · حالة مصدرها وافق والهيئة
         </div>
       ) : (
         <div className="fin-draft-watermark">مسودة فاتورة · للمعاينة الداخلية فقط</div>
@@ -153,7 +172,7 @@ export function InvoicePaper({
           issueDate={invoice.issueDate}
           validUntil={invoice.dueDate}
           validUntilLabel="تاريخ الاستحقاق / Due Date"
-          status={statusText[invoice.status]}
+          status={invoiceStatusText(invoice)}
           purchaseOrder={invoice.purchaseOrder}
           documentType={invoice.documentType}
         />
