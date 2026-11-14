@@ -76,7 +76,7 @@ function MonthlyChart({ data }: { data: LedgerDashboard['monthly'] }) {
       </div>
       <svg
         viewBox={`0 0 ${width} ${height}`}
-        role="img"
+        role="group"
         aria-label="أعمدة الإيرادات والمصروفات الشهرية"
       >
         {[0, 0.5, 1].map((step) => (
@@ -101,6 +101,7 @@ function MonthlyChart({ data }: { data: LedgerDashboard['monthly'] }) {
               onFocus={() => setActive(index)}
               onBlur={() => setActive(null)}
               tabIndex={0}
+              role="img"
               aria-label={`${monthName(item.month)}: الإيرادات ${fmt(item.revenueHalalas)}، المصروفات ${fmt(item.expenseHalalas)}`}
             >
               <rect x={left + band * slot} y={0} width={band} height={height} fill="transparent" />

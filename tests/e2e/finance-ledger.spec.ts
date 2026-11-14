@@ -109,7 +109,9 @@ test('accounting portal: setup, revenue, expense, journal entry, VAT return, bud
   }
   await expect(health).toBeVisible();
   await expect(page.getByText('إيرادات هذا الشهر')).toBeVisible();
-  await expect(page.getByRole('img', { name: 'أعمدة الإيرادات والمصروفات الشهرية' })).toBeVisible();
+  await expect(
+    page.getByRole('group', { name: 'أعمدة الإيرادات والمصروفات الشهرية' }),
+  ).toBeVisible();
   await shot('ledger-home');
   const axe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
   expect(
