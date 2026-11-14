@@ -1246,7 +1246,11 @@ export function createApp(
       }
     });
   }
-  registerHrServiceApi(app, { db, contextFor: (req) => hrServiceRequests.get(req) });
+  registerHrServiceApi(app, {
+    db,
+    contextFor: (req) => hrServiceRequests.get(req),
+    privateData,
+  });
   registerAdministration(app, { db, requireActor, privateMode: privateData });
   registerFinance(app, {
     db,

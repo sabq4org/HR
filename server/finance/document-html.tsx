@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { FinanceInvoice, FinanceQuote, FinanceSeller } from '../../shared/finance.js';
 import type { CustomerStatement } from '../../shared/ledger.js';
@@ -31,18 +32,35 @@ export function documentAsset(url: string): string | null {
   return null;
 }
 
-let stylesheet: string | undefined;
+const sheets = new Map<string, string>();
+/** Plex fonts and styles.css (as main.tsx loads them), then the given app stylesheets. */
+function appStylesheet(files: readonly string[]): string {
+  const key = files.join('|');
+  let sheet = sheets.get(key);
+  if (sheet === undefined) {
+    sheet = [
+      ...[400, 500, 600, 700].map((weight) =>
+        readFileSync(fontsourceCss(weight), 'utf8').replaceAll('url(./files/', 'url(/fontsource/'),
+      ),
+      ...['src/styles.css', ...files].map((file) => readFileSync(join(root, file), 'utf8')),
+    ].join('\n');
+    sheets.set(key, sheet);
+  }
+  return sheet;
+}
 /** The app stylesheet in the order main.tsx loads it: Plex fonts, styles.css, finance.css. */
 export function documentStylesheet(): string {
-  stylesheet ??= [
-    ...[400, 500, 600, 700].map((weight) =>
-      readFileSync(fontsourceCss(weight), 'utf8').replaceAll('url(./files/', 'url(/fontsource/'),
-    ),
-    readFileSync(join(root, 'src/styles.css'), 'utf8'),
-    readFileSync(join(root, 'src/finance/finance.css'), 'utf8'),
-  ].join('\n');
-  return stylesheet;
+  return appStylesheet(['src/finance/finance.css']);
 }
+/**
+ * Stylesheets of the HR printouts (employee report, payslip, issued letter): the CSS files the
+ * in-app pages import, so the server PDF uses the same rules as window.print.
+ */
+const HR_SHEETS = [
+  'src/administration/administration.css',
+  'src/payroll/payroll.css',
+  'src/letters/letters.css',
+];
 
 /**
  * The page box the browser really uses when the in-app quote/invoice preview is printed. The app
@@ -56,14 +74,14 @@ export const PREVIEW_PAGE_CSS =
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
-function page(title: string, body: string, extraCss = '') {
+function page(title: string, body: string, extraCss = '', css = documentStylesheet()) {
   return `<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
 <base href="${DOCUMENT_ORIGIN}/">
 <title>${escapeHtml(title)}</title>
-<style>${documentStylesheet()}${extraCss}</style>
+<style>${css}${extraCss}</style>
 </head>
 <body>${body}</body>
 </html>`;
@@ -96,4 +114,12 @@ export function statementHtml(statement: CustomerStatement): string {
     renderToStaticMarkup(<StatementPaper statement={statement} />),
     '\n@page { size: A4 landscape; margin: 10mm 12mm; }',
   );
+}
+
+/**
+ * HR printouts. In the app all CSS ships as one bundle and Chromium applies the last unnamed
+ * @page (payroll.css: A4 portrait, 18 mm), so the server uses the same page box (PREVIEW_PAGE_CSS).
+ */
+export function hrDocumentHtml(title: string, body: ReactElement): string {
+  return page(title, renderToStaticMarkup(body), PREVIEW_PAGE_CSS, appStylesheet(HR_SHEETS));
 }

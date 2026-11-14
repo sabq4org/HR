@@ -837,25 +837,30 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
     const run = await getRun(String(req.params.id), actor);
     if (actor.role === 'employee')
       throw fail(403, 'forbidden', 'تصدير المسير متاح للأدوار المالية والإدارية فقط.');
-    return [
-      ['الموظف', 'المكوّن', 'النوع', 'المبلغ بالريال', 'المصدر'],
-      ...run.lines.map((l) => [
-        l.employeeName,
-        l.component,
-        l.kind,
-        (l.amountMinor / 100).toFixed(2),
-        l.source,
-      ]),
-    ]
-      .map((row) =>
-        row
-          .map((v) => {
-            const value = String(v);
-            const safe = /^[\s]*[=+\-@]/.test(value) ? `'${value}` : value;
-            return '"' + safe.replace(/"/g, '""') + '"';
-          })
-          .join(','),
-      )
-      .join('\r\n');
+    return payrollCsv(run);
   });
+}
+
+/** CSV of a run's lines (no BOM). Shared by the in-app export and the HR service key export. */
+export function payrollCsv(run: Pick<PayrollRun, 'lines'>): string {
+  return [
+    ['الموظف', 'المكوّن', 'النوع', 'المبلغ بالريال', 'المصدر'],
+    ...run.lines.map((l) => [
+      l.employeeName,
+      l.component,
+      l.kind,
+      (l.amountMinor / 100).toFixed(2),
+      l.source,
+    ]),
+  ]
+    .map((row) =>
+      row
+        .map((v) => {
+          const value = String(v);
+          const safe = /^[\s]*[=+\-@]/.test(value) ? `'${value}` : value;
+          return '"' + safe.replace(/"/g, '""') + '"';
+        })
+        .join(','),
+    )
+    .join('\r\n');
 }

@@ -1,10 +1,17 @@
+export { isProfileFieldVisible, profileTabs, visibleEmployeeFields } from './profile-visibility';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, CalendarDays, CircleHelp, FileClock, ShieldCheck } from 'lucide-react';
 import type { EmployeeFile, FormField } from '../../shared/administration';
 import { employeeFields } from '../../shared/catalog';
+import {
+  allowedFieldKeys,
+  profileTabs,
+  visibleEmployeeFields,
+  authorizedFields,
+  profileGroups as groups,
+} from './profile-visibility';
 
-const fields = employeeFields as FormField[];
 const readinessGroups: Record<string, string[]> = {
   البيانات: ['البيانات الأساسية', 'التواصل', 'العمل', 'المؤهلات', 'انتهاء العلاقة'],
   العقد: ['العقد'],
@@ -39,70 +46,6 @@ function readinessFor(file: EmployeeFile, tab: string): Readiness | undefined {
       }
     : undefined;
 }
-function allowedFieldKeys(file: EmployeeFile) {
-  return new Set(file.visibleFieldKeys);
-}
-const groups: Record<string, { title: string; groups: string[]; keys?: string[] }> = {
-  البيانات: {
-    title: 'البيانات الوظيفية',
-    groups: ['البيانات الأساسية', 'التواصل', 'العمل', 'المؤهلات', 'انتهاء العلاقة'],
-  },
-  العقد: { title: 'العقد وفترات العمل', groups: ['العقد'], keys: ['relationshipType', 'bio'] },
-  الراتب: {
-    title: 'الراتب والمزايا',
-    groups: ['المالية'],
-    keys: [
-      'salaryEffectiveDate',
-      'salarySource',
-      'wagesProtectionAmount',
-      'wagesProtectionSource',
-      'wagesProtectionDate',
-    ],
-  },
-  البنك: {
-    title: 'البيانات البنكية',
-    groups: ['البنك'],
-    keys: [
-      'bankName',
-      'iban',
-      'bankCountry',
-      'accountNumber',
-      'accountType',
-      'currency',
-      'bankUpdatedAt',
-      'bankVerificationStatus',
-      'bankVerificationSource',
-      'bankVerifiedAt',
-      'swiftCode',
-      'bankBranch',
-    ],
-  },
-  التأمينات: {
-    title: 'التأمينات الاجتماعية',
-    groups: ['التأمينات'],
-    keys: [
-      'insuranceRegistrationStatus',
-      'insuranceStartDate',
-      'employeeContributionPercent',
-      'employerContributionPercent',
-      'insuranceSource',
-      'insuranceEffectiveDate',
-      'insuranceVerificationStatus',
-    ],
-  },
-  'التأمين الطبي': {
-    title: 'التأمين الطبي',
-    groups: ['التأمين الطبي'],
-    keys: [
-      'medicalCoverageStatus',
-      'medicalProvider',
-      'medicalPolicyNumber',
-      'medicalStartDate',
-      'medicalEndDate',
-      'medicalMemberNumber',
-    ],
-  },
-};
 const date = (value: string | null | undefined) =>
   value
     ? new Intl.DateTimeFormat('ar-SA-u-ca-gregory-nu-latn', {
@@ -144,26 +87,6 @@ function valueLabel(value: unknown, field?: FormField) {
       String(value)
     );
   return statusLabels[String(value)] || String(value);
-}
-function authorizedFields(file: EmployeeFile, tab: string) {
-  const config = groups[tab];
-  if (!config) return [];
-  const allowed = allowedFieldKeys(file);
-  const legacyBankFields = ['bankName', 'iban'];
-  return fields.filter(
-    (field) =>
-      (config.groups.includes(field.group || 'البيانات الأساسية') ||
-        config.keys?.includes(field.key)) &&
-      !(tab === 'الراتب' && legacyBankFields.includes(field.key)) &&
-      allowed.has(field.key),
-  );
-}
-export function visibleEmployeeFields(file: EmployeeFile) {
-  const allowed = allowedFieldKeys(file);
-  return fields.filter((field) => allowed.has(field.key));
-}
-export function isProfileFieldVisible(file: EmployeeFile, key: string) {
-  return allowedFieldKeys(file).has(key);
 }
 function Details({ file, tab }: { file: EmployeeFile; tab: string }) {
   const items = authorizedFields(file, tab);
@@ -221,17 +144,6 @@ function Details({ file, tab }: { file: EmployeeFile; tab: string }) {
     <p className="profile-unavailable">
       <CircleHelp size={16} /> لا توجد بيانات متاحة لهذا القسم.
     </p>
-  );
-}
-
-export function profileTabs(file: EmployeeFile) {
-  const order = ['البيانات', 'العقد', 'الراتب', 'البنك', 'التأمينات', 'التأمين الطبي', 'الإجازات'];
-  return order.filter((tab) =>
-    tab === 'الإجازات'
-      ? allowedFieldKeys(file).has('annualLeaveEntitlement') ||
-        !!file.leaveMovements.length ||
-        file.leaveSummary.balanceKnown
-      : authorizedFields(file, tab).length > 0,
   );
 }
 
