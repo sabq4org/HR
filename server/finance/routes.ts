@@ -493,6 +493,8 @@ async function reserveOperation(
   ownerId: string,
   type: 'customer' | 'invoice',
   resourceId: string,
+  /** Runs in the reservation transaction, before the operation is written. */
+  guard?: (tx: AsyncDb) => Promise<void>,
 ): Promise<OperationRow> {
   return db.transaction(async (tx) => {
     const found = (
@@ -506,6 +508,7 @@ async function reserveOperation(
       leaseUntil = new Date(Date.now() + 60_000).toISOString();
     if (found?.state === 'in_flight' && found.lease_until && found.lease_until > at)
       throw fault(409, 'WAFEQ_SYNC_IN_PROGRESS', 'توجد مزامنة جارية لهذا السجل؛ انتظر اكتمالها.');
+    if (guard) await guard(tx);
     if (found) {
       await tx.execute(
         "UPDATE finance_provider_operations SET state='in_flight',lease_until=?,updated_at=? WHERE owner_id=? AND id=?",
@@ -950,10 +953,12 @@ export function registerFinance(
           throw fault(409, 'VERSION_CONFLICT', 'تغير العميل؛ حدّث الصفحة ثم أعد المحاولة.');
         const next = version + 1;
         const cipher = encryptSensitive(JSON.stringify(input), `finance:customer:${row.id}`);
-        await tx.execute(
+        const changed = await tx.execute(
           'UPDATE finance_customers SET version=?,customer_ciphertext=?,updated_at=? WHERE owner_id=? AND id=? AND version=?',
           [next, cipher, now(), actor.id, row.id, version],
         );
+        if (changed.rowCount !== 1)
+          throw fault(409, 'VERSION_CONFLICT', 'تغير العميل؛ حدّث الصفحة ثم أعد المحاولة.');
         await audited(tx, actor, 'finance_customer', row.id, 'updated', next);
         return { marker: { type: 'customer', id: row.id }, result: { id: row.id } };
       },
@@ -999,9 +1004,27 @@ export function registerFinance(
     }
     if (!priorOperation && initial.version !== version)
       throw fault(409, 'VERSION_CONFLICT', 'تغير العميل؛ حدّث الصفحة ثم أعد المحاولة.');
-    const client = await storedClient(db, actor.id, createClient),
-      input = safeJson<FinanceCustomerInput>(initial.customer_ciphertext, `finance:customer:${id}`);
-    const operation = await reserveOperation(db, actor.id, 'customer', id);
+    const client = await storedClient(db, actor.id, createClient);
+    // Claim the customer's version in the same transaction that records the operation, so an
+    // edit committed after `initial` was read cannot be sent or marked synced from a stale copy.
+    const operation = await reserveOperation(db, actor.id, 'customer', id, async (tx) => {
+      const claimed = await tx.execute(
+        'UPDATE finance_customers SET version=version+1,updated_at=? WHERE owner_id=? AND id=? AND version=?',
+        [now(), actor.id, id, initial.version],
+      );
+      if (claimed.rowCount !== 1)
+        throw fault(409, 'VERSION_CONFLICT', 'تغير العميل؛ حدّث الصفحة ثم أعد المحاولة.');
+    });
+    const reserved = (
+      await db.read<CustomerRow>('SELECT * FROM finance_customers WHERE owner_id=? AND id=?', [
+        actor.id,
+        id,
+      ])
+    )[0];
+    const input = safeJson<FinanceCustomerInput>(
+      reserved.customer_ciphertext,
+      `finance:customer:${id}`,
+    );
     let created: { id: string };
     try {
       const found = await client.findCustomerByExternalId(id);
@@ -1015,8 +1038,8 @@ export function registerFinance(
       const customer = await setCustomerSync(
         db,
         actor,
-        initial,
-        initial.wafeq_id,
+        reserved,
+        reserved.wafeq_id,
         'error',
         safe.syncMessage,
       );
@@ -1033,7 +1056,7 @@ export function registerFinance(
       "UPDATE finance_provider_operations SET state='complete',provider_id=?,lease_until=NULL,updated_at=? WHERE owner_id=? AND id=?",
       [created.id, now(), actor.id, operation.id],
     );
-    const customer = await setCustomerSync(db, actor, initial, created.id, 'synced');
+    const customer = await setCustomerSync(db, actor, reserved, created.id, 'synced');
     res.json({ customer });
   });
   registerRoute(app, 'post', '/api/finance/catalog', async (req, res) => {

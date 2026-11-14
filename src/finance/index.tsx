@@ -948,13 +948,27 @@ export function FinancePage() {
                                 )}
                               </>
                             ) : (
-                              <button
-                                className="text-button"
-                                disabled={busy === `invoice:${i.id}`}
-                                onClick={() => void invoiceSync(i, 'refresh')}
-                              >
-                                تحديث حالة التحقق
-                              </button>
+                              <>
+                                {/* Retrying /sync reuses the stored provider operation keys. */}
+                                {['reconciliation_required', 'syncing'].includes(i.status) && (
+                                  <button
+                                    className="text-button"
+                                    disabled={busy === `invoice:${i.id}`}
+                                    onClick={() => void invoiceSync(i, 'sync')}
+                                  >
+                                    إعادة محاولة المزامنة
+                                  </button>
+                                )}
+                                {i.wafeqId && (
+                                  <button
+                                    className="text-button"
+                                    disabled={busy === `invoice:${i.id}`}
+                                    onClick={() => void invoiceSync(i, 'refresh')}
+                                  >
+                                    تحديث حالة التحقق
+                                  </button>
+                                )}
+                              </>
                             )}
                             {['cleared', 'reported'].includes(i.status) && i.qrCode && (
                               <button className="text-button" onClick={() => setFinalInvoice(i)}>
