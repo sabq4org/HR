@@ -3,6 +3,7 @@ import { Printer } from 'lucide-react';
 import type { FinanceCustomer } from '../../shared/finance';
 import type { CustomerStatement } from '../../shared/ledger';
 import { api, Modal } from '../lib';
+import { ExportPdfButton } from './ExportPdf';
 import { StatementPaper } from './statement-paper';
 
 const today = () =>
@@ -82,13 +83,21 @@ export function CustomerStatementModal({
             onChange={(e) => setRange({ ...range, to: e.target.value })}
           />
         </label>
+        <ExportPdfButton
+          path={`/customers/${encodeURIComponent(customer.id)}/statement.pdf?${new URLSearchParams({
+            to: range.to,
+            ...(range.from ? { from: range.from } : {}),
+          })}`}
+          filename={`كشف حساب ${customer.name} ${range.to}`}
+          disabled={!statement || Boolean(error) || loaded !== wanted}
+        />
         <button
-          className="button primary"
+          className="button secondary"
           disabled={!statement || Boolean(error) || loaded !== wanted}
           onClick={() => window.print()}
         >
           <Printer size={16} />
-          طباعة أو حفظ PDF
+          طباعة
         </button>
         {statement && statement.unpostedInvoices > 0 && (
           <small>

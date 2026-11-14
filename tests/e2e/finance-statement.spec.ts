@@ -81,7 +81,18 @@ test('customer statement: invoices, payments and balance due on landscape A4', a
 
   await page.goto('/finance?view=billing');
   const row = page.getByRole('row', { name: new RegExp(name) });
-  await row.getByRole('button', { name: 'كشف حساب' }).click();
+  // Clicking the customer opens a read-only card with everything saved for them.
+  await row.getByRole('button', { name }).click();
+  const card = page.locator('.fin-customer-card');
+  await expect(card.getByRole('heading', { name })).toBeVisible();
+  await expect(card.getByText('300000000000003')).toBeVisible();
+  await expect(card.getByText('statement@example.test')).toBeVisible();
+  await expect(card.getByText('طريق الاختبار')).toBeVisible();
+  await expect(card.locator('.fin-customer-stats li').nth(1)).toContainText('3');
+  await expect(card.locator('.fin-customer-stats')).toContainText('46,000.00');
+  if (desktop) await page.screenshot({ path: testInfo.outputPath('customer-card.png') });
+  await card.getByRole('button', { name: 'كشف حساب' }).click();
+  await expect(card).toHaveCount(0);
   const paper = page.locator('.fin-statement-paper');
   await expect(paper.getByRole('heading', { name: 'كشف حساب العميل' })).toBeVisible();
   await expect(paper.getByText(name)).toBeVisible();
@@ -100,6 +111,7 @@ test('customer statement: invoices, payments and balance due on landscape A4', a
   await page.getByLabel('من', { exact: true }).fill('');
   await expect(paper.getByText('رصيد افتتاحي مرحّل')).toHaveCount(0);
 
+  await expect(page.getByRole('button', { name: 'تصدير PDF' })).toBeEnabled();
   if (desktop) {
     await page.emulateMedia({ media: 'print' });
     const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
