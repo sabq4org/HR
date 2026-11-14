@@ -1,6 +1,7 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { createHash, randomBytes } from 'node:crypto';
 import { createApp } from './app.js';
+import { securityHeaders } from './http-hardening.js';
 import { createDatabase, createPostgresDatabase, type Db } from './database.js';
 
 const WORKSPACE_COOKIE = '__Host-sabq_hr_workspace';
@@ -146,6 +147,7 @@ export async function createHostedDemoApp(
   let pendingCreations = 0;
   const app = express();
   app.disable('x-powered-by');
+  app.use(securityHeaders({ hosted: true, https: true }));
 
   const closeWorkspace = async (key: string) => {
     const workspace = workspaces.get(key);

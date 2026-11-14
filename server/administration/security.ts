@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -14,18 +14,21 @@ import { dirname, resolve } from 'node:path';
 const KEY_BYTES = 32;
 let processKey: Buffer | undefined;
 
+/** Parses HR_DATA_KEY; throws (without echoing the value) unless it is 32 bytes of base64url. */
+export function parseDataKey(configured: string): Buffer {
+  const key = Buffer.from(configured, 'base64url');
+  if (key.length !== KEY_BYTES || key.toString('base64url') !== configured.replace(/=+$/, '')) {
+    throw Object.assign(new Error('HR_DATA_KEY must be a 32-byte base64url value.'), {
+      status: 503,
+      code: 'DATA_KEY_CONFIGURATION_INVALID',
+    });
+  }
+  return key;
+}
+
 function loadKey(): Buffer {
   const configured = process.env.HR_DATA_KEY;
-  if (configured) {
-    const key = Buffer.from(configured, 'base64url');
-    if (key.length !== KEY_BYTES || key.toString('base64url') !== configured.replace(/=+$/, '')) {
-      throw Object.assign(new Error('HR_DATA_KEY must be a 32-byte base64url value.'), {
-        status: 503,
-        code: 'DATA_KEY_CONFIGURATION_INVALID',
-      });
-    }
-    return key;
-  }
+  if (configured) return parseDataKey(configured);
 
   if (process.env.HR_MODE === 'hosted-demo') return (processKey ??= randomBytes(KEY_BYTES));
   // LOCAL_DEMO is only enabled by the loopback-only local entrypoint. It still
@@ -75,6 +78,12 @@ function loadKey(): Buffer {
     });
   }
   return key;
+}
+
+const FINGERPRINT_LABEL = 'sabq-hr/data-key-fingerprint/v1';
+/** One-way fingerprint of the active data key (HMAC of a fixed label); safe to store. */
+export function dataKeyFingerprint(): string {
+  return createHmac('sha256', loadKey()).update(FINGERPRINT_LABEL, 'utf8').digest('hex');
 }
 
 export function encryptSensitive(plaintext: string, context: string): string {

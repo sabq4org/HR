@@ -18,3 +18,8 @@ artifacts/finance-quote-synthetic.pdf
 artifacts/quote-pdf-review/
 .DS_Store
 Sabq_HR_Project.zip
+
+# Spreadsheets and exports may hold real employee data; never commit them.
+*.xlsx
+*.xls
+*.csv

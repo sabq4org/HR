@@ -1,3 +1,4 @@
+import { clientFailureLimiter, securityHeaders } from './http-hardening.js';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Employee, LeaveRequest, Role } from '../shared/contracts.js';
@@ -285,6 +286,11 @@ export function createApp(
     dataMode?: 'synthetic' | 'private';
     /** Shared access password (private hosted mode). Required for private data on a public origin. */
     accessPassword?: string;
+    /**
+     * Reverse-proxy hops in front of the app (Railway: 1). Lets the access gate count
+     * failed passwords per client address instead of for the whole service.
+     */
+    trustProxyHops?: number;
     /** Exact employee ID explicitly granted the financial workspace. No role-wide default. */
     financeEmployeeId?: string;
     /** Dependency injection for isolated tests; the runtime always uses the fixed Wafeq API. */
@@ -326,6 +332,10 @@ export function createApp(
     throw new Error('publicOrigin must be an HTTPS origin without a path or credentials');
   const cookieName = pinnedOrigin ? '__Host-sabq_hr_demo' : COOKIE;
   app.disable('x-powered-by');
+  // Only the hops we were told about are trusted; the rightmost X-Forwarded-For entry is
+  // written by the platform proxy, so a client cannot choose its own counted address.
+  app.set('trust proxy', options.trustProxyHops ?? 0);
+  app.use(securityHeaders({ hosted: !!pinnedOrigin, https: !!pinnedOrigin }));
   app.use((req, res, next) => {
     if (req.path.startsWith('/api')) {
       res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -354,18 +364,22 @@ export function createApp(
   });
   // Accountant service keys (Authorization: Bearer sabqfin_...). Finance scope only.
   const serviceRequests = new WeakSet<Request>();
-  const failedKeyAttempts: number[] = [];
+  // Counted per client address, like the access gate: a global counter would let anyone
+  // who knows the URL lock the accountant's valid key out with 20 junk requests.
+  const keyFailures = clientFailureLimiter({ maxFailures: 20, windowMs: 15 * 60 * 1000 });
   app.use((req, res, next) => {
     const token = bearerToken(req.get('authorization'));
     if (token === undefined) return next();
     const now = Date.now();
-    while (failedKeyAttempts.length && failedKeyAttempts[0] < now - 15 * 60 * 1000)
-      failedKeyAttempts.shift();
-    if (failedKeyAttempts.length >= 20)
+    const client = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+    const retryAfter = keyFailures.retryAfterSeconds(client, now);
+    if (retryAfter) {
+      res.setHeader('Retry-After', String(retryAfter));
       return jsonError(
         res,
         fault(429, 'API_KEY_LOCKED', 'محاولات مفاتيح خاطئة كثيرة. انتظر 15 دقيقة.'),
       );
+    }
     const hashes = options.financeApiKeyHashes ?? [];
     if (!privateData || !options.financeEmployeeId || hashes.length === 0)
       return jsonError(
@@ -373,7 +387,7 @@ export function createApp(
         fault(401, 'API_KEY_DISABLED', 'مفاتيح الخدمة غير مفعّلة في هذه النسخة.'),
       );
     if (!token || !matchesServiceKey(token, hashes)) {
-      failedKeyAttempts.push(now);
+      keyFailures.recordFailure(client, now);
       return jsonError(res, fault(401, 'INVALID_API_KEY', 'مفتاح الخدمة غير صالح.'));
     }
     if (!inAccountantScope(req.method, req.path))
@@ -429,7 +443,9 @@ export function createApp(
   const accessCookie = pinnedOrigin ? '__Host-sabq_hr_access' : 'sabq_hr_access';
   const accessTtlMs = 12 * 60 * 60 * 1000;
   const accessTokens = new Map<string, number>();
-  const failedAttempts: number[] = [];
+  // Failed passwords are counted per client address (second review, note 3). A single
+  // global counter let anyone who knew the URL lock the owner out indefinitely.
+  const accessFailures = clientFailureLimiter({ maxFailures: 10, windowMs: 15 * 60 * 1000 });
   const digest = (value: string) => createHash('sha256').update(value, 'utf8').digest();
   const accessToken = (req: Request) =>
     (req.headers.cookie ?? '')
@@ -454,18 +470,21 @@ export function createApp(
   app.post('/api/access', (req, res) => {
     if (!accessPassword) return res.json({ required: false, granted: true });
     const now = Date.now();
-    while (failedAttempts.length && failedAttempts[0] < now - 15 * 60 * 1000)
-      failedAttempts.shift();
-    if (failedAttempts.length >= 10)
+    const client = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+    const retryAfter = accessFailures.retryAfterSeconds(client, now);
+    if (retryAfter) {
+      res.setHeader('Retry-After', String(retryAfter));
       return jsonError(
         res,
         fault(429, 'ACCESS_LOCKED', 'محاولات كثيرة خاطئة. انتظر 15 دقيقة ثم أعد المحاولة.'),
       );
+    }
     const given = typeof req.body?.password === 'string' ? req.body.password : '';
     if (!given || given.length > 256 || !timingSafeEqual(digest(given), digest(accessPassword))) {
-      failedAttempts.push(now);
+      accessFailures.recordFailure(client, now);
       return jsonError(res, fault(401, 'ACCESS_DENIED', 'كلمة المرور غير صحيحة.'));
     }
+    accessFailures.clear(client);
     for (const [token, expires] of accessTokens) if (expires < now) accessTokens.delete(token);
     const token = randomBytes(32).toString('base64url');
     accessTokens.set(token, now + accessTtlMs);
