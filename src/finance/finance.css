@@ -465,87 +465,91 @@
   --paper-line: #dce5ee;
   width: min(100%, 850px);
   margin: 14px auto 28px;
-  padding: 38px 44px;
+  padding: 30px 36px;
   background: #fff;
   color: var(--paper-ink);
-  font-size: 12px;
-  line-height: 1.65;
+  font-size: 11px;
+  line-height: 1.5;
 }
 .fin-doc-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 24px;
+  gap: 20px;
   direction: rtl;
-  min-height: 92px;
 }
 .fin-doc-brand {
   display: flex;
   align-items: flex-start;
-  gap: 13px;
+  gap: 10px;
   min-width: 0;
 }
 .fin-doc-brand img {
-  width: 86px;
-  height: 78px;
+  width: 64px;
+  height: 58px;
   object-fit: contain;
   flex: 0 0 auto;
 }
 .fin-doc-brand > div {
   display: grid;
-  gap: 2px;
-  padding-top: 3px;
+  gap: 0;
+  padding-top: 2px;
+  line-height: 1.45;
 }
 .fin-doc-brand b {
   color: #3f709f;
-  font-size: 19px;
+  font-size: 15px;
+  margin-bottom: 2px;
 }
 .fin-doc-brand span {
   color: var(--paper-muted);
-  font-size: 10px;
+  font-size: 9px;
 }
 .fin-doc-heading {
   display: grid;
   justify-items: start;
   align-content: start;
-  gap: 3px;
-  min-width: 140px;
+  gap: 2px;
+  min-width: 120px;
   text-align: left;
 }
 .fin-doc-heading h1 {
   margin: 0;
   color: #416f9b;
   font-family: 'Year of Handicrafts', serif;
-  font-size: 22px;
+  font-size: 19px;
+  line-height: 1.3;
 }
 .fin-doc-heading > span:not(.fin-status) {
   color: #6d7887;
-  font-size: 12px;
+  font-size: 9px;
   direction: ltr;
 }
 .fin-doc-heading .fin-status {
-  margin-top: 4px;
+  margin-top: 3px;
+  font-size: 9px;
+  padding: 2px 8px;
 }
 .fin-doc-number {
   color: var(--paper-blue);
-  font-size: 12px;
+  font-size: 10px;
 }
 .fin-document-rule {
-  height: 3px;
+  height: 2px;
   background: var(--paper-blue);
-  margin: 17px 0 23px;
+  margin: 10px 0 14px;
 }
 .fin-document-cards {
   display: grid;
   grid-template-columns: 1fr 1fr;
   direction: ltr;
-  gap: 16px;
-  margin-bottom: 19px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 .fin-detail-card {
   direction: rtl;
   min-width: 0;
-  padding: 15px 17px;
+  padding: 10px 12px;
   border: 1px solid #e3eaf0;
   border-radius: 7px;
   background: #f5f7f9;
@@ -558,9 +562,10 @@
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid #d6dfe7;
-  padding-bottom: 8px;
-  margin-bottom: 8px;
+  padding-bottom: 5px;
+  margin-bottom: 6px;
   color: #416f9b;
+  font-size: 10px;
 }
 .fin-detail-card > header span,
 .fin-bank-card > header span {
@@ -570,7 +575,7 @@
 .fin-detail-card dl,
 .fin-bank-card dl {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   margin: 0;
 }
 .fin-detail-card dl > div,
@@ -580,34 +585,46 @@
 .fin-detail-card dt,
 .fin-bank-card dt {
   color: var(--paper-muted);
-  font-size: 10px;
+  font-size: 8.5px;
 }
 .fin-detail-card dd,
 .fin-bank-card dd {
-  margin: 1px 0 0;
+  margin: 0;
   color: var(--paper-ink);
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
+/* Document details: label and value on one row, as in the legacy Sabq layout. */
+.fin-detail-card.fin-detail-rows dl > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.fin-detail-card.fin-detail-rows dd {
+  text-align: left;
+}
 .fin-detail-card dd .fin-status {
-  margin-top: 2px;
+  font-size: 9px;
+  padding: 1px 8px;
 }
 .fin-document-title {
-  margin: 3px 0 11px;
+  margin: 0 0 8px;
   color: #416f9b;
   font-family: 'Year of Handicrafts', serif;
-  font-size: 18px;
+  font-size: 13px;
 }
 .fin-paper-table-wrap {
   width: 100%;
   overflow: visible;
-  margin: 0 0 17px;
+  margin: 0 0 10px;
 }
 .fin-paper-table {
   width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
-  font-size: 9px;
-  line-height: 1.55;
+  font-size: 9.5px;
+  line-height: 1.5;
 }
 .fin-paper-table thead {
   display: table-header-group;
@@ -619,12 +636,15 @@
 }
 .fin-paper-table td,
 .fin-paper-table th {
-  padding: 9px 5px;
+  padding: 6px 5px;
   border: 0;
   border-bottom: 1px solid #e0e6eb;
   text-align: center;
   vertical-align: middle;
   overflow-wrap: anywhere;
+}
+.fin-paper-table td[dir='ltr'] {
+  white-space: nowrap;
 }
 .fin-paper-table tbody tr:nth-child(odd) {
   background: #f4f6f8;
@@ -637,31 +657,33 @@
   width: 5%;
 }
 .fin-paper-description {
-  width: 32%;
+  width: 38%;
   text-align: right !important;
 }
 .fin-paper-summary {
   display: flex;
-  justify-content: flex-start;
-  margin: 2px 0 15px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 4px;
   direction: ltr;
 }
 .fin-paper-summary-rows {
-  width: min(100%, 330px);
+  width: min(100%, 290px);
   display: grid;
-  gap: 4px;
+  gap: 1px;
   direction: rtl;
 }
 .fin-paper-summary-rows > div {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 5px 8px;
+  gap: 12px;
+  padding: 3px 8px;
 }
 .fin-paper-summary-rows > div > span {
   color: var(--paper-muted);
-  font-size: 10px;
+  font-size: 9px;
 }
 .fin-paper-summary-rows b {
   font-weight: 600;
@@ -671,23 +693,24 @@
   border-radius: 4px;
   background: var(--paper-blue);
   color: white;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
+  padding: 5px 8px;
 }
 .fin-paper-summary-rows .fin-paper-grand-total > span,
 .fin-paper-summary-rows .fin-paper-grand-total b {
   color: white;
-  font-size: 12px;
+  font-size: 11px;
 }
 .fin-document-ending {
   display: grid;
-  gap: 13px;
+  gap: 9px;
   break-inside: avoid-page;
   page-break-inside: avoid;
 }
 .fin-bank-card {
   width: 100%;
-  padding: 13px 16px;
+  padding: 9px 12px;
   border: 1px solid #d5e8f5;
   border-radius: 6px;
   background: #f1f7fb;
@@ -695,14 +718,14 @@
   page-break-inside: avoid;
 }
 .fin-bank-card > header {
-  margin-bottom: 9px;
+  margin-bottom: 5px;
   border: 0;
   padding: 0;
   color: #1672ae;
 }
 .fin-bank-card dl {
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 .fin-bank-card dd[dir='ltr'] {
   font-weight: 600;
@@ -711,7 +734,7 @@
   font-size: 10px;
 }
 .fin-notes-box {
-  padding: 12px 15px;
+  padding: 8px 12px;
   border: 1px solid #efb12c;
   border-radius: 6px;
   background: #fffaf0;
@@ -721,7 +744,8 @@
 }
 .fin-notes-box b {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
+  font-size: 10px;
 }
 .fin-notes-box p {
   margin: 0;
@@ -729,44 +753,52 @@
   overflow-wrap: anywhere;
 }
 .fin-paper-footer {
-  padding-top: 9px;
+  display: grid;
+  gap: 1px;
+  padding-top: 6px;
   border-top: 1px solid var(--paper-line);
   color: var(--paper-muted);
-  font-size: 9px;
+  font-size: 8px;
   text-align: center;
   break-before: avoid-page;
   break-inside: avoid-page;
   page-break-inside: avoid;
 }
 .fin-qr {
-  width: 104px;
-  height: 104px;
+  width: 92px;
+  height: 92px;
   object-fit: contain;
-  border: 1px solid #dce6e9;
-  padding: 5px;
 }
+/* QR sits beside the totals on the first page, as in the legacy invoice. */
 .fin-qr-wrap {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  margin-top: 4px;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  text-align: center;
   break-inside: avoid-page;
+}
+.fin-qr-wrap b {
+  font-size: 8.5px;
+  font-weight: 600;
+  color: var(--paper-muted);
 }
 .fin-qr-wrap small {
   display: block;
   color: #657d89;
-  max-width: 230px;
+  font-size: 7.5px;
+  max-width: 140px;
 }
 .fin-final-banner {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: #146446;
   background: #effaf4;
   border: 1px solid #c4e4d3;
-  padding: 9px 12px;
-  margin: 15px 0;
-  border-radius: 6px;
+  padding: 4px 10px;
+  margin: 0 0 10px;
+  border-radius: 5px;
+  font-size: 10px;
 }
 @media (max-width: 700px) {
   .finance-page {
@@ -866,9 +898,14 @@
 }
 @page finance-document {
   size: A4;
-  margin: 12mm;
+  margin: 10mm 12mm;
 }
 @media print {
+  /* Without this the app's grey page background fills the rest of the sheet. */
+  html:has(.fin-document-paper),
+  body:has(.fin-document-paper) {
+    background: #fff !important;
+  }
   body:has(.fin-quote-paper) * {
     visibility: hidden !important;
   }
@@ -967,7 +1004,7 @@
   }
   .fin-document-paper {
     color: #182638;
-    font-size: 10pt;
+    font-size: 8pt;
   }
   .fin-paper-table tr,
   .fin-detail-card,
@@ -999,8 +1036,9 @@
   }
 }
 .fin-draft-watermark {
-  margin: 15px 0;
-  padding: 9px 12px;
+  margin: 0 0 10px;
+  padding: 4px 10px;
+  font-size: 10px;
   border: 1px solid #ebd8aa;
   border-radius: 6px;
   background: #fffaf0;

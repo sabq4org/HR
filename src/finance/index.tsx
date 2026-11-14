@@ -1507,20 +1507,20 @@ export function FinancePage() {
                 tax={finalInvoice.taxHalalas}
                 total={finalInvoice.totalHalalas}
                 totalLabel="الإجمالي المستحق / Total Due"
+                aside={
+                  ['cleared', 'reported'].includes(finalInvoice.status) && finalInvoice.qrCode ? (
+                    <div className="fin-qr-wrap" dir="rtl">
+                      <img
+                        className="fin-qr"
+                        src={`/api/finance/invoices/${encodeURIComponent(finalInvoice.id)}/qr`}
+                        alt="رمز التحقق من الفاتورة"
+                      />
+                      <b>فاتورة ضريبية / Tax Invoice</b>
+                      <small>رمز التحقق صادر من وافق بعد قبول الفاتورة.</small>
+                    </div>
+                  ) : null
+                }
               />
-              {['cleared', 'reported'].includes(finalInvoice.status) && finalInvoice.qrCode && (
-                <div className="fin-qr-wrap">
-                  <img
-                    className="fin-qr"
-                    src={`/api/finance/invoices/${encodeURIComponent(finalInvoice.id)}/qr`}
-                    alt="رمز التحقق من الفاتورة"
-                  />
-                  <div>
-                    <b>رمز التحقق / Verification QR</b>
-                    <small>مستند التحقق صادر من وافق بعد قبول الفاتورة.</small>
-                  </div>
-                </div>
-              )}
               <BankAccountDetails seller={finalInvoice.seller} />
               {finalInvoice.notes && <NotesBox notes={finalInvoice.notes} />}
               <PaperFooter>
@@ -1656,7 +1656,7 @@ function DocumentDetails({
   purchaseOrder?: string;
 }) {
   return (
-    <section className="fin-detail-card">
+    <section className="fin-detail-card fin-detail-rows">
       <header>
         <b>{kind === 'quote' ? 'بيانات عرض السعر' : 'بيانات الفاتورة'}</b>
         <span lang="en">{kind === 'quote' ? 'Quotation Details' : 'Invoice Details'}</span>
@@ -1696,6 +1696,11 @@ function DocumentDetails({
 function LineItemsTable({ lines }: { lines: FinanceLine[] }) {
   const percent = (bps: number) =>
     new Intl.NumberFormat('en-SA', { maximumFractionDigits: 2 }).format(bps / 100);
+  // Table cells show plain amounts like the legacy layout; currency appears in the totals.
+  const amount = (halalas: number) =>
+    new Intl.NumberFormat('en-SA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(
+      halalas / 100,
+    );
   return (
     <div className="fin-paper-table-wrap">
       <table className="fin-paper-table">
@@ -1722,10 +1727,10 @@ function LineItemsTable({ lines }: { lines: FinanceLine[] }) {
               </td>
               <td className="fin-paper-description">{line.description}</td>
               <td dir="ltr">{line.quantity}</td>
-              <td dir="ltr">{money(Math.round(Number(line.unitPrice) * 100))}</td>
+              <td dir="ltr">{amount(Math.round(Number(line.unitPrice) * 100))}</td>
               <td dir="ltr">{percent(line.taxRateBps)}%</td>
-              <td dir="ltr">{money(line.taxHalalas)}</td>
-              <td dir="ltr">{money(line.totalHalalas)}</td>
+              <td dir="ltr">{amount(line.taxHalalas)}</td>
+              <td dir="ltr">{amount(line.totalHalalas)}</td>
             </tr>
           ))}
         </tbody>
@@ -1739,11 +1744,13 @@ function PaperTotals({
   tax,
   total,
   totalLabel,
+  aside,
 }: {
   subtotal: number;
   tax: number;
   total: number;
   totalLabel: string;
+  aside?: ReactNode;
 }) {
   return (
     <div className="fin-paper-summary" dir="ltr">
@@ -1761,6 +1768,7 @@ function PaperTotals({
           <b dir="ltr">{money(total)}</b>
         </div>
       </div>
+      {aside}
     </div>
   );
 }
@@ -1814,5 +1822,13 @@ function NotesBox({ notes }: { notes: string }) {
 }
 
 function PaperFooter({ children }: { children: ReactNode }) {
-  return <footer className="fin-paper-footer">{children}</footer>;
+  return (
+    <footer className="fin-paper-footer">
+      <span>{children}</span>
+      <span>
+        أُنشئ هذا المستند إلكترونيًا |{' '}
+        <span lang="en">This document was generated electronically</span>
+      </span>
+    </footer>
+  );
 }
