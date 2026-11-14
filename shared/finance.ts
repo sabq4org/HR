@@ -79,6 +79,14 @@ export function completeSeller(
     ...(hasBank || !fallback.bankAccount ? {} : { bankAccount: fallback.bankAccount }),
   };
 }
+/** Display-only: groups an IBAN in blocks of 4. The stored value stays without spaces. */
+export function formatIban(iban: string): string {
+  return iban
+    .replace(/\s+/g, '')
+    .toUpperCase()
+    .replace(/(.{4})/g, '$1 ')
+    .trim();
+}
 export const sellerAddressText = (address: FinanceAddress) =>
   [
     [address.buildingNumber, address.line].filter(Boolean).join(' '),

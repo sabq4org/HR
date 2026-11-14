@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { FinanceInvoice, FinanceQuote, FinanceSeller } from '../../shared/finance.js';
 import type { CustomerStatement } from '../../shared/ledger.js';
 import { InvoicePaper, QuotePaper } from '../../src/finance/paper.js';
+import { invoiceQrSrc } from './qr-image.js';
 import { StatementPaper } from '../../src/finance/statement-paper.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -77,9 +78,13 @@ export function quoteHtml(quote: FinanceQuote, seller: FinanceSeller): string {
 }
 
 export function invoiceHtml(invoice: FinanceInvoice, seller: FinanceSeller): string {
+  const accepted = ['cleared', 'reported'].includes(invoice.status);
+  const qrSrc = accepted && invoice.qrCode ? invoiceQrSrc(invoice.qrCode) : undefined;
   return page(
     `فاتورة ${invoice.number}`,
-    renderToStaticMarkup(<InvoicePaper invoice={invoice} seller={seller} />),
+    renderToStaticMarkup(
+      <InvoicePaper invoice={invoice} seller={seller} qrSrc={qrSrc} internalCopy />,
+    ),
     PREVIEW_PAGE_CSS,
   );
 }
