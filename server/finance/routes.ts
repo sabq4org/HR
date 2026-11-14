@@ -18,6 +18,7 @@ import type {
 } from '../../shared/finance.js';
 import {
   completeSeller,
+  documentLanguage,
   financeDocumentTypes,
   zeroLineDocumentTypes,
 } from '../../shared/finance.js';
@@ -1999,13 +2000,21 @@ export function registerFinance(
       .set('cache-control', 'private, no-store')
       .set('x-pdf-renderer', pdf.renderer)
       .send(pdf.bytes);
-  const renderPdf = async (html: () => string, fallback: () => Promise<Buffer>) => {
+  // The pdfkit layout is Arabic only, so an English document has no fallback: it answers 503
+  // rather than coming out in the wrong language.
+  const renderPdf = async (html: () => string, fallback: (() => Promise<Buffer>) | null) => {
     try {
       const bytes = await htmlToPdf(html());
       if (bytes) return { bytes, renderer: 'chromium' };
     } catch (error) {
-      console.error('Chromium PDF render failed; using pdfkit fallback', error);
+      console.error('Chromium PDF render failed', error);
     }
+    if (!fallback)
+      throw fault(
+        503,
+        'PDF_RENDERER_UNAVAILABLE',
+        'خدمة توليد PDF للمستندات الإنجليزية غير متاحة حاليًا.',
+      );
     return { bytes: await fallback(), renderer: 'pdfkit' };
   };
   // Same rule as the preview: a document frozen before the company details were complete borrows
@@ -2019,7 +2028,7 @@ export function registerFinance(
     const seller = await documentSeller(actor.id, quote.seller);
     const pdf = await renderPdf(
       () => quoteHtml(quote, seller),
-      () => quotePdf({ ...quote, seller }),
+      documentLanguage(quote) === 'en' ? null : () => quotePdf({ ...quote, seller }),
     );
     await audited(db, actor, 'finance_quote', quote.id, 'quote_pdf_exported', quote.version);
     sendPdf(res, quote.number.replace(/[^A-Za-z0-9_-]/g, '_'), pdf);
@@ -2031,7 +2040,7 @@ export function registerFinance(
     const seller = await documentSeller(actor.id, invoice.seller);
     const pdf = await renderPdf(
       () => invoiceHtml(invoice, seller),
-      () => invoicePdf({ ...invoice, seller }),
+      documentLanguage(invoice) === 'en' ? null : () => invoicePdf({ ...invoice, seller }),
     );
     await audited(
       db,
