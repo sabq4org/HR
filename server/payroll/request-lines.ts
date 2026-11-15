@@ -10,12 +10,13 @@
 // - Unpaid leave: an approved «إجازة خاصة» of type «بدون أجر» deducts «خصم إجازة بدون أجر»
 //   for its calendar days inside the run's month, at the daily wage of the approved leave
 //   entitlement rule (its wage components ÷ its divisor, the owner's decision for leave pay).
-//   No rule, no deduction: the preparer is told instead.
+//   Each day uses the rule version in force that day; days no rule covers are not deducted and
+//   the preparer is told. The deduction never takes the net below zero (a 31-day month).
 // - The lines are derived like insurance and leave advances: every create, copy, edit, people
 //   change and submit of a primary draft removes them and writes them again, so hand edits
 //   cannot change them. Correction runs are left alone.
 import { randomUUID } from 'node:crypto';
-import { daysBetweenInclusive } from '../../shared/leave-entitlement.js';
+import { addDays } from '../../shared/leave-entitlement.js';
 import type { AsyncDb } from '../database.js';
 import { getProfileValues, readProtectedFormValues } from '../administration/service.js';
 import {
@@ -45,6 +46,8 @@ export const REQUEST_LINE_PROBLEM_LABEL: Record<string, string> = {
   unpaid_leave_no_rule:
     'إجازة بدون أجر معتمدة ولا توجد قاعدة استحقاق معتمدة تحدد أجر اليوم؛ لم تُخصم',
   unpaid_leave_wage_incomplete: 'إجازة بدون أجر معتمدة ومكونات الأجر في الملف غير مكتملة؛ لم تُخصم',
+  unpaid_leave_capped:
+    'خصم إجازة بدون أجر أكبر من صافي الشهر؛ قُصر على الصافي فلا يُصرف للموظف شيء هذا الشهر',
 };
 
 const ltr = (value: string) => `⁦${value}⁩`;
@@ -152,26 +155,61 @@ export async function applyRequestDeductions(tx: AsyncDb, runId: string) {
     const to = end < bounds.end ? end : bounds.end;
     if (from > to) continue;
     rules ??= await approvedEntitlementRules(tx);
-    const rule = ruleCovering(rulesForEmploymentType(rules, employmentType), from);
-    if (!rule) {
-      note('unpaid_leave_no_rule');
-      continue;
+    // Each day is priced by the rule version in force on that day, so a month that crosses a
+    // rule's end or a new version's start uses each version for its own days.
+    const eligible = rulesForEmploymentType(rules, employmentType);
+    const profile = await getProfileValues(tx, String(leave.employee_id));
+    const segments: { rule: (typeof eligible)[number]; dailyMinor: number; days: number }[] = [];
+    let uncovered = 0;
+    let incomplete = false;
+    for (let day = from; day <= to; day = addDays(day, 1)) {
+      const rule = ruleCovering(eligible, day);
+      if (!rule) {
+        uncovered += 1;
+        continue;
+      }
+      const last = segments.at(-1);
+      if (last && last.rule.id === rule.id) {
+        last.days += 1;
+        continue;
+      }
+      const wage = ruleWage(profile, rule);
+      if (!wage) {
+        incomplete = true;
+        break;
+      }
+      segments.push({
+        rule,
+        dailyMinor: Math.round(wage.monthlyWageMinor / rule.values.dailyRateDivisor),
+        days: 1,
+      });
     }
-    const wage = ruleWage(await getProfileValues(tx, String(leave.employee_id)), rule);
-    if (!wage) {
+    if (incomplete) {
       note('unpaid_leave_wage_incomplete');
       continue;
     }
-    const days = daysBetweenInclusive(from, to);
-    const dailyMinor = Math.round(wage.monthlyWageMinor / rule.values.dailyRateDivisor);
-    if (!dailyMinor || days <= 0) continue;
+    if (uncovered) note('unpaid_leave_no_rule');
+    const computedMinor = segments.reduce((sum, seg) => sum + seg.days * seg.dailyMinor, 0);
+    if (computedMinor <= 0) continue;
+    // An unpaid month never takes the net below zero: a 31-day month at wage ÷ 30 would, and
+    // insurance is already deducted. The excess is not carried over: the month paid nothing.
+    const { net } = await personNet(tx, runId, String(leave.employee_id));
+    const dueMinor = Math.min(computedMinor, Math.max(0, net));
+    if (dueMinor < computedMinor) note('unpaid_leave_capped');
+    if (dueMinor <= 0) continue;
+    const detail = segments
+      .map(
+        (seg) =>
+          `${seg.days} يومًا × ${money(seg.dailyMinor)} ر.س (الأجر ÷ ${seg.rule.values.dailyRateDivisor}، قاعدة الاستحقاق الإصدار ${seg.rule.version})`,
+      )
+      .join(' + ');
     await insertLine(
       tx,
       runId,
       String(leave.employee_id),
       UNPAID_LEAVE_COMPONENT,
-      days * dailyMinor,
-      `طلب ${leave.request_number}: ${days} يومًا من ${ltr(from)} إلى ${ltr(to)} × ${money(dailyMinor)} ر.س (الأجر ÷ ${rule.values.dailyRateDivisor}، قاعدة الاستحقاق الإصدار ${rule.version})`,
+      dueMinor,
+      `طلب ${leave.request_number}: من ${ltr(from)} إلى ${ltr(to)}: ${detail}${uncovered ? `؛ ${uncovered} يومًا بلا قاعدة لم تُخصم` : ''}${dueMinor < computedMinor ? `؛ قُصر على صافي الشهر ${money(dueMinor)} ر.س` : ''}`,
       String(leave.id),
     );
   }

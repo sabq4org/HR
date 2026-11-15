@@ -158,6 +158,13 @@ export function payrollEmploymentTypeOf(
   if (relation === 'collaborator') return 'contractor';
   return '';
 }
+/** Notices of derived request deductions, in the shape the payroll screen already shows. */
+const noticeList = (notices: Map<string, number>) =>
+  [...notices].map(([code, count]) => ({
+    code,
+    label: REQUEST_LINE_PROBLEM_LABEL[code] ?? code,
+    count,
+  }));
 const EXCLUSION_LABEL: Record<string, string> = {
   copy_left: 'في المسير السابق وليسوا على رأس العمل الآن (لم يُنسخوا)',
   copy_added: 'على رأس العمل ولم يكونوا في المسير السابق (أضيفوا من ملفاتهم)',
@@ -898,6 +905,7 @@ export function createPayrollCommands(db: AsyncDb) {
         body.action === 'reject' ? 'سبب الرفض مطلوب.' : 'اكتب سببًا واضحًا لهذا الإجراء.',
       );
     return replay(req, actor, `action:${req.params.id}`, body, async (tx) => {
+      let notices = new Map<string, number>();
       const run = (await tx.read<Row>('SELECT * FROM payroll_runs WHERE id=?', [req.params.id]))[0];
       if (!run) throw fail(404, 'not_found', 'المسير غير موجود.');
       if (Number(body.version) !== Number(run.version))
@@ -1017,7 +1025,7 @@ export function createPayrollCommands(db: AsyncDb) {
         if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
         // A leave approved after the draft was prepared still gets its advance.
         await applyLeaveAdvances(tx, run.id);
-        await applyRequestDeductions(tx, run.id);
+        notices = await applyRequestDeductions(tx, run.id);
         await validateRunNet(tx, run, false);
       }
       if (next === 'closed') {
@@ -1059,7 +1067,7 @@ export function createPayrollCommands(db: AsyncDb) {
           { ...serviceAudit, period: run.period, from: run.state, to: next },
           Number(run.version) + 1,
         );
-      return { run: await getRun(run.id, actor, tx) };
+      return { run: await getRun(run.id, actor, tx), exclusions: noticeList(notices) };
     });
   }
   return {
@@ -1354,6 +1362,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
     if (actor.role !== 'hr') throw fail(403, 'forbidden', 'تعديل المسير متاح للموارد البشرية فقط.');
     const body = req.body ?? {};
     return replay(req, actor, `edit:${req.params.id}`, body, async (tx) => {
+      let notices = new Map<string, number>();
       const run = (await tx.read<Row>('SELECT * FROM payroll_runs WHERE id=?', [req.params.id]))[0];
       if (!run) throw fail(404, 'not_found', 'المسير غير موجود.');
       if (run.state !== 'draft' || run.prepared_by !== actor.id)
@@ -1482,7 +1491,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         await reconcilePeople(tx, run.id, gosi);
         if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
         await applyLeaveAdvances(tx, run.id);
-        await applyRequestDeductions(tx, run.id);
+        notices = await applyRequestDeductions(tx, run.id);
       }
       await validateRunNet(tx, run, false);
       await tx.execute(
@@ -1502,7 +1511,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
           Number(run.version) + 1,
         ],
       );
-      return { run: await getRun(run.id, actor, tx) };
+      return { run: await getRun(run.id, actor, tx), exclusions: noticeList(notices) };
     });
   });
   /** On-duty employees for the add/remove picker of a primary draft. */
@@ -1626,7 +1635,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         );
       if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
       await applyLeaveAdvances(tx, run.id);
-      await applyRequestDeductions(tx, run.id);
+      const notices = await applyRequestDeductions(tx, run.id);
       await validateRunNet(tx, run, false);
       await tx.execute(
         'UPDATE payroll_runs SET version=version+1,updated_at=? WHERE id=? AND version=?',
@@ -1651,7 +1660,13 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
           Number(run.version) + 1,
         ],
       );
-      return { run: await getRun(run.id, actor, tx), added, removed, skipped };
+      return {
+        run: await getRun(run.id, actor, tx),
+        added,
+        removed,
+        skipped,
+        exclusions: noticeList(notices),
+      };
     });
   });
   route('post', '/payroll/:id/actions', (req, actor) => runAction(req, actor));

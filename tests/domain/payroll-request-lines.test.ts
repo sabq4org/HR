@@ -270,6 +270,61 @@ async function requestLinesJourney(open: () => Promise<AsyncDb>) {
     assert.equal(saraApr.netMinor, 0);
     assert.ok(apr.body.exclusions.some((e: any) => e.code === 'advance_capped'));
     assert.ok(apr.body.exclusions.some((e: any) => e.code === 'advance_over_tenth'));
+    await close(apr.body.run);
+
+    // May: a whole 31-day month unpaid at wage ÷ 30 would exceed the pay; the deduction stops at
+    // the net instead of blocking the run, and the preparer is told.
+    await addRequest(db, 'special_leave', 'SL-T3', 'emp-maha', {
+      leaveType: 'unpaid',
+      startDate: '2027-05-01',
+      endDate: '2027-05-31',
+    });
+    const may = await api('hr', '', 'POST', { period: '2027-05', reason: 'مسير مايو' });
+    assert.equal(may.status, 200, JSON.stringify(may.body));
+    const mahaMay = buildPayrollRegister(may.body.run)
+      .groups.flatMap((g) => g.rows)
+      .find((x) => x.employeeId === 'emp-maha')!;
+    assert.equal(mahaMay.netMinor, 0);
+    assert.ok(may.body.exclusions.some((e: any) => e.code === 'unpaid_leave_capped'));
+    await close(may.body.run);
+
+    // June: a new rule version from 15 June (divisor 31) prices its own days.
+    await db.execute(
+      `INSERT INTO administrative_policies(id,policy_key,version,name,effective_from,source,state,values_json,created_by,approved_by,created_at)
+       SELECT 'leave-rule-advance-test-v2',policy_key,2,name,'2027-06-15',source,state,
+         REPLACE(values_json,'"dailyRateDivisor":30','"dailyRateDivisor":31'),created_by,approved_by,created_at
+       FROM administrative_policies WHERE id='leave-rule-advance-test'`,
+    );
+    await addRequest(db, 'special_leave', 'SL-T4', 'emp-maha', {
+      leaveType: 'unpaid',
+      startDate: '2027-06-10',
+      endDate: '2027-06-20',
+    });
+    const jun = await api('hr', '', 'POST', { period: '2027-06', reason: 'مسير يونيو' });
+    assert.equal(jun.status, 200, JSON.stringify(jun.body));
+    // 8,000: five days at 266.67 and six at 258.06.
+    assert.deepEqual(derived(jun.body.run, 'emp-maha'), [
+      ['خصم إجازة بدون أجر', 'deduction', 5 * 26_667 + 6 * 25_806],
+    ]);
+
+    // An advance approved after the draft was prepared is applied on submit, and the submit
+    // response carries the notice.
+    await addRequest(db, 'advance', 'ADV-T3', 'emp-maha', {
+      amount: 3000,
+      installments: 1,
+      firstDeductionMonth: '2027-06',
+    });
+    const submitted = await api('hr', `/${jun.body.run.id}/actions`, 'POST', {
+      action: 'submit',
+      version: jun.body.run.version,
+    });
+    assert.equal(submitted.status, 200, JSON.stringify(submitted.body));
+    assert.ok(
+      submitted.body.run.lines.some(
+        (l: any) => l.employeeId === 'emp-maha' && l.component === 'حسم سلفة ADV-T3',
+      ),
+    );
+    assert.ok(submitted.body.exclusions.some((e: any) => e.code === 'advance_over_tenth'));
   } finally {
     await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
     await db.close();
