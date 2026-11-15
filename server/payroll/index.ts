@@ -1015,6 +1015,13 @@ export function createPayrollCommands(db: AsyncDb) {
       if (next === 'closed') {
         await validateRunNet(tx, run, true);
       }
+      // A cancelled run never pays: its approved reward and overtime sources become free for
+      // another run. The line keeps the request id in its source text for the audit trail.
+      if (recorded === 'cancelled')
+        await tx.execute(
+          "UPDATE payroll_lines SET source=source || ' · المصدر ' || source_request_id || ' أُعيد بعد إلغاء المسير',source_request_id=NULL WHERE run_id=? AND source_request_id IS NOT NULL",
+          [run.id],
+        );
       const closed = next === 'closed' ? now() : null;
       await tx.execute(
         'UPDATE payroll_runs SET state=?,reviewed_by=?,approved_by=?,version=version+1,updated_at=?,closed_at=? WHERE id=? AND version=?',
@@ -1494,9 +1501,11 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         ])
       ).map((r) => String(r.employee_id)),
     );
-    const people = await db.read<Row>(
-      "SELECT id,name,title FROM employee_access WHERE status='active' ORDER BY name",
-    );
+    // On-duty employees, plus anyone already in the run whatever their status now, so someone
+    // suspended or terminated after the draft was made can still be removed from it.
+    const people = (
+      await db.read<Row>('SELECT id,name,title,status FROM employee_access ORDER BY name')
+    ).filter((p) => p.status === 'active' || inRun.has(String(p.id)));
     return {
       candidates: people.map((p): PayrollCandidate => ({
         employeeId: String(p.id),

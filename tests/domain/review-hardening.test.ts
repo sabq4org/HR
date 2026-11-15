@@ -618,6 +618,11 @@ test('the preparer adds and removes employees in a draft from a checklist', asyn
     const inRun = list.body.candidates.filter((c: any) => c.inRun);
     assert.ok(inRun.length >= 2);
     const target = inRun[0].employeeId;
+    // Someone suspended after the draft was made still shows, so they can be removed.
+    const leaver = inRun[1].employeeId;
+    await f.db.execute("UPDATE employees SET employment_status='suspended' WHERE id=?", [leaver]);
+    const after = await f.api('hr', `/${run.id}/candidates`);
+    assert.ok(after.body.candidates.some((c: any) => c.employeeId === leaver && c.inRun));
     const removed = await f.api('hr', `/${run.id}/people`, 'POST', {
       version: run.version,
       remove: [target],
