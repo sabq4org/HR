@@ -1,5 +1,5 @@
 /* Dark appearance: hand-tuned rules on top of the colour twins the build generates from every
-   stylesheet (scripts/dark-theme-css.ts, decision 018). Screen only: print stays light. */
+   stylesheet (scripts/dark-theme-css.ts, decision 019). Screen only: print stays light. */
 @media screen {
   :root[data-theme='dark'] {
     color-scheme: dark;

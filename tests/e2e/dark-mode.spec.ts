@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
-// Dark appearance (decision 018): visible switch, saved per browser, AA contrast, light print and
+// Dark appearance (decision 019): visible switch, saved per browser, AA contrast, light print and
 // light paper previews.
 
 async function login(page: Page, name = 'نورة العتيبي') {

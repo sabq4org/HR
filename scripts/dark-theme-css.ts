@@ -1,4 +1,4 @@
-// Build-time dark theme for the app stylesheets (decision 018).
+// Build-time dark theme for the app stylesheets (decision 019).
 //
 // The stylesheets hold several hundred literal colours across the app, and other work edits those
 // files every day. Instead of hand-copying each rule into a dark twin, this PostCSS plugin reads every

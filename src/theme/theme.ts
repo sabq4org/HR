@@ -1,4 +1,4 @@
-// Light / dark / follow-the-device preference (decision 018). Saved in this browser only, never
+// Light / dark / follow-the-device preference (decision 019). Saved in this browser only, never
 // sent to the server. index.html applies the saved choice before the first paint; this module keeps
 // <html data-theme> in step afterwards and when the device switches while "system" is chosen.
 import { useEffect, useState } from 'react';

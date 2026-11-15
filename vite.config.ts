@@ -10,7 +10,7 @@ const stylesheets = (readdirSync('src', { recursive: true }) as string[])
 
 export default defineConfig({
   plugins: [react()],
-  // Emits the dark-mode twin of every colour rule at build time (decision 018).
+  // Emits the dark-mode twin of every colour rule at build time (decision 019).
   css: { postcss: { plugins: [darkThemePlugin(stylesheets)] } },
   build: { outDir: 'dist/client', emptyOutDir: true },
   server: { host: '127.0.0.1', allowedHosts: ['localhost', '127.0.0.1'] },
