@@ -263,3 +263,56 @@ test('experience letter blocks a partial history when verified and pending perio
     await db.close();
   }
 });
+
+test('letters issued from private records carry no synthetic wording', async () => {
+  const db = await createDatabase(':memory:', { seed: false });
+  try {
+    await importMappedWorkbook(db, workbook, { today: '2026-11-14', includeIncomplete: true });
+    const employee = (
+      await db.read<{ id: string }>("SELECT id FROM employees WHERE email='known@example.test'")
+    )[0];
+    const actor: Actor = { id: 'system-local-admin', role: 'hr' };
+    for (const kind of ['salary_letter', 'employment_letter'] as const) {
+      for (const language of ['ar', 'en']) {
+        const request = {
+          id: `request-${kind}-${language}`,
+          number: `REQ-${language}`,
+          kind,
+          employeeId: employee.id,
+          values: { recipient: 'جهة', language, purpose: 'اختبار' } as FormValues,
+        };
+        const real = await createIssuedDocument(db, request, actor, { privateMode: true });
+        assert.equal(real.synthetic, false);
+        assert.doesNotMatch(
+          JSON.stringify({ ...real, synthetic: undefined }),
+          /اصطناعي|تجريبي|synthetic|fictional|preview/i,
+          `${kind}/${language}`,
+        );
+        const demo = await createIssuedDocument(db, request, actor);
+        assert.equal(demo.synthetic, true);
+      }
+    }
+    // A real certificate says the person works here, so none is issued after the service ended.
+    await db.execute("UPDATE employees SET employment_status='terminated' WHERE id=?", [
+      employee.id,
+    ]);
+    for (const kind of ['salary_letter', 'employment_letter'] as const)
+      await assert.rejects(
+        createIssuedDocument(
+          db,
+          {
+            id: `ended-${kind}`,
+            number: 'REQ-END',
+            kind,
+            employeeId: employee.id,
+            values: { recipient: 'جهة', language: 'ar', purpose: 'اختبار' } as FormValues,
+          },
+          actor,
+          { privateMode: true },
+        ),
+        (error: { code?: string }) => error.code === 'EMPLOYEE_NOT_CURRENT',
+      );
+  } finally {
+    await db.close();
+  }
+});

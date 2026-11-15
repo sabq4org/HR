@@ -13,12 +13,24 @@ export async function createIssuedDocument(
     values: FormValues;
   },
   actor: Actor,
+  options: { privateMode?: boolean } = {},
 ): Promise<IssuedDocument> {
+  const synthetic = !options.privateMode;
   const employee = await readEmployee(db, request.employeeId);
   if (!employee)
     throw Object.assign(new Error('الملف الوظيفي غير موجود.'), {
       status: 404,
       code: 'EMPLOYEE_NOT_FOUND',
+    });
+  // A real certificate says the employee works here; never issue one after the service ended.
+  if (
+    !synthetic &&
+    (request.kind === 'salary_letter' || request.kind === 'employment_letter') &&
+    employee.status === 'terminated'
+  )
+    throw Object.assign(new Error('انتهت خدمة الموظف، فلا يصدر له خطاب على رأس العمل.'), {
+      status: 409,
+      code: 'EMPLOYEE_NOT_CURRENT',
     });
   const profile = await getProfileValues(db, request.employeeId);
   const approver = await readEmployee(db, actor.id);
@@ -70,15 +82,25 @@ export async function createIssuedDocument(
         recorded ? currency(total / 100) : undefined,
       ),
     );
-    paragraphs = en
-      ? [
-          'This internal preview records the employment and salary information available in the synthetic employee file at the time of approval.',
-          'Issued upon the employee’s request for the recipient below. All identities and amounts are fictional; this is not an official or signed salary certificate.',
-        ]
-      : [
-          'نورد أدناه بيانات العمل وعناصر الأجر المسجلة في الملف الوظيفي الاصطناعي وقت اعتماد الطلب.',
-          'أُعد هذا التعريف بناءً على طلب الموظف للجهة المحددة. الأسماء والمبالغ تجريبية، ولا تمثل هذه المعاينة خطابًا رسميًا أو موقعًا.',
-        ];
+    paragraphs = synthetic
+      ? en
+        ? [
+            'This internal preview records the employment and salary information available in the synthetic employee file at the time of approval.',
+            'Issued upon the employee’s request for the recipient below. All identities and amounts are fictional; this is not an official or signed salary certificate.',
+          ]
+        : [
+            'نورد أدناه بيانات العمل وعناصر الأجر المسجلة في الملف الوظيفي الاصطناعي وقت اعتماد الطلب.',
+            'أُعد هذا التعريف بناءً على طلب الموظف للجهة المحددة. الأسماء والمبالغ تجريبية، ولا تمثل هذه المعاينة خطابًا رسميًا أو موقعًا.',
+          ]
+      : en
+        ? [
+            'We certify that the employee named below works for Sabq, and that the employment and salary details below are as recorded in the employee file on the date of approval.',
+            'This certificate is issued at the employee’s request for the recipient below, without any liability on the company beyond what it states.',
+          ]
+        : [
+            'تفيد صحيفة سبق بأن الموظف الموضحة بياناته أدناه يعمل لديها، وأن بيانات العمل وعناصر الأجر الواردة مسجلة في ملفه الوظيفي وقت اعتماد الطلب.',
+            'أُعطي هذا التعريف بناءً على طلبه لتقديمه إلى الجهة المذكورة، دون أدنى مسؤولية على الصحيفة تجاه ما يتجاوز ما ورد فيه.',
+          ];
   } else if (request.kind === 'employment_letter') {
     facts.push(
       fact(
@@ -94,10 +116,15 @@ export async function createIssuedDocument(
         )[employee.status],
       ),
     );
-    paragraphs = [
-      'يفيد هذا التعريف الداخلي بأن بيانات الموظف وعلاقته الوظيفية مسجلة كما هو موضح أدناه وقت اعتماد الطلب.',
-      'أُعد للغرض الذي حدده صاحب الطلب، اعتمادًا على بيانات المعاينة الاصطناعية.',
-    ];
+    paragraphs = synthetic
+      ? [
+          'يفيد هذا التعريف الداخلي بأن بيانات الموظف وعلاقته الوظيفية مسجلة كما هو موضح أدناه وقت اعتماد الطلب.',
+          'أُعد للغرض الذي حدده صاحب الطلب، اعتمادًا على بيانات المعاينة الاصطناعية.',
+        ]
+      : [
+          'تفيد صحيفة سبق بأن الموظف الموضحة بياناته أدناه يعمل لديها، وأن علاقته الوظيفية مسجلة كما هو موضح وقت اعتماد الطلب.',
+          'أُعطي هذا التعريف بناءً على طلبه للغرض الذي حدده، دون أدنى مسؤولية على الصحيفة.',
+        ];
   } else if (request.kind === 'experience_letter') {
     const allPeriods = await db.read<{
       start_date: string;
@@ -125,12 +152,14 @@ export async function createIssuedDocument(
       ),
     );
     paragraphs = [
-      'توضح هذه الشهادة الداخلية فترات العمل المسجلة والمهام التي روجعت ضمن هذا الطلب.',
+      synthetic
+        ? 'توضح هذه الشهادة الداخلية فترات العمل المسجلة والمهام التي روجعت ضمن هذا الطلب.'
+        : 'تشهد صحيفة سبق بأن الموظف الموضحة بياناته أدناه عمل لديها خلال الفترات المسجلة أدناه، وأدى المهام الموضحة.',
       String(request.values.duties || ''),
     ];
   } else {
     paragraphs = [
-      `نسخة داخلية من ${formByKind[request.kind].title}، تحفظ البيانات التي راجعها المعتمد وقت اتخاذ القرار. لا تمثل هذه النسخة توقيعًا قانونيًا أو إثبات صرف.`,
+      `نسخة داخلية من ${formByKind[request.kind].title}، تحفظ البيانات التي راجعها المعتمد وقت اتخاذ القرار.${synthetic ? ' لا تمثل هذه النسخة توقيعًا قانونيًا أو إثبات صرف.' : ' الاعتماد الإلكتروني سجل داخلي في النظام وليس إثبات صرف.'}`,
     ];
   }
   for (const field of formByKind[request.kind].fields) {
@@ -159,7 +188,11 @@ export async function createIssuedDocument(
     );
   }
   return {
-    title: en ? 'Salary certificate — synthetic preview' : formByKind[request.kind].title,
+    title: en
+      ? synthetic
+        ? 'Salary certificate — synthetic preview'
+        : 'Salary certificate'
+      : formByKind[request.kind].title,
     language: en ? 'en' : 'ar',
     reference: request.number,
     issuedAt: new Date().toISOString(),
@@ -168,7 +201,8 @@ export async function createIssuedDocument(
     ),
     paragraphs,
     facts,
-    approvedByName: approver?.name ?? 'معتمد تجريبي',
+    approvedByName: approver?.name ?? (synthetic ? 'معتمد تجريبي' : 'المعتمد'),
     version: 1,
+    synthetic,
   };
 }

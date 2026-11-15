@@ -244,7 +244,7 @@ export function PayrollPage({ actor }: Props) {
       const result = await request<{ run: PayrollRun }>(`/${run.id}/actions`, 'POST', {
         version: run.version,
         action: verb,
-        reason: actionReason.trim() || 'إجراء تجريبي موثق',
+        reason: actionReason.trim() || 'إجراء موثق من شاشة المسير',
       });
       setSelected(result.run);
       await load();
@@ -266,7 +266,7 @@ export function PayrollPage({ actor }: Props) {
           amountMinor:
             parseRiyal(draftAmounts[line.id] ?? (line.amountMinor / 100).toFixed(2)) ?? Number.NaN,
         })),
-        reason: 'تعديل أسطر مسير تجريبي',
+        reason: 'تعديل أسطر المسير',
       });
       setSelected(result.run);
       setEditing(false);
@@ -784,7 +784,7 @@ export function PayrollPage({ actor }: Props) {
                                   );
                                 }}
                               >
-                                <option value="">سطر يدوي تجريبي</option>
+                                <option value="">سطر يدوي</option>
                                 {sourceOptions
                                   .filter(
                                     (option) =>

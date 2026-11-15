@@ -565,3 +565,126 @@ test('An employee cannot become their own reporting manager', async () => {
     await h.close();
   }
 });
+
+test('HR records an employee request on their behalf; an independent approver or the system owner decides', async () => {
+  const h = await harness();
+  try {
+    const letter = {
+      kind: 'salary_letter',
+      employeeId: 'emp-sara',
+      submit: true,
+      values: { recipient: 'جهة تجريبية', language: 'ar', purpose: 'اختبار الإدخال نيابة' },
+    };
+    // Source is required; only HR may enter on behalf; never for oneself.
+    const missing = await h.call('hr', '/admin/requests', 'POST', {
+      ...letter,
+      onBehalf: { channel: 'paper', source: '' },
+    });
+    assert.equal(missing.status, 400);
+    assert.equal(
+      (
+        await h.call('employee', '/admin/requests', 'POST', {
+          ...letter,
+          onBehalf: { channel: 'paper', source: 'نموذج' },
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await h.call('hr', '/admin/requests', 'POST', {
+          ...letter,
+          employeeId: 'emp-noura',
+          onBehalf: { channel: 'paper', source: 'نموذج' },
+        })
+      ).status,
+      403,
+    );
+    const created = await h.call('hr', '/admin/requests', 'POST', {
+      ...letter,
+      onBehalf: { channel: 'email', source: 'بريد الموظفة بتاريخ اليوم' },
+    });
+    assert.equal(created.status, 201, await created.clone().text());
+    let req = (await created.json()).request as AdministrativeRequest;
+    assert.deepEqual(req.steps, ['approver']);
+    assert.equal(req.state, 'pending_approver');
+    assert.equal(req.canAct, false);
+    // HR cannot decide what it entered.
+    assert.equal(
+      (
+        await h.call('hr', `/admin/requests/${req.id}/actions`, 'POST', {
+          version: req.version,
+          action: 'approve',
+        })
+      ).status,
+      403,
+    );
+    const approved = await h.call('approver', `/admin/requests/${req.id}/actions`, 'POST', {
+      version: req.version,
+      action: 'approve',
+    });
+    assert.equal(approved.status, 200, await approved.clone().text());
+    req = (await approved.json()).request;
+    assert.equal(req.state, 'approved');
+    assert.ok(req.issuedDocument);
+    const asHr = (await (await h.call('hr', `/admin/requests/${req.id}`)).json())
+      .request as AdministrativeRequest;
+    assert.ok(asHr.timeline.some((e) => (e.reason ?? '').includes('نيابة عن الموظف')));
+
+    // Special leave entered on behalf skips the manager (no account) and HR.
+    const leave = await h.call('hr', '/admin/requests', 'POST', {
+      kind: 'special_leave',
+      employeeId: 'emp-sara',
+      submit: true,
+      values: { leaveType: 'marriage', startDate: today, endDate: today },
+      onBehalf: { channel: 'paper', source: 'نموذج إجازة موقع من المدير' },
+    });
+    assert.equal(leave.status, 201, await leave.clone().text());
+    const leaveReq = (await leave.json()).request as AdministrativeRequest;
+    assert.deepEqual(leaveReq.steps, ['approver']);
+
+    // With no approver account, the system owner (an HR account) decides at the approver step,
+    // but never a request they entered, nor after deciding an earlier step of it.
+    await h.db.execute("UPDATE employees SET access_role='employee' WHERE id='emp-abdullah'");
+    await h.db.execute(
+      "INSERT INTO system_owners(employee_id,granted_at,granted_reason) VALUES('emp-noura','2026-11-15T00:00:00Z','اختبار')",
+    );
+    const own = await h.call('hr', '/admin/requests', 'POST', {
+      ...letter,
+      onBehalf: { channel: 'paper', source: 'نموذج' },
+    });
+    // The only owner entered it, so no independent approver exists: it is not sent.
+    assert.equal(own.status, 409);
+    const transfer = await h.call('manager', '/admin/requests', 'POST', {
+      kind: 'transfer',
+      employeeId: 'emp-sara',
+      submit: true,
+      values: {
+        department: 'التحرير',
+        title: 'محررة',
+        managerId: 'emp-omar',
+        effectiveDate: today,
+        reason,
+      },
+    });
+    assert.equal(transfer.status, 201, await transfer.clone().text());
+    let t = (await transfer.json()).request as AdministrativeRequest;
+    assert.deepEqual(t.steps, ['hr', 'approver']);
+    t = (
+      await (
+        await h.call('hr', `/admin/requests/${t.id}/actions`, 'POST', {
+          version: t.version,
+          action: 'approve',
+        })
+      ).json()
+    ).request;
+    assert.equal(t.state, 'pending_approver');
+    const second = await h.call('hr', `/admin/requests/${t.id}/actions`, 'POST', {
+      version: t.version,
+      action: 'approve',
+    });
+    assert.equal(second.status, 403);
+  } finally {
+    await h.close();
+  }
+});

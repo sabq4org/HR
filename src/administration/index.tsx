@@ -50,6 +50,8 @@ import {
   documentCategories,
   formDefinitions,
   formByKind,
+  ON_BEHALF_CHANNELS,
+  onBehalfSteps,
 } from '../../shared/catalog';
 import { policyActionBody } from '../../shared/policy-actions';
 import './administration.css';
@@ -1015,14 +1017,24 @@ export function ServicesPage() {
   const [busy, setBusy] = useState(false);
   const submitIntent = useRef(true);
   const [error, setError] = useState('');
+  const [behalf, setBehalf] = useState({ channel: 'paper', source: '' });
+  const isHr = data.me.role === 'hr';
+  // HR records employee requests on the employee's behalf (owner's decision, 2026-11-15).
+  const behalfOnly = (f: (typeof formDefinitions)[number]) =>
+    isHr && !f.initiators.includes('hr') && f.initiators.includes('employee');
   const visible = (formDefinitions as typeof formDefinitions).filter(
-    (f) => f.initiators.includes(data.me.role) && `${f.title} ${f.description}`.includes(query),
+    (f) =>
+      (f.initiators.includes(data.me.role) || behalfOnly(f)) &&
+      `${f.title} ${f.description}`.includes(query),
   );
+  const subjectFor = (k: RequestKind) => (behalfOnly(formByKind[k]) ? '' : data.me.id);
+  const onBehalf =
+    !!kind && isHr && formByKind[kind].initiators.includes('employee') && subjectId !== data.me.id;
   useEffect(() => {
     const requestedKind = searchParams.get('kind') as RequestKind | null;
     if (requestedKind && visible.some((form) => form.kind === requestedKind)) {
       setKind(requestedKind);
-      setSubjectId(data.me.id);
+      setSubjectId(subjectFor(requestedKind));
       setValues({});
       setError('');
     }
@@ -1035,7 +1047,13 @@ export function ServicesPage() {
     try {
       const r = await api<{ request: AdministrativeRequest }>(
         '/admin/requests',
-        json('POST', { kind, employeeId: subjectId, values, submit: submitIntent.current }),
+        json('POST', {
+          kind,
+          employeeId: subjectId,
+          values,
+          submit: submitIntent.current,
+          ...(onBehalf ? { onBehalf: behalf } : {}),
+        }),
       );
       notify(
         submitIntent.current
@@ -1044,6 +1062,7 @@ export function ServicesPage() {
       );
       setKind(null);
       setValues({});
+      setBehalf({ channel: 'paper', source: '' });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1070,7 +1089,7 @@ export function ServicesPage() {
             className="adm-service"
             onClick={() => {
               setKind(f.kind);
-              setSubjectId(data.me.id);
+              setSubjectId(subjectFor(f.kind));
               setValues({});
               setError('');
             }}
@@ -1080,7 +1099,7 @@ export function ServicesPage() {
             </span>
             <b>{f.title}</b>
             <small>{f.description}</small>
-            <em>تقديم طلب</em>
+            <em>{behalfOnly(f) ? 'إدخال نيابة عن موظف' : 'تقديم طلب'}</em>
           </button>
         ))}
       </div>
@@ -1091,7 +1110,10 @@ export function ServicesPage() {
             <p className="adm-note">{formByKind[kind].description}</p>
             <p className="adm-note">
               مسار المراجعة:{' '}
-              {(formByKind[kind].stepsByInitiator?.[data.me.role] ?? formByKind[kind].steps)
+              {(onBehalf
+                ? onBehalfSteps(formByKind[kind])
+                : (formByKind[kind].stepsByInitiator?.[data.me.role] ?? formByKind[kind].steps)
+              )
                 .map((role) => roleNames[role])
                 .join(' ← ') || 'لا يحتاج موافقة إضافية'}
             </p>
@@ -1099,8 +1121,12 @@ export function ServicesPage() {
               {['hr', 'manager'].includes(data.me.role) && (
                 <label className="adm-field">
                   <span>الموظف المعني بالطلب</span>
-                  <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
-                    <option value={data.me.id}>أنا</option>
+                  <select required value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
+                    {kind && behalfOnly(formByKind[kind]) ? (
+                      <option value="">اختر الموظف</option>
+                    ) : (
+                      <option value={data.me.id}>أنا</option>
+                    )}
                     {data.employees
                       .filter(
                         (e) =>
@@ -1114,6 +1140,36 @@ export function ServicesPage() {
                       ))}
                   </select>
                 </label>
+              )}
+              {onBehalf && (
+                <>
+                  <p className="adm-note">
+                    تُدخل الطلب نيابة عن الموظف كما وصلك منه، ولا تتخذ القرار فيه؛ يقرره المسار
+                    المستقل أعلاه. يُحفظ مصدر الطلب في سجله.
+                  </p>
+                  <label className="adm-field">
+                    <span>كيف وصل الطلب</span>
+                    <select
+                      value={behalf.channel}
+                      onChange={(e) => setBehalf({ ...behalf, channel: e.target.value })}
+                    >
+                      {Object.entries(ON_BEHALF_CHANNELS).map(([k, v]) => (
+                        <option key={k} value={k}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="adm-field">
+                    <span>مرجع الطلب (التاريخ أو رقم البريد أو النموذج)</span>
+                    <input
+                      required
+                      maxLength={500}
+                      value={behalf.source}
+                      onChange={(e) => setBehalf({ ...behalf, source: e.target.value })}
+                    />
+                  </label>
+                </>
               )}
               <div className="adm-fields">
                 {formByKind[kind].fields.map((f) => (

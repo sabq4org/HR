@@ -1,4 +1,5 @@
 import type { DocumentCategory, FormDefinition, FormField, RequestKind } from './administration';
+import type { Role } from './contracts';
 
 const options = (pairs: [string, string][]) => pairs.map(([value, label]) => ({ value, label }));
 const field = (
@@ -574,7 +575,7 @@ export const formDefinitions: FormDefinition[] = [
     confidential: true,
     fields: [
       field('bankName', 'اسم البنك', 'text', { ...required, ...financial }),
-      field('iban', 'الآيبان التجريبي', 'text', { ...required, ...financial }),
+      field('iban', 'رقم الآيبان', 'text', { ...required, ...financial }),
       reason,
     ],
   },
@@ -775,3 +776,20 @@ for (const form of formDefinitions) {
 export const formByKind = Object.fromEntries(
   formDefinitions.map((form) => [form.kind, form]),
 ) as Record<RequestKind, FormDefinition>;
+
+/** How an employee's request reached HR when HR records it on the employee's behalf. */
+export const ON_BEHALF_CHANNELS: Record<string, string> = {
+  paper: 'نموذج ورقي موقع',
+  email: 'بريد إلكتروني',
+  in_person: 'حضوريًا',
+  phone: 'مكالمة موثقة',
+};
+/**
+ * Review route of a request HR records on an employee's behalf: HR entered it, so HR does not
+ * also decide it, and the direct manager has no account yet. The remaining independent steps
+ * stay; when none remain, the approver (or the system owner) decides.
+ */
+export function onBehalfSteps(form: FormDefinition): Role[] {
+  const steps = form.steps.filter((role) => role !== 'manager' && role !== 'hr');
+  return steps.length ? steps : ['approver'];
+}

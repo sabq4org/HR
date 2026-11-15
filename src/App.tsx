@@ -11,6 +11,7 @@ import {
 } from 'react-router-dom';
 import {
   ArrowLeft,
+  BadgeCheck,
   ArrowUpLeft,
   Bell,
   CalendarClock,
@@ -77,6 +78,7 @@ import { EmployeeImportPage } from './imports';
 import { AccountLogin, AccountActivationPage, AccountsPage } from './access';
 import { LeavePoliciesPage } from './leave';
 import { LeaveEntitlementPage } from './leave/Entitlement';
+import { EndOfServicePage } from './end-of-service';
 import { OperationsPage } from './operations';
 import { FinancePortal } from './finance/portal';
 
@@ -432,6 +434,7 @@ export default function App() {
       '/settings/accounts': 'الحسابات والوصول',
       '/settings/leave': 'سياسات الإجازات',
       '/leave-entitlement': 'استحقاق الإجازات والتصفية',
+      '/end-of-service': 'نهاية الخدمة',
       '/settings/operations': 'حالة التشغيل',
     };
     document.title = `${titles[location.pathname] || 'الملف الوظيفي'} | مساحة فريق سبق`;
@@ -548,7 +551,10 @@ export default function App() {
         ]
       : []),
     ...(['hr', 'finance', 'approver'].includes(data.me.role)
-      ? [{ to: '/leave-entitlement', label: 'استحقاق الإجازات والتصفية', Icon: CalendarClock }]
+      ? [
+          { to: '/leave-entitlement', label: 'استحقاق الإجازات والتصفية', Icon: CalendarClock },
+          { to: '/end-of-service', label: 'نهاية الخدمة', Icon: BadgeCheck },
+        ]
       : []),
     ...(accountMode
       ? [{ to: '/settings/accounts', label: 'الحسابات والوصول', Icon: ShieldCheck }]
@@ -747,6 +753,7 @@ export default function App() {
               />
               <Route path="/settings/leave" element={<LeavePoliciesPage />} />
               <Route path="/leave-entitlement" element={<LeaveEntitlementPage />} />
+              <Route path="/end-of-service" element={<EndOfServicePage />} />
               <Route
                 path="/settings/accounts"
                 element={accountMode ? <AccountsPage /> : <Navigate replace to="/" />}
