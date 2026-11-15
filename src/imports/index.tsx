@@ -48,15 +48,32 @@ export function EmployeeImportPage() {
       setBusy(false);
     }
   }
+  const readyRows = preview?.rows.filter((r) => !r.existing && !r.errors.length) ?? [];
+  const existingCount = preview?.rows.filter((r) => r.existing).length ?? 0;
+  const invalidCount = preview?.rows.filter((r) => !r.existing && r.errors.length).length ?? 0;
+  function downloadRejected() {
+    if (!preview?.rejectedWorkbookBase64) return;
+    const bytes = Uint8Array.from(atob(preview.rejectedWorkbookBase64), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(
+      new Blob([bytes], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      }),
+    );
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'employees-to-fix.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
   async function commit() {
-    if (!preview?.valid) return;
+    if (!preview || !readyRows.length) return;
     setBusy(true);
     setError('');
     try {
       const result = await api<{ count: number }>('/admin/imports/employees/commit', {
         method: 'POST',
         headers: { 'Idempotency-Key': command.current },
-        body: JSON.stringify({ rows: preview.rows.map((r) => r.values) }),
+        body: JSON.stringify({ rows: readyRows.map((r) => r.values) }),
       });
       setComplete(result.count);
       setPreview(null);
@@ -162,9 +179,32 @@ export function EmployeeImportPage() {
                 <span
                   className={preview.valid ? 'status status-approved' : 'status status-rejected'}
                 >
-                  {preview.valid ? 'الدفعة جاهزة للحفظ' : 'توجد أخطاء تحتاج تصحيحًا'}
+                  {preview.valid ? 'الدفعة جاهزة للحفظ' : 'بعض الصفوف تحتاج تصحيحًا'}
                 </span>
               </header>
+              <ul className="import-counts" aria-label="ملخص المعاينة">
+                <li className="ready">
+                  <b>{readyRows.length}</b> جاهز للحفظ
+                </li>
+                <li className="existing">
+                  <b>{existingCount}</b> موجود في النظام ويُتجاوز
+                </li>
+                <li className="invalid">
+                  <b>{invalidCount}</b> يحتاج تصحيحًا
+                </li>
+              </ul>
+              {invalidCount > 0 && (
+                <div className="import-rejected">
+                  <p>
+                    الصفوف التي تحتاج تصحيحًا لن تُحفظ الآن. نزّلها في ملف Excel فيه عمود «سبب الرفض»،
+                    صحّحها ثم ارفع الملف نفسه مرة أخرى. من سبق استيراده يُتجاوز تلقائيًا فلا يتكرر.
+                  </p>
+                  <button className="button secondary" type="button" onClick={downloadRejected}>
+                    <Download size={17} />
+                    تنزيل الصفوف المرفوضة مع الأسباب
+                  </button>
+                </div>
+              )}
               <div className="import-table-scroll">
                 <table>
                   <thead>
@@ -184,7 +224,9 @@ export function EmployeeImportPage() {
                         <td>{String(row.values.employeeNumber || '—')}</td>
                         <td>{String(row.values.department || '—')}</td>
                         <td>
-                          {row.errors.length ? (
+                          {row.existing ? (
+                            <span className="import-existing">موجود في النظام · يُتجاوز</span>
+                          ) : row.errors.length ? (
                             <ul>
                               {row.errors.map((error, i) => (
                                 <li key={i}>{error}</li>
@@ -204,16 +246,16 @@ export function EmployeeImportPage() {
               </div>
               <footer>
                 <p>
-                  {preview.valid
-                    ? 'ستُحفظ جميع الصفوف في عملية واحدة. إذا تعذر حفظ أي صف فلن يُحفظ أي منها.'
-                    : 'صحح الأخطاء في ملف Excel، ثم ارفع النسخة المعدلة للمراجعة.'}
+                  {readyRows.length
+                    ? 'تُحفظ الصفوف الجاهزة فقط في عملية واحدة. إذا تعذر حفظ أي منها فلن يُحفظ شيء.'
+                    : 'لا توجد صفوف جديدة جاهزة للحفظ في هذا الملف.'}
                 </p>
                 <button
                   className="button primary"
-                  disabled={!preview.valid || busy}
+                  disabled={!readyRows.length || busy}
                   onClick={() => void commit()}
                 >
-                  {busy ? 'جارٍ الحفظ…' : `حفظ ${preview.total} ملفًا`}
+                  {busy ? 'جارٍ الحفظ…' : `حفظ ${readyRows.length} ملفًا جاهزًا`}
                 </button>
               </footer>
             </section>
