@@ -1,0 +1,34 @@
+/* Dark appearance: hand-tuned rules on top of the colour twins the build generates from every
+   stylesheet (scripts/dark-theme-css.ts, decision 018). Screen only: print stays light. */
+@media screen {
+  :root[data-theme='dark'] {
+    color-scheme: dark;
+    color: #dfe7f0;
+    background: #121c29;
+  }
+  :root[data-theme='dark'] body {
+    background: #121c29;
+  }
+  /* Native dialogs default to the browser's dark canvas; use the card surface instead. */
+  :root[data-theme='dark'] .dialog {
+    background: #19212b;
+  }
+  /* Avatars sit on their pastel (per-person, inline) colour: keep their dark initials. */
+  :root[data-theme='dark'] .avatar {
+    color: #1d3c55;
+  }
+  /* Switch knobs stay white on both tracks. */
+  :root[data-theme='dark'] .duty-switch > span {
+    background: #fff;
+  }
+  :root[data-theme='dark'] ::selection {
+    background: #1f5d8c;
+    color: #fff;
+  }
+  /* Paper previews of printed documents keep their light look. */
+  :root[data-theme='dark']
+    :is(.fin-document-paper, .payroll-print-sheet, .employee-report, .issued-letter) {
+    color-scheme: light;
+    color: #142d48;
+  }
+}

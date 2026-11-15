@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import type { Bootstrap, DemoPersona, Employee } from '../shared/contracts';
 import type { AdministrativeOverview } from '../shared/administration';
+import { ThemeMenu } from './theme/ThemeMenu';
 import { api, AppContext, Avatar, Modal, roleLabel } from './lib';
 import {
   ApprovalsPage,
@@ -191,6 +192,7 @@ function Login({
         </div>
       </section>
       <section className="login-form">
+        <ThemeMenu className="login-theme" />
         <div className="login-mobile-brand">
           <Brand />
         </div>
@@ -693,6 +695,7 @@ export default function App() {
                 <Bell size={21} />
                 {unread > 0 && <span className="notification-dot" />}
               </button>
+              <ThemeMenu />
               <span className="header-divider" />
               <Link to="/profile" className="header-profile" aria-label="عرض ملفي الوظيفي">
                 <Avatar person={data.me} size="sm" />
