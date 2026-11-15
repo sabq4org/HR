@@ -475,3 +475,176 @@ test('a run with no complete salary profile names the reasons and their counts',
     await f.close();
   }
 });
+
+test('a draft made by mistake is cancelled, frees its period, and stays in the trail', async () => {
+  const f = await payrollHarness();
+  try {
+    const run = await newRun(f, '2027-01');
+    assert.equal(run.canCancel, true);
+    const noReason = await f.api('hr', `/${run.id}/actions`, 'POST', {
+      version: run.version,
+      action: 'cancel',
+    });
+    assert.equal(noReason.status, 400);
+    const other = await f.api('hrPeer', `/${run.id}/actions`, 'POST', {
+      version: run.version,
+      action: 'cancel',
+      reason: 'ليس معدّه',
+    });
+    assert.equal(other.status, 403);
+    const cancelled = await f.api('hr', `/${run.id}/actions`, 'POST', {
+      version: run.version,
+      action: 'cancel',
+      reason: 'أُنشئ بالخطأ',
+    });
+    assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+    assert.equal(cancelled.body.run.state, 'rejected');
+    assert.equal(cancelled.body.run.cancelled, true);
+    assert.equal(cancelled.body.run.canCancel, false);
+    assert.equal(cancelled.body.run.canReopen, false);
+    assert.equal(cancelled.body.run.timeline.at(-1).action, 'cancelled');
+    const reopen = await f.api('hr', `/${run.id}/actions`, 'POST', {
+      version: cancelled.body.run.version,
+      action: 'reopen',
+    });
+    assert.equal(reopen.status, 403);
+    // The period is free again.
+    await newRun(f, '2027-01');
+  } finally {
+    await f.close();
+  }
+});
+
+test('the preparer withdraws a run from review back to draft; the finance signature drops', async () => {
+  const f = await payrollHarness();
+  try {
+    const run = await newRun(f, '2027-02');
+    const submitted = await f.api('hr', `/${run.id}/actions`, 'POST', {
+      version: run.version,
+      action: 'submit',
+    });
+    const reviewed = await f.api('finance', `/${run.id}/actions`, 'POST', {
+      version: submitted.body.run.version,
+      action: 'review',
+    });
+    assert.equal(reviewed.body.run.state, 'pending_approver');
+    assert.deepEqual(reviewed.body.run.waitingOn.length > 0, true);
+    const byFinance = await f.api('finance', `/${run.id}/actions`, 'POST', {
+      version: reviewed.body.run.version,
+      action: 'withdraw',
+      reason: 'ليس المعد',
+    });
+    assert.equal(byFinance.status, 403);
+    const withdrawn = await f.api('hr', `/${run.id}/actions`, 'POST', {
+      version: reviewed.body.run.version,
+      action: 'withdraw',
+      reason: 'تعديل راتب',
+    });
+    assert.equal(withdrawn.status, 200, JSON.stringify(withdrawn.body));
+    assert.equal(withdrawn.body.run.state, 'draft');
+    assert.equal(withdrawn.body.run.reviewedBy, null);
+    assert.equal(withdrawn.body.run.canEdit, true);
+  } finally {
+    await f.close();
+  }
+});
+
+test('a rejected run is reopened as a draft by its preparer', async () => {
+  const f = await payrollHarness();
+  try {
+    const run = await newRun(f, '2027-03');
+    const submitted = await f.api('hr', `/${run.id}/actions`, 'POST', {
+      version: run.version,
+      action: 'submit',
+    });
+    const rejected = await f.api('finance', `/${run.id}/actions`, 'POST', {
+      version: submitted.body.run.version,
+      action: 'reject',
+      reason: 'راتب ناقص',
+    });
+    assert.equal(rejected.body.run.state, 'rejected');
+    assert.equal(rejected.body.run.cancelled, false);
+    const preparerView = await f.api('hr', `/${run.id}`);
+    assert.equal(preparerView.body.run.canReopen, true);
+    const reopened = await f.api('hr', `/${run.id}/actions`, 'POST', {
+      version: rejected.body.run.version,
+      action: 'reopen',
+    });
+    assert.equal(reopened.status, 200, JSON.stringify(reopened.body));
+    assert.equal(reopened.body.run.state, 'draft');
+  } finally {
+    await f.close();
+  }
+});
+
+test('the system owner who prepared a run is told why it cannot approve it', async () => {
+  const f = await payrollHarness();
+  try {
+    const created = await f.api('owner', '', 'POST', {
+      period: '2027-04',
+      policyId: 'payroll-policy-demo-v1',
+      reason: 'المالك يعد المسير',
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    const run = created.body.run;
+    const submitted = await f.api('owner', `/${run.id}/actions`, 'POST', {
+      version: run.version,
+      action: 'submit',
+    });
+    const reviewed = await f.api('finance', `/${run.id}/actions`, 'POST', {
+      version: submitted.body.run.version,
+      action: 'review',
+    });
+    const approved = await f.api('owner', `/${run.id}/actions`, 'POST', {
+      version: reviewed.body.run.version,
+      action: 'approve',
+    });
+    assert.equal(approved.status, 403);
+    assert.equal(approved.body.error.code, 'preparer_cannot_approve');
+    const view = await f.api('owner', `/${run.id}`);
+    assert.equal(view.body.run.canWithdraw, true);
+  } finally {
+    await f.close();
+  }
+});
+
+test('the preparer adds and removes employees in a draft from a checklist', async () => {
+  const f = await payrollHarness();
+  try {
+    const run = await newRun(f, '2027-05');
+    assert.equal(run.canManagePeople, true);
+    const list = await f.api('hr', `/${run.id}/candidates`);
+    assert.equal(list.status, 200);
+    const inRun = list.body.candidates.filter((c: any) => c.inRun);
+    assert.ok(inRun.length >= 2);
+    const target = inRun[0].employeeId;
+    const removed = await f.api('hr', `/${run.id}/people`, 'POST', {
+      version: run.version,
+      remove: [target],
+    });
+    assert.equal(removed.status, 200, JSON.stringify(removed.body));
+    assert.equal(removed.body.removed, 1);
+    assert.ok(!removed.body.run.lines.some((l: any) => l.employeeId === target));
+    assert.ok(!removed.body.run.people.some((p: any) => p.employeeId === target));
+    const added = await f.api('hr', `/${run.id}/people`, 'POST', {
+      version: removed.body.run.version,
+      add: [target],
+    });
+    assert.equal(added.status, 200, JSON.stringify(added.body));
+    assert.equal(added.body.added, 1);
+    assert.ok(added.body.run.lines.some((l: any) => l.employeeId === target));
+    assert.equal(added.body.run.timeline.at(-1).action, 'people_changed');
+    const empty = await f.api('hr', `/${run.id}/people`, 'POST', {
+      version: added.body.run.version,
+      remove: list.body.candidates.filter((c: any) => c.inRun).map((c: any) => c.employeeId),
+    });
+    assert.equal(empty.status, 400);
+    const peer = await f.api('hrPeer', `/${run.id}/people`, 'POST', {
+      version: added.body.run.version,
+      remove: [target],
+    });
+    assert.equal(peer.status, 409);
+  } finally {
+    await f.close();
+  }
+});

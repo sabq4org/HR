@@ -81,7 +81,7 @@ export async function parseEmployeesWorkbook(bytes: Buffer): Promise<EmployeeImp
     throw fault('تعذر قراءة الملف. أعد حفظه بصيغة XLSX.');
   }
   const sheet = book.getWorksheet('الموظفون') ?? book.worksheets[0];
-  if (!sheet || sheet.rowCount > 101 || sheet.columnCount > employeeFields.length)
+  if (!sheet || sheet.rowCount > 101 || sheet.columnCount > employeeFields.length + 1)
     throw fault('استخدم ورقة لا تتجاوز 100 موظف وبنفس أعمدة القالب.');
   const headers: string[] = [];
   const fields = new Map(
@@ -93,6 +93,11 @@ export async function parseEmployeesWorkbook(bytes: Buffer): Promise<EmployeeImp
   sheet.getRow(1).eachCell({ includeEmpty: true }, (cell, col) => {
     if (typeof cell.value !== 'string')
       throw fault('عناوين الأعمدة غير صالحة. استخدم القالب المرفق.');
+    // The reasons column of a returned rejected-rows file is ignored on re-upload.
+    if (cell.value.trim() === REJECTION_HEADER) {
+      headers[col - 1] = REJECTION_HEADER;
+      return;
+    }
     const f = fields.get(cell.value.trim());
     if (!f || headers.includes(f.key))
       throw fault(`عمود غير معروف أو مكرر: ${cell.text.slice(0, 60)}`);
@@ -106,11 +111,14 @@ export async function parseEmployeesWorkbook(bytes: Buffer): Promise<EmployeeImp
   for (let n = 2; n <= sheet.rowCount; n++) {
     const row = sheet.getRow(n);
     if (!row.hasValues) continue;
-    const result: ImportRow = { rowNumber: n, values: {}, errors: [] };
+    const result: ImportRow = { rowNumber: n, values: {}, errors: [], raw: {} };
     for (let c = 1; c <= headers.length; c++) {
       const key = headers[c - 1];
+      if (!key || key === REJECTION_HEADER) continue;
       const f = employeeFields.find((f) => f.key === key)!;
       const raw = row.getCell(c).value;
+      const text = row.getCell(c).text;
+      if (text) result.raw![key] = text.slice(0, 2000);
       if (raw === null || raw === undefined || raw === '') {
         if (f.required) result.errors.push(`${f.label}: حقل مطلوب`);
         continue;
@@ -154,6 +162,9 @@ export async function parseEmployeesWorkbook(bytes: Buffer): Promise<EmployeeImp
         } else result.values[key] = text;
       }
     }
+    // Accepted cells go back in the form the parser reads (ISO dates, option values).
+    for (const [key, value] of Object.entries(result.values))
+      result.raw![key] = typeof value === 'boolean' ? (value ? 'نعم' : 'لا') : String(value);
     const number = String(result.values.employeeNumber ?? '');
     if (numbers.has(number)) result.errors.push('الرقم الوظيفي مكرر في الملف');
     numbers.add(number);
@@ -161,6 +172,37 @@ export async function parseEmployeesWorkbook(bytes: Buffer): Promise<EmployeeImp
   }
   if (!rows.length) throw fault('الملف لا يحتوي على صفوف موظفين.');
   return { rows, total: rows.length, valid: rows.every((row) => !row.errors.length) };
+}
+
+export const REJECTION_HEADER = 'سبب الرفض';
+
+/**
+ * The rows that need correcting, in the template's columns plus a «سبب الرفض» column, so they
+ * can be fixed in Excel and uploaded again. Values are written as text exactly as read.
+ */
+export async function rejectedRowsWorkbook(rows: ImportRow[]): Promise<Buffer> {
+  const book = new ExcelJS.Workbook();
+  book.creator = 'مساحة فريق سبق';
+  const sheet = book.addWorksheet('الموظفون', {
+    views: [{ rightToLeft: true, state: 'frozen', ySplit: 1 }],
+  });
+  sheet.columns = [
+    { header: REJECTION_HEADER, key: REJECTION_HEADER, width: 45 },
+    ...employeeFields.map((f) => ({ header: f.label, key: f.key, width: 25 })),
+  ];
+  sheet.getRow(1).eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB42318' } };
+  });
+  for (const row of rows) {
+    const values: Record<string, string> = { [REJECTION_HEADER]: row.errors.join('؛ ') };
+    for (const [key, text] of Object.entries(row.raw ?? {}))
+      // A leading formula character is neutralised so the file cannot carry a formula back.
+      values[key] = /^[=+@\t\r]/.test(text) ? `'${text}` : text;
+    sheet.addRow(values);
+  }
+  sheet.getColumn(1).alignment = { wrapText: true, vertical: 'top' };
+  return Buffer.from(await book.xlsx.writeBuffer());
 }
 
 export async function employeesTemplate() {

@@ -15,3 +15,6 @@ export async function isSystemOwner(query: AsyncDb, id: string, role: Role): Pro
 /** Approver-equivalent for payroll and payroll rules: the approver, or the system owner. */
 export const approvesPayroll = (actor: { role: string; owner?: boolean }) =>
   actor.role === 'approver' || (actor.role === 'hr' && actor.owner === true);
+
+/** Approver-equivalent wherever an independent approver decides (decision 018): same test. */
+export const actsAsApprover = approvesPayroll;

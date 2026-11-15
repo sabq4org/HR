@@ -291,7 +291,28 @@ export interface PayrollRun {
   canReview: boolean;
   /** Approver, or the system owner (decision 014), at the approval step of a run they did not prepare or review. */
   canApprove?: boolean;
+  /** A rejected run that its preparer cancelled (a draft created by mistake); kept for the audit trail. */
+  cancelled?: boolean;
+  /** Preparer (or system owner): cancel a draft or rejected run. */
+  canCancel?: boolean;
+  /** Preparer: pull a run back from review or approval into draft to change it. */
+  canWithdraw?: boolean;
+  /** Preparer: reopen a rejected (not cancelled) run as a draft. */
+  canReopen?: boolean;
+  /** Preparer of a primary draft: add or remove employees. */
+  canManagePeople?: boolean;
+  /** Names of the people, by role, who may take the run's next step. */
+  waitingOn?: string[];
+  preparedByName?: string;
+  reviewedByName?: string | null;
+  approvedByName?: string | null;
   timeline: WorkflowEvent[];
+}
+export interface PayrollCandidate {
+  employeeId: string;
+  name: string;
+  title: string;
+  inRun: boolean;
 }
 export interface AuditRecord {
   id: string;

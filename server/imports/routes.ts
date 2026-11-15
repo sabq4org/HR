@@ -4,7 +4,12 @@ import type { Db } from '../database.js';
 import type { RequireActor } from '../app.js';
 import { createEmployee } from '../administration/service.js';
 import { registerRoute } from '../administration/common.js';
-import { employeesTemplate, parseEmployeesWorkbook, IMPORT_LIMIT } from './workbook.js';
+import {
+  employeesTemplate,
+  parseEmployeesWorkbook,
+  rejectedRowsWorkbook,
+  IMPORT_LIMIT,
+} from './workbook.js';
 import type { FormValues } from '../../shared/administration.js';
 
 const fault = (status: number, code: string, message: string) =>
@@ -50,8 +55,11 @@ export function registerEmployeeImports(
       'SELECT id,role,status FROM employee_access',
     );
     for (const row of preview.rows) {
-      if (numbers.has(String(row.values.employeeNumber)))
-        row.errors.push('الرقم الوظيفي موجود بالفعل في النظام');
+      // Already imported: skipped on save, so a corrected file can be uploaded again whole.
+      if (numbers.has(String(row.values.employeeNumber))) {
+        row.existing = true;
+        continue;
+      }
       if (
         row.values.managerId &&
         !employees.some(
@@ -60,7 +68,13 @@ export function registerEmployeeImports(
       )
         row.errors.push('المدير المباشر غير موجود أو غير نشط');
     }
-    preview.valid = preview.rows.every((row) => !row.errors.length);
+    const invalid = preview.rows.filter((row) => !row.existing && row.errors.length);
+    preview.existing = preview.rows.filter((row) => row.existing).length;
+    preview.invalid = invalid.length;
+    preview.ready = preview.total - preview.existing - preview.invalid;
+    preview.valid = invalid.length === 0;
+    if (invalid.length)
+      preview.rejectedWorkbookBase64 = (await rejectedRowsWorkbook(invalid)).toString('base64');
     res.json({ preview });
   });
   registerRoute(app, 'post', '/api/admin/imports/employees/commit', async (req, res) => {
@@ -122,7 +136,7 @@ export function registerEmployeeImports(
           actor.id,
           actor.role,
           'employees_imported',
-          'استيراد دفعة موظفين اصطناعيين',
+          privateMode ? 'استيراد دفعة موظفين' : 'استيراد دفعة موظفين اصطناعيين',
           JSON.stringify({ count: createdIds.length }),
           1,
           new Date().toISOString(),

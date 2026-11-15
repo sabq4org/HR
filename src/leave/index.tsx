@@ -296,31 +296,32 @@ export function LeavePoliciesPage() {
                   {policy.holidayDates.join('، ') || 'لا توجد'}
                 </small>
               </div>
-              {policy.approvalStatus === 'draft' && data.me.role === 'approver' && (
-                <div className="policy-approve">
-                  <input
-                    aria-label={`مرجع اعتماد ${policy.version}`}
-                    placeholder="مرجع الاعتماد الداخلي"
-                    value={approvalRefs[policy.id] ?? ''}
-                    onChange={(e) =>
-                      setApprovalRefs({ ...approvalRefs, [policy.id]: e.target.value })
-                    }
-                  />
-                  <button
-                    className="button primary"
-                    disabled={busy || !approvalRefs[policy.id]?.trim()}
-                    onClick={() => approve(policy)}
-                  >
-                    <Check size={16} />
-                    اعتماد
-                  </button>
-                </div>
-              )}
+              {policy.approvalStatus === 'draft' &&
+                (data.me.role === 'approver' || data.me.systemOwner === true) && (
+                  <div className="policy-approve">
+                    <input
+                      aria-label={`مرجع اعتماد ${policy.version}`}
+                      placeholder="مرجع الاعتماد الداخلي"
+                      value={approvalRefs[policy.id] ?? ''}
+                      onChange={(e) =>
+                        setApprovalRefs({ ...approvalRefs, [policy.id]: e.target.value })
+                      }
+                    />
+                    <button
+                      className="button primary"
+                      disabled={busy || !approvalRefs[policy.id]?.trim()}
+                      onClick={() => approve(policy)}
+                    >
+                      <Check size={16} />
+                      اعتماد
+                    </button>
+                  </div>
+                )}
             </article>
           ))
         )}
       </section>
-      {data.me.role === 'approver' && (
+      {(data.me.role === 'approver' || data.me.systemOwner === true) && (
         <section className="panel policy-panel">
           <h2>
             <ShieldCheck size={20} /> إسنادات بانتظار اعتماد مستقل
