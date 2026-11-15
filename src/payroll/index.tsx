@@ -2,6 +2,8 @@ import { money, PayslipPaper } from './PayslipPaper';
 import { PayrollRegisterPaper, PayrollRegisterView, periodName } from './PayrollRegister';
 import { PayrollPolicyForm } from './PayrollPolicyForm';
 import { GosiExplainer } from './GosiExplainer';
+import { PayrollProgress } from './PayrollProgress';
+import { PayrollPeoplePicker } from './PayrollPeoplePicker';
 import { GOSI_CATEGORIES, GOSI_CATEGORY_LABEL } from '../../shared/gosi';
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -13,7 +15,11 @@ import {
   FileText,
   Printer,
   RefreshCw,
+  RotateCcw,
   Send,
+  Trash2,
+  Undo2,
+  Users,
 } from 'lucide-react';
 import type { PayrollLine, PayrollPolicyOption, PayrollRun } from '../../shared/administration';
 import './payroll.css';
@@ -21,6 +27,7 @@ import './payroll.css';
 type Actor = {
   id: string;
   role: 'employee' | 'manager' | 'hr' | 'finance' | 'approver' | 'auditor';
+  systemOwner?: boolean;
 };
 type Props = { actor: Actor };
 type SourceOption = {
@@ -37,6 +44,12 @@ const label: Record<string, string> = {
   pending_approver: 'بانتظار اعتماد المدير العام',
   closed: 'مغلق',
   rejected: 'مرفوض',
+};
+const stateLabel = (run: PayrollRun) => (run.cancelled ? 'ملغى' : label[run.state] || run.state);
+const DEFAULT_REASON: Record<string, string> = {
+  cancel: 'إلغاء مسير أُنشئ بالخطأ',
+  withdraw: 'سحب المسير إلى المسودة لتعديله',
+  reopen: 'إعادة فتح المسير المرفوض لتصحيحه',
 };
 const currentPeriodInRiyadh = () => {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -92,6 +105,9 @@ export function PayrollPage({ actor }: Props) {
     [policyId, setPolicyId] = useState(''),
     [exclusions, setExclusions] = useState<{ code: string; label: string; count: number }[]>([]),
     [notice, setNotice] = useState(''),
+    [peopleOpen, setPeopleOpen] = useState(false),
+    [skipped, setSkipped] = useState<{ employeeId: string; name: string; reason: string }[]>([]),
+    [confirming, setConfirming] = useState<'cancel' | 'withdraw' | null>(null),
     [printMode, setPrintMode] = useState<'payslip' | 'register'>('payslip');
   const seesPolicies = ['hr', 'finance', 'approver', 'auditor'].includes(actor.role);
   const loadPolicies = useCallback(async () => {
@@ -244,9 +260,17 @@ export function PayrollPage({ actor }: Props) {
       const result = await request<{ run: PayrollRun }>(`/${run.id}/actions`, 'POST', {
         version: run.version,
         action: verb,
-        reason: actionReason.trim() || 'إجراء موثق من شاشة المسير',
+        reason: actionReason.trim() || DEFAULT_REASON[verb] || 'إجراء موثق من شاشة المسير',
       });
       setSelected(result.run);
+      setConfirming(null);
+      setActionReason('');
+      if (verb === 'cancel') setNotice(`أُلغي مسير ${run.period}، وصارت الفترة متاحة لمسير جديد.`);
+      if (verb === 'withdraw')
+        setNotice(
+          'عاد المسير مسودة. عدّله ثم أرسله للمالية من جديد؛ توقيع المالية السابق لا يُحتسب.',
+        );
+      if (verb === 'reopen') setNotice('أُعيد فتح المسير مسودة. صحّحه ثم أرسله للمالية.');
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -319,6 +343,9 @@ export function PayrollPage({ actor }: Props) {
   };
   const open = async (run: PayrollRun) => {
     setSelected(run);
+    setPeopleOpen(false);
+    setSkipped([]);
+    setConfirming(null);
     setPrintEmployeeId(actor.role === 'employee' || actor.role === 'manager' ? actor.id : '');
     try {
       const result = await request<{ run: PayrollRun }>(`/${run.id}`);
@@ -500,7 +527,7 @@ export function PayrollPage({ actor }: Props) {
               >
                 <span>
                   <strong>{run.period}</strong>
-                  <small>{label[run.state] || run.state}</small>
+                  <small>{stateLabel(run)}</small>
                 </span>
                 <span className="payroll-total">{money(run.totals.netMinor)}</span>
               </button>
@@ -513,7 +540,11 @@ export function PayrollPage({ actor }: Props) {
               <div className="payroll-detail-title">
                 <div>
                   <h2>مسير {selected.period}</h2>
-                  <span className={`payroll-state ${selected.state}`}>{label[selected.state]}</span>
+                  <span
+                    className={`payroll-state ${selected.cancelled ? 'cancelled' : selected.state}`}
+                  >
+                    {stateLabel(selected)}
+                  </span>
                 </div>
                 <div>
                   {['hr', 'finance', 'approver', 'auditor'].includes(actor.role) && (
@@ -558,6 +589,24 @@ export function PayrollPage({ actor }: Props) {
                       }}
                     >
                       تعديل الأسطر
+                    </button>
+                  )}
+                  {selected.canManagePeople && !editing && (
+                    <button
+                      className="payroll-button secondary"
+                      onClick={() => setPeopleOpen((open) => !open)}
+                      aria-expanded={peopleOpen}
+                    >
+                      <Users size={16} /> الموظفون في المسير
+                    </button>
+                  )}
+                  {selected.canReopen && (
+                    <button
+                      className="payroll-button secondary"
+                      onClick={() => void action(selected, 'reopen')}
+                      disabled={busy}
+                    >
+                      <RotateCcw size={16} /> إعادة فتحه مسودة
                     </button>
                   )}
                   {actor.role === 'hr' &&
@@ -878,35 +927,37 @@ export function PayrollPage({ actor }: Props) {
                   </button>
                 </div>
               )}
-              <div className="payroll-timeline">
-                <h3>سجل المراجعة</h3>
-                {selected.timeline.map((event) => (
-                  <p key={event.id}>
-                    <span>
-                      {event.action === 'created'
-                        ? 'أُنشئت المسودة'
-                        : event.action === 'submit'
-                          ? 'أُرسلت للمراجعة'
-                          : event.action === 'review'
-                            ? 'راجعها ووقعها مدير الإدارة المالية'
-                            : event.action === 'approve'
-                              ? 'اعتمدها ووقعها المدير العام'
-                              : event.action === 'reject'
-                                ? 'رُفضت'
-                                : 'عُدلت'}{' '}
-                      · {event.actorName}
-                    </span>
-                    <time>
-                      {new Intl.DateTimeFormat('ar-SA-u-ca-gregory-nu-latn', {
-                        dateStyle: 'medium',
-                        timeStyle: 'short',
-                        timeZone: 'Asia/Riyadh',
-                      }).format(new Date(event.createdAt))}
-                    </time>
-                    {event.reason && <small>{event.reason}</small>}
-                  </p>
-                ))}
-              </div>
+              {peopleOpen && selected.canManagePeople && (
+                <PayrollPeoplePicker
+                  run={selected}
+                  request={request}
+                  onSaved={(run, message, missed) => {
+                    setSelected(run);
+                    setSkipped(missed);
+                    setNotice(message);
+                    setPeopleOpen(false);
+                    void load();
+                  }}
+                  onClose={() => setPeopleOpen(false)}
+                />
+              )}
+              {skipped.length > 0 && (
+                <div className="payroll-warning" role="status">
+                  لم يُضف هؤلاء لنقص في ملفاتهم. أكمل قسم «المالية» في ملف كل منهم ثم أضفه:
+                  <ul>
+                    {skipped.map((item) => (
+                      <li key={item.employeeId}>
+                        {item.name}: {item.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <PayrollProgress
+                run={selected}
+                actorId={actor.id}
+                approves={actor.role === 'approver' || actor.systemOwner === true}
+              />
               {actor.role === 'finance' && selected.state === 'closed' && (
                 <section className="payroll-payment">
                   <h3>تسجيل حالة دفع يدوية</h3>
@@ -979,6 +1030,52 @@ export function PayrollPage({ actor }: Props) {
                       placeholder="اكتب سببًا قبل الرفض"
                     />
                   </label>
+                )}
+                {(selected.canCancel || selected.canWithdraw) && !editing && (
+                  <div className="payroll-undo">
+                    {confirming ? (
+                      <>
+                        <span>
+                          {confirming === 'cancel'
+                            ? 'يُلغى المسير ويبقى في السجل للتوثيق، وتصير الفترة متاحة لمسير جديد. متأكد؟'
+                            : 'يعود المسير مسودة ويسقط توقيع المالية. متأكد؟'}
+                        </span>
+                        <button
+                          className="payroll-button danger"
+                          onClick={() => void action(selected, confirming)}
+                          disabled={busy}
+                        >
+                          {confirming === 'cancel' ? 'نعم، ألغِ المسير' : 'نعم، اسحبه'}
+                        </button>
+                        <button
+                          className="payroll-button secondary"
+                          onClick={() => setConfirming(null)}
+                          disabled={busy}
+                        >
+                          تراجع
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {selected.canWithdraw && (
+                          <button
+                            className="payroll-button secondary"
+                            onClick={() => setConfirming('withdraw')}
+                          >
+                            <Undo2 size={16} /> سحبه إلى المسودة للتعديل
+                          </button>
+                        )}
+                        {selected.canCancel && (
+                          <button
+                            className="payroll-button secondary danger-text"
+                            onClick={() => setConfirming('cancel')}
+                          >
+                            <Trash2 size={16} /> إلغاء المسير
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                 )}
                 {selected.canEdit && !editing && (
                   <button

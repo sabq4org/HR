@@ -513,6 +513,30 @@ test('approved reward sources use their reviewed amount and cannot be consumed t
       'source-wrong-amount',
     );
     assert.equal(wrongAmount.status, 400);
+    // Cancelling the first run (it never pays) frees the approved source for the other run.
+    const cancelled = await f.api<{ run: any }>(
+      'hr',
+      `/${first.body.run.id}/actions`,
+      'POST',
+      { version: updated.body.run.version, action: 'cancel', reason: 'أُنشئ بالخطأ' },
+      'source-cancel',
+    );
+    assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+    const kept = cancelled.body.run.lines.find((x: any) => x.component === 'مكافأة معتمدة');
+    assert.equal(kept.sourceRequestId, null);
+    assert.match(kept.source, new RegExp(sourceId));
+    const reused = await f.api(
+      'hr',
+      `/${second.body.run.id}`,
+      'PATCH',
+      {
+        version: 1,
+        lines: [...second.body.run.lines, line],
+        reason: 'المكافأة بعد إلغاء المسير الأول',
+      },
+      'source-add-3',
+    );
+    assert.equal(reused.status, 200, JSON.stringify(reused.body));
   } finally {
     await f.close();
   }

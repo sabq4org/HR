@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Express, Request } from 'express';
 import type { AsyncDb } from '../database.js';
 import type {
+  PayrollCandidate,
   PayrollLine,
   PayrollPaymentMethod,
   PayrollPolicyOption,
@@ -239,6 +240,33 @@ export function createPayrollCommands(db: AsyncDb) {
       'SELECT pe.*,COALESCE(e.name,pe.actor_id) actor_name FROM payroll_events pe LEFT JOIN employees e ON e.id=pe.actor_id WHERE pe.run_id=? ORDER BY pe.created_at,pe.id',
       [id],
     );
+    const cancelled = r.state === 'rejected' && events.at(-1)?.action === 'cancelled';
+    const preparer = actor.role === 'hr' && r.prepared_by === actor.id;
+    const nameOf = async (who: unknown) =>
+      who
+        ? ((await query.read<Row>('SELECT name FROM employees WHERE id=?', [String(who)]))[0]
+            ?.name ?? String(who))
+        : null;
+    const staff = !['employee', 'manager', 'auditor'].includes(actor.role);
+    // Who can take the next step, so the page says whom the run is waiting on.
+    let waitingOn: string[] = [];
+    if (staff && ['draft', 'pending_finance', 'pending_approver'].includes(r.state)) {
+      const exclude = [r.prepared_by, r.reviewed_by].filter(Boolean).map(String);
+      const rows =
+        r.state === 'draft'
+          ? await query.read<Row>('SELECT id,name FROM employees WHERE id=?', [r.prepared_by])
+          : r.state === 'pending_finance'
+            ? await query.read<Row>(
+                "SELECT id,name FROM employee_access WHERE role='finance' AND status='active' ORDER BY name",
+              )
+            : await query.read<Row>(
+                `SELECT id,name FROM employee_access WHERE status='active' AND (role='approver'
+                   OR (role='hr' AND id IN (SELECT employee_id FROM system_owners))) ORDER BY name`,
+              );
+      waitingOn = rows
+        .filter((p) => r.state === 'draft' || !exclude.includes(String(p.id)))
+        .map((p) => String(p.name));
+    }
     return {
       id: r.id,
       period: r.period,
@@ -298,6 +326,23 @@ export function createPayrollCommands(db: AsyncDb) {
         r.state === 'pending_approver' &&
         r.prepared_by !== actor.id &&
         r.reviewed_by !== actor.id,
+      cancelled,
+      canCancel:
+        ['draft', 'rejected'].includes(r.state) &&
+        !cancelled &&
+        actor.role === 'hr' &&
+        (r.prepared_by === actor.id || actor.owner === true),
+      canWithdraw: preparer && ['pending_finance', 'pending_approver'].includes(r.state),
+      canReopen: preparer && r.state === 'rejected' && !cancelled,
+      canManagePeople: preparer && r.state === 'draft' && !r.correction_of,
+      waitingOn,
+      ...(staff
+        ? {
+            preparedByName: (await nameOf(r.prepared_by)) ?? '',
+            reviewedByName: await nameOf(r.reviewed_by),
+            approvedByName: await nameOf(r.approved_by),
+          }
+        : {}),
       timeline: events.map((e) => ({
         id: e.id,
         actorId: actor.role === 'auditor' ? '' : e.actor_id,
@@ -832,13 +877,19 @@ export function createPayrollCommands(db: AsyncDb) {
             ? approvesPayroll(actor)
             : body.action === 'reject'
               ? actor.role === 'finance' || approvesPayroll(actor)
-              : false;
+              : ['cancel', 'withdraw', 'reopen'].includes(body.action)
+                ? actor.role === 'hr'
+                : false;
     if (!allowed) throw fail(403, 'forbidden', 'لا تملك صلاحية تنفيذ هذا الإجراء.');
     if (
-      body.action === 'reject' &&
+      ['reject', 'cancel', 'withdraw'].includes(body.action) &&
       (typeof body.reason !== 'string' || body.reason.trim().length < 3)
     )
-      throw fail(400, 'reason_required', 'سبب الرفض مطلوب.');
+      throw fail(
+        400,
+        'reason_required',
+        body.action === 'reject' ? 'سبب الرفض مطلوب.' : 'اكتب سببًا واضحًا لهذا الإجراء.',
+      );
     return replay(req, actor, `action:${req.params.id}`, body, async (tx) => {
       const run = (await tx.read<Row>('SELECT * FROM payroll_runs WHERE id=?', [req.params.id]))[0];
       if (!run) throw fail(404, 'not_found', 'المسير غير موجود.');
@@ -849,8 +900,62 @@ export function createPayrollCommands(db: AsyncDb) {
       const action = body.action;
       let next: string,
         reviewed = run.reviewed_by,
-        approved = run.approved_by;
+        approved = run.approved_by,
+        recorded = action;
+      const lastEvent = (
+        await tx.read<Row>(
+          'SELECT action FROM payroll_events WHERE run_id=? ORDER BY created_at DESC,id DESC LIMIT 1',
+          [run.id],
+        )
+      )[0];
+      const wasCancelled = run.state === 'rejected' && lastEvent?.action === 'cancelled';
       if (
+        action === 'cancel' &&
+        actor.role === 'hr' &&
+        ['draft', 'rejected'].includes(run.state) &&
+        !wasCancelled &&
+        (run.prepared_by === actor.id || actor.owner === true)
+      ) {
+        // A draft made by mistake is cancelled, not deleted: it frees the period and stays in the
+        // audit trail. A rejected run stays rejected and is only marked cancelled.
+        next = 'rejected';
+        recorded = 'cancelled';
+      } else if (
+        action === 'withdraw' &&
+        actor.role === 'hr' &&
+        run.prepared_by === actor.id &&
+        ['pending_finance', 'pending_approver'].includes(run.state)
+      ) {
+        // Back to draft to change it; the finance signature is dropped and must be given again.
+        next = 'draft';
+        reviewed = null;
+        recorded = 'withdrawn';
+      } else if (
+        action === 'reopen' &&
+        actor.role === 'hr' &&
+        run.prepared_by === actor.id &&
+        run.state === 'rejected' &&
+        !wasCancelled
+      ) {
+        if (!run.correction_of) {
+          const other = (
+            await tx.read<Row>(
+              "SELECT id FROM payroll_runs WHERE period=? AND correction_of IS NULL AND state<>'rejected' AND id<>?",
+              [run.period, run.id],
+            )
+          )[0];
+          if (other)
+            throw fail(
+              409,
+              'period_already_exists',
+              'يوجد مسير آخر لهذه الفترة، فلا يُعاد فتح هذا المسير.',
+            );
+        }
+        next = 'draft';
+        reviewed = null;
+        approved = null;
+        recorded = 'reopened';
+      } else if (
         action === 'submit' &&
         mayPrepare(actor) &&
         run.state === 'draft' &&
@@ -886,7 +991,18 @@ export function createPayrollCommands(db: AsyncDb) {
             run.reviewed_by !== actor.id))
       ) {
         next = 'rejected';
-      } else throw fail(403, 'transition_forbidden', 'لا تملك صلاحية تنفيذ هذه الخطوة.');
+      } else if (
+        action === 'approve' &&
+        approvesPayroll(actor) &&
+        run.state === 'pending_approver' &&
+        run.prepared_by === actor.id
+      )
+        throw fail(
+          403,
+          'preparer_cannot_approve',
+          'أنت معدّ هذا المسير، ولا يعتمد أحد ما أعدّه بنفسه. يُعدّه غيرك (مثل الموارد البشرية) لتعتمده أنت، أو اسحبه وألغه.',
+        );
+      else throw fail(403, 'transition_forbidden', 'لا تملك صلاحية تنفيذ هذه الخطوة.');
       // Submitting a primary draft re-applies the rule, so no recipient escapes it.
       if (action === 'submit' && !run.correction_of) {
         const gosi = await policyGosi(tx, run.policy_id);
@@ -899,6 +1015,13 @@ export function createPayrollCommands(db: AsyncDb) {
       if (next === 'closed') {
         await validateRunNet(tx, run, true);
       }
+      // A cancelled run never pays: its approved reward and overtime sources become free for
+      // another run. The line keeps the request id in its source text for the audit trail.
+      if (recorded === 'cancelled')
+        await tx.execute(
+          "UPDATE payroll_lines SET source=source || ' · المصدر ' || source_request_id || ' أُعيد بعد إلغاء المسير',source_request_id=NULL WHERE run_id=? AND source_request_id IS NOT NULL",
+          [run.id],
+        );
       const closed = next === 'closed' ? now() : null;
       await tx.execute(
         'UPDATE payroll_runs SET state=?,reviewed_by=?,approved_by=?,version=version+1,updated_at=?,closed_at=? WHERE id=? AND version=?',
@@ -911,7 +1034,7 @@ export function createPayrollCommands(db: AsyncDb) {
           run.id,
           actor.id,
           actor.role,
-          action,
+          recorded,
           body.reason ?? null,
           now(),
           Number(run.version) + 1,
@@ -1364,6 +1487,154 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         ],
       );
       return { run: await getRun(run.id, actor, tx) };
+    });
+  });
+  /** On-duty employees for the add/remove picker of a primary draft. */
+  route('get', '/payroll/:id/candidates', async (req, actor) => {
+    if (actor.role !== 'hr') throw fail(403, 'forbidden', 'متاح للموارد البشرية فقط.');
+    const run = (await db.read<Row>('SELECT * FROM payroll_runs WHERE id=?', [req.params.id]))[0];
+    if (!run) throw fail(404, 'not_found', 'المسير غير موجود.');
+    const inRun = new Set(
+      (
+        await db.read<Row>('SELECT DISTINCT employee_id FROM payroll_lines WHERE run_id=?', [
+          run.id,
+        ])
+      ).map((r) => String(r.employee_id)),
+    );
+    // On-duty employees, plus anyone already in the run whatever their status now, so someone
+    // suspended or terminated after the draft was made can still be removed from it.
+    const people = (
+      await db.read<Row>('SELECT id,name,title,status FROM employee_access ORDER BY name')
+    ).filter((p) => p.status === 'active' || inRun.has(String(p.id)));
+    return {
+      candidates: people.map((p): PayrollCandidate => ({
+        employeeId: String(p.id),
+        name: String(p.name),
+        title: String(p.title ?? ''),
+        inRun: inRun.has(String(p.id)),
+      })),
+    };
+  });
+  /**
+   * Adds on-duty employees to a primary draft from their profiles, or removes employees with all
+   * their lines. Insurance and leave advances are recomputed; people whose profile is incomplete
+   * are reported with the reason instead of being added.
+   */
+  route('post', '/payroll/:id/people', async (req, actor) => {
+    if (actor.role !== 'hr') throw fail(403, 'forbidden', 'متاح للموارد البشرية فقط.');
+    const body = req.body ?? {};
+    const ids = (value: unknown) =>
+      Array.isArray(value) && value.every((v) => typeof v === 'string') && value.length <= 500
+        ? [...new Set(value as string[])]
+        : null;
+    const add = ids(body.add ?? []);
+    const remove = ids(body.remove ?? []);
+    if (!add || !remove || (!add.length && !remove.length))
+      throw fail(400, 'invalid_input', 'اختر موظفًا واحدًا على الأقل للإضافة أو الإزالة.');
+    if (add.some((id) => remove.includes(id)))
+      throw fail(400, 'invalid_input', 'لا يُضاف موظف ويُزال في الطلب نفسه.');
+    return replay(req, actor, `people:${req.params.id}`, body, async (tx) => {
+      const run = (await tx.read<Row>('SELECT * FROM payroll_runs WHERE id=?', [req.params.id]))[0];
+      if (!run) throw fail(404, 'not_found', 'المسير غير موجود.');
+      if (run.state !== 'draft' || run.prepared_by !== actor.id || run.correction_of)
+        throw fail(
+          409,
+          'immutable_or_forbidden',
+          'إضافة الموظفين وإزالتهم متاحة لمعدّ المسودة الأساسية فقط.',
+        );
+      if (Number(body.version) !== Number(run.version))
+        throw fail(409, 'version_conflict', 'تغير المسير؛ حدّث الصفحة ثم أعد المحاولة.');
+      const present = new Set(
+        (
+          await tx.read<Row>('SELECT DISTINCT employee_id FROM payroll_lines WHERE run_id=?', [
+            run.id,
+          ])
+        ).map((r) => String(r.employee_id)),
+      );
+      for (const id of remove) {
+        await tx.execute('DELETE FROM payroll_lines WHERE run_id=? AND employee_id=?', [
+          run.id,
+          id,
+        ]);
+        await tx.execute('DELETE FROM payroll_run_people WHERE run_id=? AND employee_id=?', [
+          run.id,
+          id,
+        ]);
+      }
+      const policy = (
+        await tx.read<Row>('SELECT values_json FROM administrative_policies WHERE id=?', [
+          run.policy_id,
+        ])
+      )[0];
+      const synthetic =
+        !!policy && JSON.parse(policy.values_json).calculation === 'synthetic-profile-components';
+      const gosi = await policyGosi(tx, run.policy_id);
+      const skipped: { employeeId: string; name: string; reason: string }[] = [];
+      let added = 0;
+      const created = now();
+      for (const id of add) {
+        if (present.has(id)) continue;
+        const person = (
+          await tx.read<Row>(
+            "SELECT id,name,title FROM employee_access WHERE id=? AND status='active'",
+            [id],
+          )
+        )[0];
+        if (!person) {
+          skipped.push({ employeeId: id, name: id, reason: 'ليس على رأس العمل' });
+          continue;
+        }
+        const problem = await addPersonFromProfile(tx, {
+          runId: run.id,
+          person,
+          gosi,
+          synthetic,
+          created,
+        });
+        if (problem)
+          skipped.push({
+            employeeId: id,
+            name: String(person.name),
+            reason: EXCLUSION_LABEL[problem] ?? problem,
+          });
+        else added += 1;
+      }
+      const remaining = (
+        await tx.read<Row>('SELECT COUNT(*) count FROM payroll_lines WHERE run_id=?', [run.id])
+      )[0];
+      if (Number(remaining?.count ?? 0) === 0)
+        throw fail(
+          400,
+          'empty_run',
+          'لا يبقى المسير فارغًا. إن أُنشئ بالخطأ فألغِه بدل إزالة كل الموظفين.',
+        );
+      if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
+      await applyLeaveAdvances(tx, run.id);
+      await validateRunNet(tx, run, false);
+      await tx.execute(
+        'UPDATE payroll_runs SET version=version+1,updated_at=? WHERE id=? AND version=?',
+        [now(), run.id, run.version],
+      );
+      const removed = remove.filter((id) => present.has(id)).length;
+      const summary = [added ? `أضيف ${added}` : '', removed ? `أزيل ${removed}` : '']
+        .filter(Boolean)
+        .join('، ');
+      await tx.execute(
+        'INSERT INTO payroll_events(id,run_id,actor_id,actor_role,action,reason,created_at,version) VALUES(?,?,?,?,?,?,?,?)',
+        [
+          randomUUID(),
+          run.id,
+          actor.id,
+          actor.role,
+          'people_changed',
+          [summary || 'لم يتغير أحد', typeof body.reason === 'string' ? body.reason.trim() : '']
+            .filter(Boolean)
+            .join(' · '),
+          now(),
+          Number(run.version) + 1,
+        ],
+      );
+      return { run: await getRun(run.id, actor, tx), added, removed, skipped };
     });
   });
   route('post', '/payroll/:id/actions', (req, actor) => runAction(req, actor));

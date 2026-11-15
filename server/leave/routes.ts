@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { actsAsApprover } from '../system-owner.js';
 import type { Express, Request, Response } from 'express';
 import type { LeaveChangeRequest, LeavePolicy, LeaveSnapshot } from '../../shared/contracts.js';
 import { annualLeaveDays, isIsoDate } from '../../shared/leave.js';
@@ -290,7 +291,7 @@ export function registerLeaveRoutes(
   app.post('/api/leave-policies/:id/approve', async (req, res) => {
     try {
       const actor = await requireActor(req);
-      if (actor.role !== 'approver')
+      if (!actsAsApprover(actor))
         throw fail(403, 'FORBIDDEN', 'اعتماد السياسة متاح لصاحب صلاحية اعتماد مستقل.');
       const result = await db.transaction(async (tx) => {
         const row = (
@@ -431,7 +432,7 @@ export function registerLeaveRoutes(
   app.post('/api/leave-policy-assignments/:id/approve', async (req, res) => {
     try {
       const actor = await requireActor(req);
-      if (actor.role !== 'approver')
+      if (!actsAsApprover(actor))
         throw fail(403, 'FORBIDDEN', 'اعتماد الرصيد الافتتاحي متاح لصاحب صلاحية اعتماد مستقل.');
       await idem(
         db,
@@ -530,7 +531,7 @@ export function registerLeaveRoutes(
           if (row.approval_status !== 'pending')
             throw fail(409, 'ASSIGNMENT_NOT_PENDING', 'الإسناد ليس بانتظار القرار.');
           if (decision === 'reject') {
-            if (actor.role !== 'approver')
+            if (!actsAsApprover(actor))
               throw fail(403, 'FORBIDDEN', 'رفض الإسناد متاح لصاحب صلاحية اعتماد مستقل.');
             if (row.assigned_by === actor.id || row.employee_id === actor.id)
               throw fail(403, 'SELF_APPROVAL', 'لا يجوز لمُعدّ الإسناد أو المستفيد اتخاذ القرار.');

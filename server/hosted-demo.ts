@@ -115,9 +115,10 @@ function knownApi(method: string, path: string): boolean {
     ].includes(path)
   )
     return true;
-  if (method === 'GET' && /^\/api\/admin\/payroll\/[^/]+(\/export)?$/.test(path)) return true;
+  if (method === 'GET' && /^\/api\/admin\/payroll\/[^/]+(\/export|\/candidates)?$/.test(path))
+    return true;
   if (method === 'PATCH' && /^\/api\/admin\/payroll\/[^/]+$/.test(path)) return true;
-  if (method === 'POST' && /^\/api\/admin\/payroll\/[^/]+\/(actions|payments)$/.test(path))
+  if (method === 'POST' && /^\/api\/admin\/payroll\/[^/]+\/(actions|payments|people)$/.test(path))
     return true;
   return false;
 }
