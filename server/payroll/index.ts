@@ -31,6 +31,11 @@ import { ensureServiceAccountRow } from '../service-api/service-account.js';
 import { decryptSensitive, encryptSensitive } from '../administration/security.js';
 import { approvesPayroll } from '../system-owner.js';
 import {
+  applyRequestDeductions,
+  isRequestDerivedComponent,
+  REQUEST_LINE_PROBLEM_LABEL,
+} from './request-lines.js';
+import {
   applyLeaveAdvances,
   LEAVE_ADVANCE_COMPONENTS,
   LEAVE_ADVANCE_PROBLEM_LABEL,
@@ -153,6 +158,13 @@ export function payrollEmploymentTypeOf(
   if (relation === 'collaborator') return 'contractor';
   return '';
 }
+/** Notices of derived request deductions, in the shape the payroll screen already shows. */
+const noticeList = (notices: Map<string, number>) =>
+  [...notices].map(([code, count]) => ({
+    code,
+    label: REQUEST_LINE_PROBLEM_LABEL[code] ?? code,
+    count,
+  }));
 const EXCLUSION_LABEL: Record<string, string> = {
   copy_left: 'في المسير السابق وليسوا على رأس العمل الآن (لم يُنسخوا)',
   copy_added: 'على رأس العمل ولم يكونوا في المسير السابق (أضيفوا من ملفاتهم)',
@@ -161,6 +173,7 @@ const EXCLUSION_LABEL: Record<string, string> = {
   contractor_amount_missing: 'المبلغ الشهري المقطوع للمتعاون غير مدخل',
   ...GOSI_PROBLEM_LABEL,
   ...LEAVE_ADVANCE_PROBLEM_LABEL,
+  ...REQUEST_LINE_PROBLEM_LABEL,
 };
 const paymentMethodOf = (value: unknown): PayrollPaymentMethod =>
   value === 'direct' || value === 'wps' ? value : 'unspecified';
@@ -815,6 +828,7 @@ export function createPayrollCommands(db: AsyncDb) {
           if (gosi) await applyInsurance(tx, id, gosi, policyId);
           // Leave advances are not exclusions: the person is in the run, only the advance is missing.
           for (const [code, n] of await applyLeaveAdvances(tx, id)) exclusions.set(code, n);
+          for (const [code, n] of await applyRequestDeductions(tx, id)) exclusions.set(code, n);
           const count = (
             await tx.read<Row>('SELECT COUNT(*) count FROM payroll_lines WHERE run_id=?', [id])
           )[0];
@@ -891,6 +905,7 @@ export function createPayrollCommands(db: AsyncDb) {
         body.action === 'reject' ? 'سبب الرفض مطلوب.' : 'اكتب سببًا واضحًا لهذا الإجراء.',
       );
     return replay(req, actor, `action:${req.params.id}`, body, async (tx) => {
+      let notices = new Map<string, number>();
       const run = (await tx.read<Row>('SELECT * FROM payroll_runs WHERE id=?', [req.params.id]))[0];
       if (!run) throw fail(404, 'not_found', 'المسير غير موجود.');
       if (Number(body.version) !== Number(run.version))
@@ -1010,6 +1025,7 @@ export function createPayrollCommands(db: AsyncDb) {
         if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
         // A leave approved after the draft was prepared still gets its advance.
         await applyLeaveAdvances(tx, run.id);
+        notices = await applyRequestDeductions(tx, run.id);
         await validateRunNet(tx, run, false);
       }
       if (next === 'closed') {
@@ -1051,7 +1067,7 @@ export function createPayrollCommands(db: AsyncDb) {
           { ...serviceAudit, period: run.period, from: run.state, to: next },
           Number(run.version) + 1,
         );
-      return { run: await getRun(run.id, actor, tx) };
+      return { run: await getRun(run.id, actor, tx), exclusions: noticeList(notices) };
     });
   }
   return {
@@ -1304,6 +1320,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
       }
       if (gosi) await applyInsurance(tx, id, gosi, policy.id);
       for (const [code, n] of await applyLeaveAdvances(tx, id)) exclusions.set(code, n);
+      for (const [code, n] of await applyRequestDeductions(tx, id)) exclusions.set(code, n);
       const count = (
         await tx.read<Row>('SELECT COUNT(*) count FROM payroll_lines WHERE run_id=?', [id])
       )[0];
@@ -1326,7 +1343,12 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
       return {
         run: await getRun(id, actor, tx),
         excludedCount: [...exclusions]
-          .filter(([code]) => code !== 'copy_added' && !(code in LEAVE_ADVANCE_PROBLEM_LABEL))
+          .filter(
+            ([code]) =>
+              code !== 'copy_added' &&
+              !(code in LEAVE_ADVANCE_PROBLEM_LABEL) &&
+              !(code in REQUEST_LINE_PROBLEM_LABEL),
+          )
           .reduce((n, [, c]) => n + c, 0),
         exclusions: [...exclusions].map(([code, count]) => ({
           code,
@@ -1340,6 +1362,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
     if (actor.role !== 'hr') throw fail(403, 'forbidden', 'تعديل المسير متاح للموارد البشرية فقط.');
     const body = req.body ?? {};
     return replay(req, actor, `edit:${req.params.id}`, body, async (tx) => {
+      let notices = new Map<string, number>();
       const run = (await tx.read<Row>('SELECT * FROM payroll_runs WHERE id=?', [req.params.id]))[0];
       if (!run) throw fail(404, 'not_found', 'المسير غير موجود.');
       if (run.state !== 'draft' || run.prepared_by !== actor.id)
@@ -1358,7 +1381,8 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         ? body.lines
         : body.lines.filter(
             (line: { component?: unknown }) =>
-              !LEAVE_ADVANCE_COMPONENTS.includes(String(line?.component ?? '')),
+              !LEAVE_ADVANCE_COMPONENTS.includes(String(line?.component ?? '')) &&
+              !isRequestDerivedComponent(line?.component),
           );
       const ids = new Set<string>();
       const sources = new Set<string>();
@@ -1405,7 +1429,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
             throw fail(
               400,
               'advance_allocation_required',
-              'السلفة تحتاج خطة حسم شهرية معتمدة؛ لا يحددها هذا المسير التجريبي.',
+              'السلفة تُحسم تلقائيًا من خطتها المعتمدة (عدد الأقساط وشهر أول حسم)؛ لا تُدرج يدويًا.',
             );
           if (!['reward', 'overtime'].includes(source.kind))
             throw fail(400, 'invalid_source', 'نوع الطلب لا يدعم الإدراج في هذا المسير.');
@@ -1467,6 +1491,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         await reconcilePeople(tx, run.id, gosi);
         if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
         await applyLeaveAdvances(tx, run.id);
+        notices = await applyRequestDeductions(tx, run.id);
       }
       await validateRunNet(tx, run, false);
       await tx.execute(
@@ -1486,7 +1511,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
           Number(run.version) + 1,
         ],
       );
-      return { run: await getRun(run.id, actor, tx) };
+      return { run: await getRun(run.id, actor, tx), exclusions: noticeList(notices) };
     });
   });
   /** On-duty employees for the add/remove picker of a primary draft. */
@@ -1610,6 +1635,7 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
         );
       if (gosi) await applyInsurance(tx, run.id, gosi, run.policy_id);
       await applyLeaveAdvances(tx, run.id);
+      const notices = await applyRequestDeductions(tx, run.id);
       await validateRunNet(tx, run, false);
       await tx.execute(
         'UPDATE payroll_runs SET version=version+1,updated_at=? WHERE id=? AND version=?',
@@ -1634,7 +1660,13 @@ export function registerPayroll(app: Express, { db, requireActor }: Options) {
           Number(run.version) + 1,
         ],
       );
-      return { run: await getRun(run.id, actor, tx), added, removed, skipped };
+      return {
+        run: await getRun(run.id, actor, tx),
+        added,
+        removed,
+        skipped,
+        exclusions: noticeList(notices),
+      };
     });
   });
   route('post', '/payroll/:id/actions', (req, actor) => runAction(req, actor));

@@ -1024,6 +1024,7 @@ export function ServicesPage() {
     isHr && !f.initiators.includes('hr') && f.initiators.includes('employee');
   const visible = (formDefinitions as typeof formDefinitions).filter(
     (f) =>
+      !f.replacedBy &&
       (f.initiators.includes(data.me.role) || behalfOnly(f)) &&
       `${f.title} ${f.description}`.includes(query),
   );
@@ -1104,6 +1105,15 @@ export function ServicesPage() {
         ))}
       </div>
       {!visible.length && <Empty>لا توجد خدمات مطابقة</Empty>}
+      {formDefinitions
+        .filter((f) => f.replacedBy && f.initiators.includes(data.me.role))
+        .map((f) => (
+          <p className="adm-note" key={f.kind}>
+            «{f.title}» صارت في صفحة <Link to={f.replacedBy!.path}>{f.replacedBy!.label}</Link>،
+            وتُحسب فيها المكافأة وتصفية الإجازة بقاعدة معتمدة. الطلبات السابقة من هذا النوع تبقى في
+            «طلباتي ومتابعاتي».
+          </p>
+        ))}
       {kind && (
         <Modal title={requestTitle(kind)} close={() => setKind(null)} wide>
           <div className="dialog-body">

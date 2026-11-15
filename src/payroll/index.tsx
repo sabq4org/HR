@@ -257,12 +257,18 @@ export function PayrollPage({ actor }: Props) {
     setBusy(true);
     setError('');
     try {
-      const result = await request<{ run: PayrollRun }>(`/${run.id}/actions`, 'POST', {
+      const result = await request<{
+        run: PayrollRun;
+        exclusions?: { code: string; label: string; count: number }[];
+      }>(`/${run.id}/actions`, 'POST', {
         version: run.version,
         action: verb,
         reason: actionReason.trim() || DEFAULT_REASON[verb] || 'إجراء موثق من شاشة المسير',
       });
       setSelected(result.run);
+      // Submitting recalculates derived deductions; show what the preparer must know.
+      setExcludedCount(0);
+      setExclusions(result.exclusions ?? []);
       setConfirming(null);
       setActionReason('');
       if (verb === 'cancel') setNotice(`أُلغي مسير ${run.period}، وصارت الفترة متاحة لمسير جديد.`);
@@ -283,7 +289,10 @@ export function PayrollPage({ actor }: Props) {
     setBusy(true);
     setError('');
     try {
-      const result = await request<{ run: PayrollRun }>(`/${selected.id}`, 'PATCH', {
+      const result = await request<{
+        run: PayrollRun;
+        exclusions?: { code: string; label: string; count: number }[];
+      }>(`/${selected.id}`, 'PATCH', {
         version: selected.version,
         lines: draftLines.map((line) => ({
           ...line,
@@ -293,6 +302,8 @@ export function PayrollPage({ actor }: Props) {
         reason: 'تعديل أسطر المسير',
       });
       setSelected(result.run);
+      setExcludedCount(0);
+      setExclusions(result.exclusions ?? []);
       setEditing(false);
       await load();
     } catch (e) {
