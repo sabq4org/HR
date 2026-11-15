@@ -10,6 +10,22 @@
     />
     <link rel="icon" type="image/svg+xml" href="/brand/sabq-mark.svg" />
     <title>سبق | مساحة الفريق</title>
+    <script>
+      // Apply the saved appearance before the first paint (src/theme/theme.ts keeps it in step).
+      (function () {
+        var choice = 'system';
+        try {
+          choice = localStorage.getItem('sabq-theme') || 'system';
+        } catch (e) {}
+        var dark =
+          choice === 'dark' ||
+          (choice !== 'light' &&
+            window.matchMedia &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
