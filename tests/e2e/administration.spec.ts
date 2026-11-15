@@ -37,7 +37,6 @@ test('HR creates an employee through grouped steps and edits the employee file',
   const name = `موظف إداري ${suffix}`;
   await dialog.getByLabel(/الاسم بالعربية/).fill(name);
   await dialog.getByLabel(/الرقم الوظيفي/).fill(`ADM-${suffix}`);
-  await dialog.getByRole('button', { name: 'التالي' }).click();
   await dialog
     .getByRole('textbox', { name: 'البريد الوظيفي' })
     .fill(`admin-${suffix}@example.test`);
@@ -47,7 +46,7 @@ test('HR creates an employee through grouped steps and edits the employee file',
   await dialog.getByLabel(/تاريخ المباشرة الفعلي/).fill('2026-01-01');
   await dialog.getByLabel(/موقع العمل/).fill('الرياض');
   await dialog.getByRole('button', { name: 'التالي' }).click();
-  for (const group of ['العقد', 'المالية', 'التأمينات', 'الإجازات', 'المؤهلات', 'انتهاء العلاقة']) {
+  for (const group of ['الراتب', 'التأمينات', 'الإجازات']) {
     await dialog.getByRole('button', { name: group, exact: true }).click();
     await dialog.getByRole('button', { name: 'التالي' }).click();
   }
@@ -61,7 +60,10 @@ test('HR creates an employee through grouped steps and edits the employee file',
   await expect(page).toHaveURL(/\/employees\/[^/]+\/file$/);
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'تعديل الملف' }).click();
-  await page.getByRole('button', { name: 'العمل', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: 'خطوات بيانات الموظف' })
+    .getByRole('button', { name: 'العمل', exact: true })
+    .click();
   await page.getByLabel(/المسمى الوظيفي/).fill('محرر أول تجريبي');
   await page.getByRole('button', { name: 'المراجعة', exact: true }).click();
   await page.getByLabel('سبب التعديل').fill(`مراجعة ${suffix}`);
@@ -69,6 +71,10 @@ test('HR creates an employee through grouped steps and edits the employee file',
   await expect(page.getByRole('button', { name: 'تعديل الملف' })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: 'تعديل الملف' })).toBeVisible();
+  await page
+    .getByRole('navigation', { name: 'أقسام الملف' })
+    .getByRole('button', { name: 'العمل', exact: true })
+    .click();
   await expect(page.getByText('محرر أول تجريبي', { exact: true })).toBeVisible();
   expect(
     await page

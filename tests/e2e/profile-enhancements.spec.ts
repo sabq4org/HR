@@ -32,13 +32,11 @@ test('employee profile remains usable at narrow widths and opens a dedicated pri
         .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
         .analyze();
       expect(result.violations.map((violation) => violation.id)).toEqual([]);
-      const bankTab = page.getByRole('button', { name: 'البنك', exact: true });
+      const bankTab = page.getByRole('button', { name: 'الراتب', exact: true });
       await bankTab.focus();
       await expect(bankTab).toBeFocused();
       await page.keyboard.press('Enter');
-      await expect(
-        page.getByRole('heading', { name: 'البيانات البنكية', exact: true }),
-      ).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'الراتب والبنك', exact: true })).toBeVisible();
     }
     await page.screenshot({ path: `artifacts/screenshots/profile-overview-${width}.png` });
   }
@@ -76,6 +74,6 @@ test('employee profile remains usable at narrow widths and opens a dedicated pri
   await page.goto('/profile/file');
   await expect(page.getByRole('button', { name: 'تقرير PDF', exact: true })).toBeVisible();
   await page.goto('/employees/emp-sara');
-  await expect(page.getByRole('button', { name: 'البنك', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'الراتب', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'تقرير PDF', exact: true })).toBeVisible();
 });

@@ -1263,6 +1263,9 @@ export async function getEmployeeFile(
       : [];
   return {
     employee: employeeValue,
+    managerName: employee.manager_id
+      ? ((await readEmployee(db, employee.manager_id))?.name ?? null)
+      : null,
     version: employee.record_version,
     values,
     editable: mayManageEmployee(actor, employee),
