@@ -743,6 +743,16 @@ export function registerAdministration(
     const owner = await scopedEmployee(db, actor, employeeId);
     if (actor.role === 'employee' && owner.id !== actor.id)
       throw fault(403, 'FORBIDDEN', 'يمكنك إنشاء طلبك لنفسك فقط.');
+    if (
+      privateMode &&
+      (kind === 'salary_letter' || kind === 'employment_letter') &&
+      owner.status === 'terminated'
+    )
+      throw fault(
+        409,
+        'EMPLOYEE_NOT_CURRENT',
+        'انتهت خدمة الموظف، فلا يصدر له خطاب على رأس العمل. اطلب شهادة خبرة.',
+      );
     const values = validateValues(form.fields, b.values, { partial: !b.submit });
     validateFormRelationships(kind, values);
     const id = newId();

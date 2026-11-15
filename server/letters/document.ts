@@ -22,6 +22,16 @@ export async function createIssuedDocument(
       status: 404,
       code: 'EMPLOYEE_NOT_FOUND',
     });
+  // A real certificate says the employee works here; never issue one after the service ended.
+  if (
+    !synthetic &&
+    (request.kind === 'salary_letter' || request.kind === 'employment_letter') &&
+    employee.status === 'terminated'
+  )
+    throw Object.assign(new Error('انتهت خدمة الموظف، فلا يصدر له خطاب على رأس العمل.'), {
+      status: 409,
+      code: 'EMPLOYEE_NOT_CURRENT',
+    });
   const profile = await getProfileValues(db, request.employeeId);
   const approver = await readEmployee(db, actor.id);
   const en = request.kind === 'salary_letter' && request.values.language === 'en';

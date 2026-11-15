@@ -54,9 +54,13 @@ export function IssuedLetter({ document: doc }: { document: IssuedDocument }) {
           <b>{doc.approvedByName}</b>
         </p>
         <small>
-          {en
-            ? 'Snapshot preserved at approval. Fictional data only. No legal signature or external verification is provided.'
-            : 'نسخة محفوظة وقت الاعتماد. بيانات وهمية فقط، ولا تتضمن توقيعًا قانونيًا أو تحققًا خارجيًا.'}
+          {synthetic
+            ? en
+              ? 'Snapshot preserved at approval. Fictional data only. No legal signature or external verification is provided.'
+              : 'نسخة محفوظة وقت الاعتماد. بيانات وهمية فقط، ولا تتضمن توقيعًا قانونيًا أو تحققًا خارجيًا.'
+            : en
+              ? 'Snapshot preserved at approval. Verify with Sabq HR quoting the reference above.'
+              : 'نسخة محفوظة وقت الاعتماد. للتحقق تواصل مع الموارد البشرية في سبق مع ذكر الرقم المرجعي أعلاه.'}
         </small>
       </footer>
     </article>

@@ -292,6 +292,26 @@ test('letters issued from private records carry no synthetic wording', async () 
         assert.equal(demo.synthetic, true);
       }
     }
+    // A real certificate says the person works here, so none is issued after the service ended.
+    await db.execute("UPDATE employees SET employment_status='terminated' WHERE id=?", [
+      employee.id,
+    ]);
+    for (const kind of ['salary_letter', 'employment_letter'] as const)
+      await assert.rejects(
+        createIssuedDocument(
+          db,
+          {
+            id: `ended-${kind}`,
+            number: 'REQ-END',
+            kind,
+            employeeId: employee.id,
+            values: { recipient: 'جهة', language: 'ar', purpose: 'اختبار' } as FormValues,
+          },
+          actor,
+          { privateMode: true },
+        ),
+        (error: { code?: string }) => error.code === 'EMPLOYEE_NOT_CURRENT',
+      );
   } finally {
     await db.close();
   }
