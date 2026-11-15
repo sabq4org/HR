@@ -343,13 +343,15 @@ export function LeavesPage() {
         </div>
         <div className="summary-divider" />
         <p>
-          من أصل {data.balance.allocated} يومًا في السياسة التجريبية.
+          من أصل {data.balance.allocated} يومًا · {data.policy.name}.
           <br />
           <span>
             {data.balance.reserved} محجوزة للطلبات · {data.balance.used} مستخدمة
           </span>
         </p>
-        <span className="demo-pill">سياسة تجريبية</span>
+        {data.mode === 'synthetic-local' || data.mode === 'synthetic-hosted' ? (
+          <span className="demo-pill">سياسة تجريبية</span>
+        ) : null}
       </div>
       <section className="panel">
         <div className="filter-toolbar">

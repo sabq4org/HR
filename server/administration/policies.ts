@@ -5,6 +5,7 @@ import {
   LEAVE_ENTITLEMENT_POLICY_KEY,
   parseLeaveEntitlementValues,
 } from '../../shared/leave-entitlement.js';
+import { EOS_POLICY_KEY, parseEosValues } from '../../shared/end-of-service.js';
 import { approvesPayroll } from '../system-owner.js';
 import { idempotent, newId, requiredString, requireRecord, versionValue } from './common.js';
 import { appendEvent, validIsoDate, type Actor } from './service.js';
@@ -123,6 +124,10 @@ export async function createPolicyDraft(
   assertPayrollValues(key, values);
   if (key === LEAVE_ENTITLEMENT_POLICY_KEY) {
     const parsed = parseLeaveEntitlementValues(values);
+    if (!parsed.ok) throw fault(400, 'INVALID_POLICY', parsed.message);
+  }
+  if (key === EOS_POLICY_KEY) {
+    const parsed = parseEosValues(values);
     if (!parsed.ok) throw fault(400, 'INVALID_POLICY', parsed.message);
   }
   const id = newId();

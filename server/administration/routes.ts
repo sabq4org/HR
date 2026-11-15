@@ -9,7 +9,13 @@ import type {
   RequestState,
   WorkflowEvent,
 } from '../../shared/administration.js';
-import { documentCategories, employeeFields, formByKind } from '../../shared/catalog.js';
+import {
+  documentCategories,
+  employeeFields,
+  formByKind,
+  ON_BEHALF_CHANNELS,
+  onBehalfSteps,
+} from '../../shared/catalog.js';
 import type { Role } from '../../shared/contracts.js';
 import { registerPayroll } from '../payroll/index.js';
 import { serviceActorName } from '../service-api/keys.js';
@@ -54,6 +60,29 @@ function workflowState(steps: Role[], index: number): RequestState {
   if (index >= steps.length) return 'approved';
   return stateForRole(steps[index]) as RequestState;
 }
+/** Who may decide a step: its role, or the system owner at the approver step (decision 014). */
+function actsAs(actor: Actor, role: Role | null): boolean {
+  if (!role) return false;
+  return (
+    actor.role === role || (role === 'approver' && actor.role === 'hr' && actor.owner === true)
+  );
+}
+/** Independent reviewers someone could hold for a step, excluding the given people. */
+async function stepReviewers(tx: AsyncDb, role: Role, exclude: string[]): Promise<string[]> {
+  const rows = await tx.read<{ id: string }>(
+    `SELECT id FROM employee_access WHERE role=? AND status='active' ORDER BY id`,
+    [role],
+  );
+  const ids = rows.map((r) => r.id);
+  if (role === 'approver') {
+    const owners = await tx.read<{ id: string }>(
+      `SELECT e.id FROM employee_access e JOIN system_owners o ON o.employee_id=e.id
+       WHERE e.role='hr' AND e.status='active' ORDER BY e.id`,
+    );
+    ids.push(...owners.map((r) => r.id));
+  }
+  return ids.filter((id) => !exclude.includes(id));
+}
 function validateFormRelationships(kind: RequestKind, values: FormValues) {
   if (
     kind === 'contract' &&
@@ -97,11 +126,7 @@ async function ensureWorkflowAvailable(
         eligible = manager?.role === 'manager' && manager.status === 'active';
       }
     } else {
-      const rows = await tx.read<{ id: string }>(
-        'SELECT id FROM employee_access WHERE role=? AND status=? AND id<>? AND id<>? LIMIT 1',
-        [role, 'active', actor.id, employeeId],
-      );
-      eligible = rows.length > 0;
+      eligible = (await stepReviewers(tx, role, [actor.id, employeeId])).length > 0;
     }
     if (!eligible)
       throw fault(
@@ -131,12 +156,7 @@ async function notifyRequestTransition(
     if (role === 'manager')
       recipient = (await readEmployee(tx, request.employee_id))?.manager_id ?? undefined;
     else if (role) {
-      recipient = (
-        await tx.read<{ id: string }>(
-          'SELECT id FROM employee_access WHERE role=? AND status=? AND id<>? AND id<>? ORDER BY id LIMIT 1',
-          [role, 'active', request.created_by, request.employee_id],
-        )
-      )[0]?.id;
+      recipient = (await stepReviewers(tx, role, [request.created_by, request.employee_id]))[0];
     }
     if (
       recipient &&
@@ -213,7 +233,7 @@ function cleanRequest(
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     canAct:
-      roleFromState(row.state) === actor.role &&
+      actsAs(actor, roleFromState(row.state)) &&
       row.created_by !== actor.id &&
       owner.id !== actor.id &&
       (actor.role !== 'manager' || owner.manager_id === actor.id),
@@ -694,22 +714,57 @@ export function registerAdministration(
     const kind = requiredString(b.kind, 'INVALID_KIND', 'نوع الطلب غير صالح.', 60) as RequestKind;
     const form = formByKind[kind];
     if (!form) throw fault(400, 'INVALID_KIND', 'نوع الطلب غير معروف.');
-    if (!form.initiators.includes(actor.role))
-      throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية إنشاء هذا النوع من الطلبات.');
+    const onBehalf = b.onBehalf === undefined || b.onBehalf === null ? null : b.onBehalf;
     const employeeId = requiredString(b.employeeId, 'EMPLOYEE_REQUIRED', 'حدد الموظف.', 120);
+    let behalf: { channel: string; source: string } | null = null;
+    if (onBehalf !== null) {
+      // The owner's decision (2026-11-15): HR records an employee's request received on paper,
+      // by email or in person, while employees have no individual accounts. HR never decides it.
+      const o = requireRecord(onBehalf);
+      const channel = String(o.channel ?? '');
+      const source = typeof o.source === 'string' ? o.source.trim() : '';
+      if (actor.role !== 'hr' || !form.initiators.includes('employee'))
+        throw fault(
+          403,
+          'FORBIDDEN',
+          'الإدخال نيابة عن الموظف للموارد البشرية وفي طلبات الموظفين فقط.',
+        );
+      if (employeeId === actor.id)
+        throw fault(403, 'FORBIDDEN', 'لا تُدخل طلبك نيابة عن نفسك؛ قدّمه باسمك.');
+      if (!(channel in ON_BEHALF_CHANNELS) || !source || source.length > 500)
+        throw fault(
+          400,
+          'ON_BEHALF_SOURCE_REQUIRED',
+          'حدد كيف وصل الطلب ومرجعه (التاريخ أو رقم البريد).',
+        );
+      behalf = { channel, source };
+    } else if (!form.initiators.includes(actor.role))
+      throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية إنشاء هذا النوع من الطلبات.');
     const owner = await scopedEmployee(db, actor, employeeId);
     if (actor.role === 'employee' && owner.id !== actor.id)
       throw fault(403, 'FORBIDDEN', 'يمكنك إنشاء طلبك لنفسك فقط.');
+    if (
+      privateMode &&
+      (kind === 'salary_letter' || kind === 'employment_letter') &&
+      owner.status === 'terminated'
+    )
+      throw fault(
+        409,
+        'EMPLOYEE_NOT_CURRENT',
+        'انتهت خدمة الموظف، فلا يصدر له خطاب على رأس العمل. اطلب شهادة خبرة.',
+      );
     const values = validateValues(form.fields, b.values, { partial: !b.submit });
     validateFormRelationships(kind, values);
     const id = newId();
-    const steps = form.stepsByInitiator?.[actor.role] ?? form.steps;
+    const steps = behalf
+      ? onBehalfSteps(form)
+      : (form.stepsByInitiator?.[actor.role] ?? form.steps);
     const initial: RequestState = b.submit
       ? steps.length
         ? workflowState(steps, 0)
         : 'approved'
       : 'draft';
-    const body = { kind, employeeId, values, submit: b.submit };
+    const body = { kind, employeeId, values, submit: b.submit, behalf };
     const request = await idempotent(
       db,
       actor,
@@ -719,12 +774,14 @@ export function registerAdministration(
       async (tx, m) => getRequest(tx, actor, m.id),
       async (tx) => {
         const now = at();
+        // The number carries the Riyadh calendar date, not the UTC one.
+        const requestNumber = `HR-${todayInRiyadh().replaceAll('-', '')}-${id.slice(0, 6).toUpperCase()}`;
         if (b.submit) await ensureWorkflowAvailable(tx, actor, employeeId, steps);
         await tx.execute(
           'INSERT INTO administrative_requests(id,request_number,kind,employee_id,created_by,state,values_json,steps_json,step_index,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
           [
             id,
-            `HR-${now.slice(0, 10).replaceAll('-', '')}-${id.slice(0, 6).toUpperCase()}`,
+            requestNumber,
             kind,
             employeeId,
             actor.id,
@@ -742,8 +799,10 @@ export function registerAdministration(
           'request',
           id,
           b.submit ? 'submitted' : 'request_created',
-          null,
-          { kind },
+          behalf
+            ? `نيابة عن الموظف · ${ON_BEHALF_CHANNELS[behalf.channel]} · ${behalf.source}`
+            : null,
+          behalf ? { kind, onBehalf: true, channel: behalf.channel } : { kind },
           1,
           now,
         );
@@ -753,7 +812,7 @@ export function registerAdministration(
             actor,
             {
               id,
-              request_number: `HR-${now.slice(0, 10).replaceAll('-', '')}-${id.slice(0, 6).toUpperCase()}`,
+              request_number: requestNumber,
               kind,
               employee_id: employeeId,
               created_by: actor.id,
@@ -899,10 +958,26 @@ export function registerAdministration(
             const owner = await readEmployee(tx, row.employee_id);
             if (
               !expected ||
-              actor.role !== expected ||
+              !actsAs(actor, expected) ||
               (actor.role === 'manager' && owner?.manager_id !== actor.id)
             )
               throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية القرار في هذه المرحلة.');
+            if (actor.id === row.created_by || actor.id === row.employee_id)
+              throw fault(403, 'SELF_APPROVAL', 'لا تتخذ قرارًا في طلب أنشأته أو يخصك.');
+            const history = await tx.read<{ actor_id: string; action: string }>(
+              "SELECT actor_id,action FROM administration_events WHERE resource_type='request' AND resource_id=? ORDER BY created_at,id",
+              [row.id],
+            );
+            const lastSubmit = history.findLastIndex((e) =>
+              ['submitted', 'submit'].includes(e.action),
+            );
+            const sinceSubmit = history.slice(lastSubmit + 1);
+            if (sinceSubmit.some((e) => e.actor_id === actor.id && e.action === 'approve'))
+              throw fault(
+                403,
+                'SECOND_DECISION',
+                'سبق أن وافقت على مرحلة في هذا الطلب؛ القرار التالي لغيرك.',
+              );
             if (action === 'approve') {
               nextIndex++;
               nextState = workflowState(steps, nextIndex);
@@ -939,6 +1014,7 @@ export function registerAdministration(
                   values,
                 },
                 actor,
+                { privateMode },
               );
               await tx.execute(
                 'UPDATE administrative_requests SET issued_document_json=? WHERE id=?',
@@ -1114,7 +1190,7 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         actor,
         row.employee_id,
         { [fieldName]: values.newValue },
-        reason || String(values.reason ?? 'Approved synthetic data change'),
+        reason || String(values.reason ?? 'Approved data change'),
         effectiveAt,
         owner.record_version,
         true,
@@ -1126,7 +1202,7 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         actor,
         row.employee_id,
         { bankName: values.bankName, iban: values.iban },
-        reason || String(values.reason ?? 'Approved synthetic bank change'),
+        reason || String(values.reason ?? 'Approved bank change'),
         effectiveAt,
         owner.record_version,
         true,
@@ -1141,7 +1217,7 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         actor,
         row.employee_id,
         changes,
-        reason || String(values.reason ?? 'Approved synthetic transfer'),
+        reason || String(values.reason ?? 'Approved transfer'),
         String(values.effectiveDate ?? ''),
         owner.record_version,
         true,
@@ -1164,7 +1240,7 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
           noticeDays: values.noticeDays ?? null,
           qiwaReference: values.qiwaReference ?? null,
         },
-        reason || String(values.reason ?? 'Approved synthetic contract'),
+        reason || String(values.reason ?? 'Approved contract'),
         String(values.startDate),
         owner.record_version,
         true,
@@ -1180,7 +1256,7 @@ async function applyApprovedSideEffect(tx: AsyncDb, actor: Actor, row: any, reas
         actor,
         row.employee_id,
         { separationDate: lastDay, separationReason: values.reasonType ?? null },
-        reason || 'Approved synthetic separation',
+        reason || 'Approved separation',
         lastDay,
         owner.record_version,
         true,
