@@ -14,7 +14,6 @@ import {
   BadgeCheck,
   ArrowUpLeft,
   Bell,
-  CalendarClock,
   CalendarDays,
   Check,
   CheckCheck,
@@ -33,8 +32,6 @@ import {
   Users,
   X,
   Files,
-  BriefcaseBusiness,
-  Clock3,
   ChartNoAxesCombined,
   WalletCards,
   Settings2,
@@ -82,6 +79,7 @@ import { LeaveEntitlementPage } from './leave/Entitlement';
 import { EndOfServicePage } from './end-of-service';
 import { OperationsPage } from './operations';
 import { FinancePortal } from './finance/portal';
+import { SectionTabs, sectionGroups } from './SectionTabs';
 
 function EmployeeFileRoute() {
   const { id } = useParams();
@@ -516,13 +514,14 @@ export default function App() {
         ).length,
       0,
     );
-  const navItems = [
+  const groups = sectionGroups(data.me.role, accountMode);
+  const navItems: { to: string; label: string; Icon: typeof LayoutGrid; match?: string[] }[] = [
     { to: '/', label: 'لوحة العمل', Icon: LayoutGrid },
     { to: '/profile', label: 'ملفي الوظيفي', Icon: UserRound },
     { to: '/leaves', label: 'الإجازات', Icon: CalendarDays },
-    { to: '/services', label: 'الخدمات الإدارية', Icon: BriefcaseBusiness },
-    { to: '/requests', label: 'طلباتي ومتابعاتي', Icon: Files },
-    { to: '/attendance', label: 'الحضور والعمل', Icon: Clock3 },
+    { to: '/requests', label: 'الطلبات والخدمات', Icon: Files, match: ['/services', '/requests'] },
+    // Daily attendance is hidden from the menu by the owner's decision (2026-11-15);
+    // the page and its records stay. Overtime is a request that reaches payroll.
     ...(['hr', 'manager', 'finance', 'approver'].includes(data.me.role)
       ? [{ to: '/approvals', label: 'الموافقات', Icon: ClipboardCheck }]
       : []),
@@ -540,50 +539,62 @@ export default function App() {
           },
         ]
       : []),
+    ...(groups.entitlements.length
+      ? [
+          {
+            to: groups.entitlements[0].to,
+            label: 'المستحقات ونهاية الخدمة',
+            Icon: BadgeCheck,
+            match: groups.entitlements.map((tab) => tab.to),
+          },
+        ]
+      : []),
     ...(data.financeAccess ? [{ to: '/finance', label: 'النظام المالي', Icon: ReceiptText }] : []),
     ...(['hr', 'finance', 'auditor'].includes(data.me.role)
       ? [{ to: '/reports', label: 'التقارير', Icon: ChartNoAxesCombined }]
       : []),
-    ...(['hr', 'approver', 'auditor'].includes(data.me.role)
+    ...(groups.settings.length
       ? [
-          ...(!accountMode
-            ? [{ to: '/settings/policies', label: 'القواعد والسياسات', Icon: Settings2 }]
-            : []),
-          { to: '/settings/leave', label: 'سياسات الإجازات', Icon: CalendarDays },
+          {
+            to: groups.settings[0].to,
+            label: 'الإعدادات',
+            Icon: Settings2,
+            match: groups.settings.map((tab) => tab.to),
+          },
         ]
-      : []),
-    ...(['hr', 'finance', 'approver'].includes(data.me.role)
-      ? [
-          { to: '/leave-entitlement', label: 'استحقاق الإجازات والتصفية', Icon: CalendarClock },
-          { to: '/end-of-service', label: 'نهاية الخدمة', Icon: BadgeCheck },
-        ]
-      : []),
-    ...(accountMode
-      ? [{ to: '/settings/accounts', label: 'الحسابات والوصول', Icon: ShieldCheck }]
-      : []),
-    ...(accountMode && ['hr', 'auditor'].includes(data.me.role)
-      ? [{ to: '/settings/operations', label: 'حالة التشغيل', Icon: History }]
       : []),
     ...(['hr', 'auditor'].includes(data.me.role)
       ? [{ to: '/audit', label: 'سجل التدقيق', Icon: History }]
       : []),
   ];
+  const isCurrent = (item: (typeof navItems)[number]) =>
+    item.match
+      ? item.match.some(
+          (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
+        )
+      : item.to === '/'
+        ? location.pathname === '/'
+        : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`);
   const nav = (
     <nav aria-label="التنقل الرئيسي">
-      {navItems.map(({ to, label, Icon }) => (
-        <NavLink
-          end={to === '/'}
-          to={to}
-          key={to}
-          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-        >
-          <Icon size={20} />
-          <span>{label}</span>
-          {to === '/approvals' && actionable + administrativePending > 0 && (
-            <b className="nav-count">{actionable + administrativePending}</b>
-          )}
-        </NavLink>
-      ))}
+      {navItems.map((item) => {
+        const { to, label, Icon } = item;
+        const current = isCurrent(item);
+        return (
+          <NavLink
+            to={to}
+            key={to}
+            aria-current={current ? 'page' : undefined}
+            className={() => `nav-link ${current ? 'active' : ''}`}
+          >
+            <Icon size={20} />
+            <span>{label}</span>
+            {to === '/approvals' && actionable + administrativePending > 0 && (
+              <b className="nav-count">{actionable + administrativePending}</b>
+            )}
+          </NavLink>
+        );
+      })}
     </nav>
   );
   const selectedLeave = leaveId ? data.leaves.find((l) => l.id === leaveId) : null;
@@ -739,10 +750,23 @@ export default function App() {
                 }
               />
               <Route path="/calendar" element={<CalendarPage />} />
-              <Route path="/services" element={<ServicesPage />} />
+              <Route
+                path="/services"
+                element={
+                  <>
+                    <SectionTabs label="الطلبات والخدمات" tabs={groups.requests} />
+                    <ServicesPage />
+                  </>
+                }
+              />
               <Route
                 path="/requests"
-                element={<RequestsPage openRequest={(id) => navigate(`/requests/${id}`)} />}
+                element={
+                  <>
+                    <SectionTabs label="الطلبات والخدمات" tabs={groups.requests} />
+                    <RequestsPage openRequest={(id) => navigate(`/requests/${id}`)} />
+                  </>
+                }
               />
               <Route path="/requests/:id" element={<RequestRoute />} />
               <Route path="/attendance" element={<AttendancePage />} />
@@ -752,18 +776,69 @@ export default function App() {
               <Route path="/reports" element={<ReportsPage />} />
               <Route
                 path="/settings/policies"
-                element={accountMode ? <Navigate replace to="/settings/leave" /> : <PoliciesPage />}
+                element={
+                  accountMode ? (
+                    <Navigate replace to="/settings/leave" />
+                  ) : (
+                    <>
+                      <SectionTabs label="الإعدادات" tabs={groups.settings} />
+                      <PoliciesPage />
+                    </>
+                  )
+                }
               />
-              <Route path="/settings/leave" element={<LeavePoliciesPage />} />
-              <Route path="/leave-entitlement" element={<LeaveEntitlementPage />} />
-              <Route path="/end-of-service" element={<EndOfServicePage />} />
+              <Route
+                path="/settings/leave"
+                element={
+                  <>
+                    <SectionTabs label="الإعدادات" tabs={groups.settings} />
+                    <LeavePoliciesPage />
+                  </>
+                }
+              />
+              <Route
+                path="/leave-entitlement"
+                element={
+                  <>
+                    <SectionTabs label="المستحقات ونهاية الخدمة" tabs={groups.entitlements} />
+                    <LeaveEntitlementPage />
+                  </>
+                }
+              />
+              <Route
+                path="/end-of-service"
+                element={
+                  <>
+                    <SectionTabs label="المستحقات ونهاية الخدمة" tabs={groups.entitlements} />
+                    <EndOfServicePage />
+                  </>
+                }
+              />
               <Route
                 path="/settings/accounts"
-                element={accountMode ? <AccountsPage /> : <Navigate replace to="/" />}
+                element={
+                  accountMode ? (
+                    <>
+                      <SectionTabs label="الإعدادات" tabs={groups.settings} />
+                      <AccountsPage />
+                    </>
+                  ) : (
+                    <Navigate replace to="/" />
+                  )
+                }
               />
               <Route
                 path="/settings/operations"
-                element={accountMode ? <OperationsPage /> : <Navigate replace to="/" />}
+                element={
+                  accountMode ? (
+                    <>
+                      <SectionTabs label="الإعدادات" tabs={groups.settings} />
+                      <OperationsPage />
+                    </>
+                  ) : (
+                    <Navigate replace to="/" />
+                  )
+                }
               />
               <Route path="/audit" element={<AuditPage />} />
               <Route path="*" element={<Navigate replace to="/" />} />

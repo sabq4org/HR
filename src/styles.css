@@ -4289,3 +4289,44 @@
     padding: 0 !important;
   }
 }
+@layer components {
+  nav.section-tabs {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 16px;
+    padding: 4px;
+    width: fit-content;
+    max-width: 100%;
+    background: #eef3f8;
+    border-radius: 10px;
+  }
+  .section-tab {
+    padding: 7px 14px;
+    border-radius: 8px;
+    color: #4d5866;
+    font-size: 13px;
+    font-weight: 550;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .section-tab:hover {
+    color: #1264a3;
+  }
+  .section-tab.active {
+    background: #ffffff;
+    color: #1264a3;
+    font-weight: 650;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+  }
+  .leave-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .section-tab:focus-visible {
+    outline: 2px solid #1264a3;
+    outline-offset: 2px;
+  }
+}

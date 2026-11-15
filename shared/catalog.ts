@@ -695,6 +695,7 @@ export const formDefinitions: FormDefinition[] = [
     steps: ['finance', 'approver'],
     confidential: true,
     printable: true,
+    replacedBy: { label: 'المستحقات ونهاية الخدمة', path: '/end-of-service' },
     fields: [
       field('separationReference', 'مرجع حالة الانتهاء', 'text', required),
       field('lastDay', 'آخر يوم عمل', 'date', required),

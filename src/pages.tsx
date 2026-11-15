@@ -324,10 +324,19 @@ export function LeavesPage() {
         title="الإجازات والطلبات"
         subtitle="خطّط لاستراحتك، وتابع طلبك خطوة بخطوة."
         action={
-          <button className="button primary" onClick={newLeave}>
-            <Plus size={18} />
-            طلب إجازة
-          </button>
+          <div className="leave-actions">
+            {['employee', 'manager', 'hr'].includes(data.me.role) && (
+              // Statutory leaves other than annual (sick, maternity, bereavement, hajj, exam,
+              // unpaid…) go through the "special leave" request, reached from here too.
+              <Link className="button quiet" to="/services?kind=special_leave">
+                إجازة نظامية أخرى
+              </Link>
+            )}
+            <button className="button primary" onClick={newLeave}>
+              <Plus size={18} />
+              طلب إجازة
+            </button>
+          </div>
         }
       />
       <div className="leave-summary">

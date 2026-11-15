@@ -58,6 +58,9 @@ export interface FormDefinition {
   fields: FormField[];
   confidential?: boolean;
   printable?: boolean;
+  /** Hidden from the new-request catalog because a dedicated page replaced it. Existing
+   * requests of this kind keep their full workflow, and the server still accepts the kind. */
+  replacedBy?: { label: string; path: string };
 }
 export interface AdministrativeRequest {
   id: string;
