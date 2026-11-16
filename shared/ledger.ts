@@ -167,6 +167,17 @@ export interface LedgerVoucher {
   dueDate: string;
   version: number;
   createdAt: string;
+  /**
+   * The owner paid this document from his own money: an expense recorded as paid by him, or a
+   * vendor payment he made. The company owes him the total until refunds settle it.
+   */
+  paidByOwner: boolean;
+  /** For an owner-paid document: refunded so far and still owed to him. */
+  ownerRefundedHalalas: number;
+  ownerOutstandingHalalas: number;
+  /** A refund to the owner (a payment voucher debiting the owner account). */
+  isOwnerRefund: boolean;
+  attachmentCount: number;
 }
 export interface RevenueInput {
   date: string;
@@ -190,6 +201,8 @@ export interface ExpenseInput {
   vat?: string;
   /** A cash/bank account code, or empty to record the amount as payable to the vendor. */
   cashAccountCode: string;
+  /** 'owner': the owner paid it from his own card; the amount is owed to him (cashAccountCode empty). */
+  paidBy?: 'company' | 'owner';
   vendorId?: string;
   reference?: string;
   dueDate?: string;
@@ -203,7 +216,82 @@ export interface SettlementInput {
   date: string;
   amount: string;
   cashAccountCode: string;
+  /** Vendor payments only: 'owner' when the owner paid the vendor from his own card. */
+  paidBy?: 'company' | 'owner';
   reference?: string;
+}
+
+// ---------------------------------------------------------------- owner-paid expenses
+/** Largest attachment accepted, bytes (before encryption; stored about 1.4x in the database). */
+export const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+export const ATTACHMENTS_PER_VOUCHER = 10;
+/** Ceiling for all finance attachments together, so the free database plan is not exhausted. */
+export const ATTACHMENTS_TOTAL_BYTES = 250 * 1024 * 1024;
+export const attachmentTypes = ['application/pdf', 'image/png', 'image/jpeg'] as const;
+export type AttachmentType = (typeof attachmentTypes)[number];
+export interface VoucherAttachment {
+  id: string;
+  voucherId: string;
+  fileName: string;
+  mimeType: AttachmentType;
+  sizeBytes: number;
+  uploadedAt: string;
+  version: number;
+}
+export interface AttachmentInput {
+  fileName: string;
+  mimeType: AttachmentType;
+  contentBase64: string;
+}
+export interface OwnerRefundInput {
+  date: string;
+  amount: string;
+  /** Bank or cash account the company paid the owner from. */
+  cashAccountCode: string;
+  reference?: string;
+  /**
+   * Documents to settle, in this order. Empty settles the oldest outstanding first.
+   * The amount must not exceed what is still owed on them.
+   */
+  claimIds?: string[];
+}
+export interface OwnerClaimRow {
+  voucherId: string;
+  number: string;
+  date: string;
+  description: string;
+  partyName: string;
+  reference: string;
+  accountName: string;
+  totalHalalas: number;
+  refundedHalalas: number;
+  outstandingHalalas: number;
+  attachmentCount: number;
+}
+export interface OwnerRefundRow {
+  voucherId: string;
+  number: string;
+  date: string;
+  cashAccountName: string;
+  reference: string;
+  totalHalalas: number;
+  status: 'posted' | 'reversed';
+  allocations: { claimNumber: string; amountHalalas: number }[];
+}
+/** What the company owes the owner for expenses he paid, as of a date. */
+export interface OwnerStatement {
+  seller: FinanceSeller;
+  asOf: string;
+  accountCode: string;
+  accountName: string;
+  /** Owner-paid documents still carrying a balance (or all, when `all` was asked). */
+  claims: OwnerClaimRow[];
+  refunds: OwnerRefundRow[];
+  paidHalalas: number;
+  refundedHalalas: number;
+  outstandingHalalas: number;
+  /** Ledger balance of the owner account; equals outstanding unless manual entries touched it. */
+  ledgerBalanceHalalas: number;
 }
 export interface CreditNoteInput {
   date: string;
@@ -484,6 +572,7 @@ export const defaultChart: readonly ChartSeedAccount[] = [
     ['2130', 'مصروفات مستحقة'],
     ['2140', 'إيرادات مقدمة (غير مكتسبة)'],
     ['2150', 'الزكاة المستحقة'],
+    ['2160', 'مستحق للمالك – مصروفات سددها من ماله الخاص', { systemKey: 'owner_payable' }],
     ['22', 'الخصوم غير المتداولة', group],
     ['2201', 'مخصص مكافأة نهاية الخدمة'],
   ]),
@@ -562,6 +651,12 @@ export const defaultChart: readonly ChartSeedAccount[] = [
 // POST  /api/finance/ledger/revenues RevenueInput -> {voucher}
 // POST  /api/finance/ledger/expenses ExpenseInput -> {voucher}
 // POST  /api/finance/ledger/expenses/:id/payments SettlementInput -> {voucher}
+// GET   /api/finance/ledger/vouchers/:id/attachments -> {attachments}
+// POST  /api/finance/ledger/vouchers/:id/attachments AttachmentInput (7 MB JSON) -> {attachment}
+// GET   /api/finance/ledger/attachments/:id/download -> file (private, no-store)
+// POST  /api/finance/ledger/attachments/:id/remove {version,reason} -> {attachment}
+// GET   /api/finance/ledger/owner?asOf&all -> OwnerStatement ; owner.pdf?asOf -> PDF
+// POST  /api/finance/ledger/owner/refunds OwnerRefundInput -> {voucher}
 // POST  /api/finance/ledger/vouchers/:id/reverse {version,date,reason} -> {voucher}
 // GET   /api/finance/ledger/reports/trial-balance?from&to ; income-statement?from&to ;
 //       balance-sheet?asOf ; account/:code?from&to ; aging?asOf&side ; budget?year

@@ -23,6 +23,7 @@ import { fault } from '../administration/validation.js';
 import {
   audited,
   dateValue,
+  getSettings,
   idempotent,
   now,
   optionalText,
@@ -36,6 +37,9 @@ import {
   type InvoiceRow,
 } from './routes.js';
 import * as ledger from './ledger.js';
+import * as owner from './owner-expenses.js';
+import { htmlToPdf } from './chromium-pdf.js';
+import { ownerStatementHtml } from './document-html.js';
 import { halalas, n, vatOf, type PostLine } from './ledger.js';
 
 type Options = { db: AsyncDb; requireActor: RequireActor; access: FinanceAccessOptions };
@@ -653,10 +657,15 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
       net: halalas(b.net),
       vat: b.vat === undefined || b.vat === '' ? null : halalas(b.vat),
       cash: optionalText(b.cashAccountCode, 20),
+      paidByOwner: b.paidBy === 'owner',
       vendorId: optionalText(b.vendorId, 80),
       reference: optionalText(b.reference, 120),
       dueDate: b.dueDate ? dateValue(b.dueDate) : '',
     };
+    if (b.paidBy !== undefined && b.paidBy !== 'owner' && b.paidBy !== 'company')
+      throw fault(400, 'INVALID_PAID_BY', 'حدد من سدد المصروف.');
+    if (payload.paidByOwner && payload.cash)
+      throw fault(400, 'INVALID_PAID_BY', 'المصروف الذي سدده المالك لا يُختار له حساب بنك.');
     const id = await mutation(req, actor, 'finance.ledger.expense.create', payload, async (tx) => {
       const row = (await ledger.accountRows(tx, actor.id)).get(payload.accountCode);
       if (
@@ -693,7 +702,12 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
           throw fault(400, 'IMPORT_VAT_REQUIRED', 'أدخل مبلغ الضريبة المسدد في البيان الجمركي.');
         vat = payload.vat;
       }
-      const cash = payload.cash ? await cashAccount(tx, actor.id, payload.cash) : null;
+      // Paid by the owner from his own card: owed to him, recorded like a payment source.
+      const cash = payload.paidByOwner
+        ? await ledger.ensureOwnerAccount(tx, actor)
+        : payload.cash
+          ? await cashAccount(tx, actor.id, payload.cash)
+          : null;
       const credit = cash ?? (await ledger.systemAccount(tx, actor.id, 'payable'));
       const input = await ledger.systemAccount(tx, actor.id, 'vat_input'),
         output = await ledger.systemAccount(tx, actor.id, 'vat_output');
@@ -715,7 +729,7 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
           description: payload.description,
           reference: payload.reference,
           partyName: party?.name ?? '',
-          dueDate: payload.dueDate,
+          dueDate: payload.cash || payload.paidByOwner ? '' : payload.dueDate,
         },
         lines: [
           {
@@ -746,10 +760,12 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
     const actor = await ready(req),
       b = requireRecord(req.body),
       expenseId = routeId(req.params.id);
+    const paidByOwner = b.paidBy === 'owner';
     const payload = {
       date: dateValue(b.date),
       amount: halalas(b.amount),
-      cash: text(b.cashAccountCode, 20),
+      cash: paidByOwner ? '' : text(b.cashAccountCode, 20),
+      paidByOwner,
       reference: optionalText(b.reference, 120),
     };
     const id = await mutation(
@@ -765,7 +781,10 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
           throw fault(400, 'PAYMENT_EXCEEDS_BALANCE', 'المبلغ يتجاوز المستحق للمورد.');
         if (payload.date < source.date)
           throw fault(400, 'INVALID_DATE_RANGE', 'تاريخ السداد لا يسبق تاريخ المصروف.');
-        const cash = await cashAccount(tx, actor.id, payload.cash);
+        // The owner paying the vendor from his card moves the debt from the vendor to him.
+        const cash = payload.paidByOwner
+          ? await ledger.ensureOwnerAccount(tx, actor)
+          : await cashAccount(tx, actor.id, payload.cash);
         return ledger.createVoucher(tx, actor, {
           kind: 'payment',
           date: payload.date,
@@ -776,7 +795,7 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
           vat: 0,
           total: payload.amount,
           details: {
-            description: `سداد ${source.number}${source.partyName ? ` · ${source.partyName}` : ''}`,
+            description: `${payload.paidByOwner ? 'سدده المالك من ماله الخاص: ' : 'سداد '}${source.number}${source.partyName ? ` · ${source.partyName}` : ''}`,
             reference: payload.reference,
             partyName: source.partyName,
           },
@@ -790,6 +809,108 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
           ],
         });
       },
+    );
+    res.status(201).json({ voucher: await ledger.readVoucher(db, actor.id, id) });
+  });
+  // ------------------------------------------------------------ owner-paid expenses
+  // Plain-ASCII fallback name for clients that ignore filename*.
+  const asciiName = (file: { id: string; fileName: string; mimeType: string }) =>
+    `attachment-${file.id.slice(0, 8)}.${file.mimeType === 'application/pdf' ? 'pdf' : file.mimeType === 'image/png' ? 'png' : 'jpg'}`;
+  registerRoute(app, 'get', '/api/finance/ledger/vouchers/:id/attachments', async (req, res) => {
+    const actor = await ready(req);
+    res.json({
+      attachments: await owner.listAttachments(db, actor.id, routeId(req.params.id)),
+    });
+  });
+  registerRoute(app, 'post', '/api/finance/ledger/vouchers/:id/attachments', async (req, res) => {
+    const actor = await ready(req),
+      voucherId = routeId(req.params.id),
+      file = owner.attachmentFile(requireRecord(req.body));
+    const id = await mutation(
+      req,
+      actor,
+      `finance.ledger.attachment.add:${voucherId}`,
+      { name: file.name, mime: file.mime, checksum: file.checksum },
+      (tx) => owner.addAttachment(tx, actor, voucherId, file),
+    );
+    res.status(201).json({ attachment: await owner.readAttachment(db, actor.id, id) });
+  });
+  registerRoute(app, 'get', '/api/finance/ledger/attachments/:id/download', async (req, res) => {
+    const actor = await ready(req);
+    const { attachment, bytes } = await owner.attachmentContent(
+      db,
+      actor.id,
+      routeId(req.params.id),
+    );
+    await audited(db, actor, 'finance_attachment', attachment.id, 'attachment_downloaded', 1);
+    // Inline lets the browser show the PDF or image; the file is never cached or made public.
+    res
+      .status(200)
+      .type(attachment.mimeType)
+      .set(
+        'content-disposition',
+        `${query(req, 'inline') ? 'inline' : 'attachment'}; filename="${asciiName(attachment)}"; filename*=UTF-8''${encodeURIComponent(attachment.fileName)}`,
+      )
+      .set('cache-control', 'private, no-store')
+      .set('x-content-type-options', 'nosniff')
+      .set(
+        'content-security-policy',
+        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
+      )
+      .send(bytes);
+  });
+  registerRoute(app, 'post', '/api/finance/ledger/attachments/:id/remove', async (req, res) => {
+    const actor = await ready(req),
+      b = requireRecord(req.body),
+      id = routeId(req.params.id);
+    const payload = { version: versionValue(b.version), reason: text(b.reason, 300) };
+    await mutation(req, actor, `finance.ledger.attachment.remove:${id}`, payload, async (tx) => {
+      await owner.removeAttachment(tx, actor, id, payload.version, payload.reason);
+      return id;
+    });
+    res.json({ removed: id });
+  });
+  const ownerStatementFor = async (req: Request, actor: Actor) =>
+    owner.ownerStatement(
+      db,
+      actor.id,
+      (await getSettings(db, actor.id, access.privateMode)).seller,
+      queryDate(req, 'asOf', todayInRiyadh()),
+      query(req, 'all') === '1',
+    );
+  registerRoute(app, 'get', '/api/finance/ledger/owner', async (req, res) => {
+    const actor = await ready(req);
+    res.json(await ownerStatementFor(req, actor));
+  });
+  registerRoute(app, 'get', '/api/finance/ledger/owner.pdf', async (req, res) => {
+    const actor = await ready(req);
+    const statement = await ownerStatementFor(req, actor);
+    const bytes = await htmlToPdf(ownerStatementHtml(statement));
+    if (!bytes)
+      throw fault(503, 'PDF_RENDERER_UNAVAILABLE', 'خدمة توليد PDF غير متاحة حاليًا؛ أعد المحاولة.');
+    await audited(db, actor, 'finance_ledger', actor.id, 'owner_statement_pdf_exported', 1);
+    res
+      .status(200)
+      .type('application/pdf')
+      .set('content-disposition', `attachment; filename="owner-due-${statement.asOf}.pdf"`)
+      .set('cache-control', 'private, no-store')
+      .send(bytes);
+  });
+  registerRoute(app, 'post', '/api/finance/ledger/owner/refunds', async (req, res) => {
+    const actor = await ready(req),
+      b = requireRecord(req.body);
+    const ids = b.claimIds === undefined ? [] : b.claimIds;
+    if (!Array.isArray(ids) || ids.length > 200)
+      throw fault(400, 'INVALID_INPUT', 'قائمة المستندات غير صالحة.');
+    const payload: owner.OwnerRefundPayload = {
+      date: dateValue(b.date),
+      amount: halalas(b.amount),
+      cash: text(b.cashAccountCode, 20),
+      reference: optionalText(b.reference, 120),
+      claimIds: ids.map((id) => routeId(String(id))),
+    };
+    const id = await mutation(req, actor, 'finance.ledger.owner.refund', payload, (tx) =>
+      owner.createOwnerRefund(tx, actor, payload),
     );
     res.status(201).json({ voucher: await ledger.readVoucher(db, actor.id, id) });
   });

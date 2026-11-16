@@ -564,6 +564,52 @@ export async function readVendor(db: AsyncDb, ownerId: string, id: string): Prom
   return vendor(row);
 }
 
+// ---------------------------------------------------------------- owner account
+/** The liability account "due to the owner", or null when the ledger has none yet. */
+export async function ownerAccountCode(db: AsyncDb, ownerId: string): Promise<string | null> {
+  return (
+    (
+      await db.read<{ code: string }>(
+        "SELECT code FROM finance_accounts WHERE owner_id=? AND system_key='owner_payable'",
+        [ownerId],
+      )
+    )[0]?.code ?? null
+  );
+}
+/**
+ * Returns the owner account, adding it on first use for a ledger set up before it existed:
+ * 2160 under 21 (current liabilities), or the next free code up to 2199.
+ */
+export async function ensureOwnerAccount(tx: AsyncDb, actor: Actor): Promise<string> {
+  const existing = await ownerAccountCode(tx, actor.id);
+  if (existing) return existing;
+  const accounts = await accountRows(tx, actor.id);
+  if (!accounts.has('21')) throw fault(409, 'LEDGER_NOT_INITIALIZED', 'هيّئ دليل الحسابات أولًا.');
+  let code = 2160;
+  while (accounts.has(String(code)) && code < 2199) code += 1;
+  if (accounts.has(String(code)))
+    throw fault(409, 'ACCOUNT_CODE_TAKEN', 'لا يوجد رمز متاح لحساب المستحق للمالك تحت 21.');
+  const at = now();
+  await tx.execute(
+    "INSERT INTO finance_accounts(owner_id,code,name,type,normal_side,parent_code,postable,is_cash,system_key,default_tax_code,active,version,created_at,updated_at) VALUES(?,?,?,'liability','credit','21',1,0,'owner_payable',NULL,1,1,?,?)",
+    [actor.id, String(code), 'مستحق للمالك – مصروفات سددها من ماله الخاص', at, at],
+  );
+  await audited(tx, actor, 'finance_account', String(code), 'owner_account_created', 1);
+  return String(code);
+}
+/** Refunded so far per owner-paid document, counting only refunds that are still posted. */
+export async function ownerRefundedMap(
+  db: AsyncDb,
+  ownerId: string,
+  claimId?: string,
+): Promise<Map<string, number>> {
+  const rows = await db.read<{ claim_voucher_id: string; s: unknown }>(
+    `SELECT a.claim_voucher_id, SUM(a.amount) AS s FROM finance_owner_allocations a JOIN finance_vouchers r ON r.owner_id=a.owner_id AND r.id=a.refund_voucher_id WHERE a.owner_id=? AND r.status='posted'${claimId ? ' AND a.claim_voucher_id=?' : ''} GROUP BY a.claim_voucher_id`,
+    claimId ? [ownerId, claimId] : [ownerId],
+  );
+  return new Map(rows.map((row) => [row.claim_voucher_id, n(row.s)]));
+}
+
 // ---------------------------------------------------------------- vouchers
 type VoucherRow = {
   id: string;
@@ -605,21 +651,45 @@ const voucherPrefix: Record<VoucherKind, string> = {
 };
 export const voucherDetails = (row: { id: string; details_ciphertext: string }) =>
   safeJson<VoucherDetails>(row.details_ciphertext, `finance:voucher:${row.id}`);
-async function settledMap(db: AsyncDb, ownerId: string): Promise<Map<string, number>> {
+/** Settlement figures every voucher view needs, read once per listing. */
+type VoucherContext = {
+  settled: Map<string, number>;
+  ownerCode: string | null;
+  ownerRefunded: Map<string, number>;
+  attachments: Map<string, number>;
+};
+async function voucherContext(db: AsyncDb, ownerId: string): Promise<VoucherContext> {
   const rows = await db.read<{ related_id: string; s: unknown }>(
     "SELECT related_id, SUM(total) AS s FROM finance_vouchers WHERE owner_id=? AND status='posted' AND kind IN ('receipt','credit_note','payment') AND related_id IS NOT NULL GROUP BY related_id",
     [ownerId],
   );
-  return new Map(rows.map((row) => [row.related_id, n(row.s)]));
+  return {
+    settled: new Map(rows.map((row) => [row.related_id, n(row.s)])),
+    ownerCode: await ownerAccountCode(db, ownerId),
+    ownerRefunded: await ownerRefundedMap(db, ownerId),
+    attachments: new Map(
+      (
+        await db.read<{ voucher_id: string; c: unknown }>(
+          "SELECT voucher_id, COUNT(*) AS c FROM finance_voucher_attachments WHERE owner_id=? AND state='active' GROUP BY voucher_id",
+          [ownerId],
+        )
+      ).map((row) => [row.voucher_id, n(row.c)]),
+    ),
+  };
 }
-function voucher(row: VoucherRow, settled: Map<string, number>): LedgerVoucher {
+function voucher(row: VoucherRow, context: VoucherContext): LedgerVoucher {
   const details = voucherDetails(row),
     total = n(row.total);
   // Only documents that carry a balance settle: posted invoices and expenses bought on credit.
   const open =
     row.status === 'posted' &&
     (row.kind === 'invoice' || (row.kind === 'expense' && !row.cash_account_code));
-  const paid = open ? (settled.get(row.id) ?? 0) : 0;
+  const paid = open ? (context.settled.get(row.id) ?? 0) : 0;
+  const paidByOwner =
+    !!context.ownerCode &&
+    (row.kind === 'expense' || row.kind === 'payment') &&
+    row.cash_account_code === context.ownerCode;
+  const ownerRefunded = paidByOwner ? (context.ownerRefunded.get(row.id) ?? 0) : 0;
   return {
     id: row.id,
     kind: row.kind,
@@ -644,6 +714,12 @@ function voucher(row: VoucherRow, settled: Map<string, number>): LedgerVoucher {
     dueDate: details.dueDate ?? '',
     version: n(row.version),
     createdAt: row.created_at,
+    paidByOwner,
+    ownerRefundedHalalas: ownerRefunded,
+    ownerOutstandingHalalas: paidByOwner && row.status === 'posted' ? total - ownerRefunded : 0,
+    isOwnerRefund:
+      !!context.ownerCode && row.kind === 'payment' && row.account_code === context.ownerCode,
+    attachmentCount: context.attachments.get(row.id) ?? 0,
   };
 }
 const voucherSelect =
@@ -657,8 +733,8 @@ export async function listVouchers(
     `${voucherSelect} WHERE v.owner_id=?${kinds?.length ? ` AND v.kind IN (${kinds.map(() => '?').join(',')})` : ''} ORDER BY v.doc_date DESC, v.number DESC LIMIT 1000`,
     [ownerId, ...(kinds ?? [])],
   );
-  const settled = await settledMap(db, ownerId);
-  return rows.map((row) => voucher(row, settled));
+  const context = await voucherContext(db, ownerId);
+  return rows.map((row) => voucher(row, context));
 }
 export async function voucherRow(db: AsyncDb, ownerId: string, id: string): Promise<VoucherRow> {
   const row = (
@@ -668,7 +744,7 @@ export async function voucherRow(db: AsyncDb, ownerId: string, id: string): Prom
   return row;
 }
 export async function readVoucher(db: AsyncDb, ownerId: string, id: string) {
-  return voucher(await voucherRow(db, ownerId, id), await settledMap(db, ownerId));
+  return voucher(await voucherRow(db, ownerId, id), await voucherContext(db, ownerId));
 }
 export type VoucherInput = {
   kind: VoucherKind;
@@ -753,6 +829,13 @@ export async function reverseVoucher(
       409,
       'VOUCHER_HAS_SETTLEMENTS',
       'اعكس أولًا سندات التحصيل أو السداد أو الإشعارات المرتبطة بهذا المستند.',
+    );
+  // A refund to the owner was allocated to this document: reverse the refund first.
+  if ((await ownerRefundedMap(tx, actor.id, id)).get(id))
+    throw fault(
+      409,
+      'VOUCHER_HAS_SETTLEMENTS',
+      'رُدّ للمالك مبلغ عن هذا المستند؛ اعكس سند الرد أولًا ثم اعكس المستند.',
     );
   await reverseEntry(tx, actor, row.entry_id, date, reason);
   const changed = await tx.execute(
@@ -1507,7 +1590,12 @@ export async function aging(
   const items = rows
     .filter((row) => (row.kind === 'invoice' || row.kind === 'expense') && live(row))
     // `voucher` settles posted documents only; one reversed after the date was still open on it.
-    .map((row) => voucher({ ...row, status: 'posted' }, settled));
+    .map((row) =>
+      voucher(
+        { ...row, status: 'posted' },
+        { settled, ownerCode: null, ownerRefunded: new Map(), attachments: new Map() },
+      ),
+    );
   return items
     .filter((item) => item.outstandingHalalas !== 0)
     .map((item) => {

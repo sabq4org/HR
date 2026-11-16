@@ -470,6 +470,8 @@ export function createApp(
     express.json({ limit: '3mb' }),
   );
   app.use('/api/admin/imports/employees/commit', express.json({ limit: '512kb' }));
+  // Supplier invoice scans: up to 5 MB of file, sent base64 in JSON (decision 022).
+  app.use('/api/finance/ledger/vouchers/:id/attachments', express.json({ limit: '7mb' }));
   app.use((req, res, next) => {
     if (
       !(serviceRequests.has(req) || hrServiceRequests.has(req)) ||
