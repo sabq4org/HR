@@ -471,7 +471,7 @@ export async function readInvoice(
   if (!row) throw fault(404, 'INVOICE_NOT_FOUND', 'الفاتورة غير موجودة.');
   return safeJson<FinanceInvoice>(row.invoice_ciphertext, `finance:invoice:${row.id}`);
 }
-async function getSettings(
+export async function getSettings(
   db: AsyncDb,
   ownerId: string,
   privateMode: boolean,

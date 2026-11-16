@@ -1345,8 +1345,10 @@
     display: none !important;
   }
   /* Hidden page content still takes room: drop it, so the lists behind the dialog cannot push
-     a blank page after the statement however many customers or invoices they hold. */
-  body:has(.fin-statement-paper)
+     a blank page after the statement however many customers or invoices they hold. Only when
+     the paper sits in the preview dialog: the server PDF page has no dialog, and this rule would
+     hide the paper itself there (blank PDF). */
+  body:has(.dialog .fin-statement-paper)
     *:not(:has(.fin-statement-paper)):not(.dialog:has(.fin-statement-paper) *) {
     display: none !important;
   }
@@ -1630,4 +1632,79 @@
 }
 .fin-document-paper[dir='ltr'] .fin-detail-card:not(.fin-detail-rows) dd[dir='ltr'] {
   text-align: left;
+}
+
+/* Owner-paid expenses statement (decision 022): reuses the customer statement paper. */
+.fin-owner-paper .fin-statement-table .fin-paper-description {
+  width: 26%;
+}
+.fin-statement-table td.fin-owner-wrap {
+  max-width: 130px;
+  white-space: normal;
+}
+.fin-owner-paper tfoot td {
+  border-top: 1.5px solid var(--paper-blue);
+  font-weight: 700;
+}
+.fin-owner-mismatch {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid #e8c36b;
+  border-radius: 7px;
+  background: #fdf6e3;
+  color: #6f5212;
+  font-size: 10px;
+}
+.fin-owner-signatures {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  margin: 22px 0 10px;
+  font-size: 10px;
+  color: var(--paper-muted);
+}
+.fin-owner-signatures div {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+.fin-owner-signatures i {
+  border-bottom: 1px dashed #b9c6d2;
+}
+.led-owner-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  align-items: center;
+  margin: 0 0 12px;
+}
+.led-owner-summary strong {
+  font-size: 18px;
+}
+.led-attachments {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.led-attachments li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--line, #e3eaf0);
+  border-radius: 8px;
+}
+.led-attachments li small {
+  color: var(--muted, #65758a);
+}
+.led-attach-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-inline-start: 6px;
+  color: var(--muted, #65758a);
+  font-size: 12px;
 }

@@ -7,11 +7,12 @@ import { fileURLToPath } from 'node:url';
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { FinanceInvoice, FinanceQuote, FinanceSeller } from '../../shared/finance.js';
-import type { CustomerStatement } from '../../shared/ledger.js';
+import type { CustomerStatement, OwnerStatement } from '../../shared/ledger.js';
 import { InvoicePaper, QuotePaper } from '../../src/finance/paper.js';
 import { invoiceQrSrc } from './qr-image.js';
 import { isOfficialInvoice } from './zatca-qr.js';
 import { StatementPaper } from '../../src/finance/statement-paper.js';
+import { OwnerStatementPaper } from '../../src/finance/owner-paper.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const require = createRequire(import.meta.url);
@@ -123,6 +124,15 @@ export function statementHtml(statement: CustomerStatement): string {
   return page(
     `كشف حساب ${statement.customer.name}`,
     renderToStaticMarkup(<StatementPaper statement={statement} />),
+    '\n@page { size: A4 landscape; margin: 10mm 12mm; }',
+  );
+}
+
+/** Amounts still owed to the owner for expenses he paid; landscape like the customer statement. */
+export function ownerStatementHtml(statement: OwnerStatement): string {
+  return page(
+    'كشف المبالغ المستحقة للمالك',
+    renderToStaticMarkup(<OwnerStatementPaper statement={statement} />),
     '\n@page { size: A4 landscape; margin: 10mm 12mm; }',
   );
 }

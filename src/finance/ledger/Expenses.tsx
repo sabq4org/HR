@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Paperclip, Plus } from 'lucide-react';
 import {
   canApproveAndPost,
   purchaseTaxCodes,
@@ -25,12 +25,18 @@ import {
   useMutate,
   type ViewProps,
 } from './shared';
+import { acceptAttachments, AttachmentsPanel, useUpload } from './Attachments';
+import { OwnerDue } from './OwnerDue';
+
+/** Select value for "the owner paid it from his own card". */
+const OWNER = '__owner';
 
 type Form =
   | { kind: 'expense' }
   | { kind: 'vendor'; vendor?: LedgerVendor }
   | { kind: 'payment'; voucher: LedgerVoucher }
-  | { kind: 'reverse'; voucher: LedgerVoucher };
+  | { kind: 'reverse'; voucher: LedgerVoucher }
+  | { kind: 'attachments'; voucher: LedgerVoucher };
 
 export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
   const { data: session } = useApp();
@@ -42,7 +48,11 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
     [],
   );
   const { data, error, run } = useLoad(load);
-  const [tab, setTab] = useState<'expenses' | 'vendors'>('expenses');
+  const [tab, setTab] = useState<'expenses' | 'owner' | 'vendors'>(
+    action === 'owner' ? 'owner' : 'expenses',
+  );
+  const upload = useUpload();
+  const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
   const [form, setForm] = useState<Form | null>(action === 'new' ? { kind: 'expense' } : null);
   useEffect(() => {
     void run();
@@ -85,6 +95,7 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
     setVendorId('');
     setReference('');
     setDueDate('');
+    setInvoiceFile(null);
     if (next.kind === 'vendor')
       setVendorForm(
         next.vendor
@@ -115,6 +126,17 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
     else if (vendor && taxCode === 'RC') setTaxCode('S');
   };
 
+  if (form?.kind === 'attachments')
+    return (
+      <AttachmentsPanel
+        voucher={form.voucher}
+        close={() => {
+          setForm(null);
+          void run();
+        }}
+        changed={run}
+      />
+    );
   if (form?.kind === 'reverse')
     return (
       <ReverseForm voucher={form.voucher} close={close} done={() => done('سُجّل القيد العكسي.')} />
@@ -194,7 +216,9 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
           await mutate(`/expenses/${voucher.id}/payments`, {
             date,
             amount: amountText(amount),
-            cashAccountCode: paidFrom,
+            ...(paidFrom === OWNER
+              ? { paidBy: 'owner', cashAccountCode: '' }
+              : { cashAccountCode: paidFrom }),
             reference,
           });
           await done('سُجّل السداد.');
@@ -218,13 +242,25 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
               required
             />
           </Field>
-          <Field label="دُفع من">
-            <AccountSelect
-              accounts={accounts}
-              value={paidFrom}
-              onChange={setPaidFrom}
-              filter={(a) => a.isCash}
-            />
+          <Field
+            label="دُفع من"
+            hint={
+              paidFrom === OWNER
+                ? 'ينتقل المبلغ من ذمة المورد إلى المستحق للمالك حتى تردّه الصحيفة له.'
+                : undefined
+            }
+          >
+            <select value={paidFrom} onChange={(e) => setPaidFrom(e.target.value)} required>
+              <option value="">اختر الحساب</option>
+              {accounts
+                .filter((item) => item.isCash && item.active && item.postable)
+                .map((item) => (
+                  <option key={item.code} value={item.code}>
+                    {item.code} · {item.name}
+                  </option>
+                ))}
+              <option value={OWNER}>المالك من بطاقته الشخصية (يُسجَّل مستحقًا له)</option>
+            </select>
           </Field>
           <Field label="مرجع الحوالة (اختياري)">
             <input
@@ -255,19 +291,35 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
         close={close}
         submitLabel="حفظ وترحيل"
         submit={async () => {
-          await mutate('/expenses', {
+          const { voucher } = await mutate<{ voucher: LedgerVoucher }>('/expenses', {
             date,
             description: text,
             accountCode: account,
             taxCode,
             net: amountText(amount),
             ...(vatText && taxCode !== 'RC' ? { vat: amountText(vatText) } : {}),
-            cashAccountCode: paidFrom,
+            ...(paidFrom === OWNER
+              ? { paidBy: 'owner', cashAccountCode: '' }
+              : { cashAccountCode: paidFrom }),
             vendorId,
             reference,
             dueDate: paidFrom ? '' : dueDate,
           });
-          await done('سُجّل المصروف ورُحّل قيده.');
+          // The entry is posted; a failed upload must not hide that, so it is reported apart.
+          if (invoiceFile)
+            try {
+              await upload(voucher.id, invoiceFile);
+            } catch (failure) {
+              await done(
+                `سُجّل المصروف ${voucher.number}، لكن تعذّر إرفاق الملف: ${failure instanceof Error ? failure.message : ''} أرفقه من زر «المرفقات».`,
+              );
+              return;
+            }
+          await done(
+            paidFrom === OWNER
+              ? `سُجّل المصروف ${voucher.number} مستحقًا للمالك.`
+              : 'سُجّل المصروف ورُحّل قيده.',
+          );
         }}
       >
         <div className="fin-grid">
@@ -363,7 +415,18 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
                     مدفوع من {item.name}
                   </option>
                 ))}
+              <option value={OWNER}>سددها المالك من بطاقته الشخصية · تُسجَّل مستحقة له</option>
             </select>
+          </Field>
+          <Field
+            label="صورة الفاتورة أو ملف PDF (اختياري)"
+            hint="تُحفظ مع المستند مشفرة، وتُفتح لاحقًا من «المرفقات». الحد 5 ميجابايت."
+          >
+            <input
+              type="file"
+              accept={acceptAttachments}
+              onChange={(e) => setInvoiceFile(e.target.files?.[0] ?? null)}
+            />
           </Field>
           {!paidFrom && (
             <Field label="تاريخ الاستحقاق (اختياري)">
@@ -389,7 +452,8 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
             <b>{fmt(vat)}</b>
           </span>
           <strong>
-            {paidFrom ? 'المدفوع' : 'المستحق للمورد'} <b>{fmt(owed)}</b>
+            {paidFrom === OWNER ? 'المستحق للمالك' : paidFrom ? 'المدفوع' : 'المستحق للمورد'}{' '}
+            <b>{fmt(owed)}</b>
           </strong>
         </div>
       </LedgerForm>
@@ -403,16 +467,33 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
         <button className={tab === 'expenses' ? 'active' : ''} onClick={() => setTab('expenses')}>
           المصروفات والمدفوعات
         </button>
+        <button className={tab === 'owner' ? 'active' : ''} onClick={() => setTab('owner')}>
+          مستحقات المالك
+        </button>
         <button className={tab === 'vendors' ? 'active' : ''} onClick={() => setTab('vendors')}>
           الموردون
         </button>
       </nav>
-      {tab === 'expenses' ? (
+      {tab === 'owner' ? (
+        <OwnerDue
+          overview={overview}
+          changed={async () => {
+            await Promise.all([run(), reload()]);
+          }}
+          openAttachments={(id) => {
+            const voucher = data?.find((item) => item.id === id);
+            if (voucher) open({ kind: 'attachments', voucher });
+          }}
+        />
+      ) : tab === 'expenses' ? (
         <section className="fin-section">
           <div className="fin-section-head">
             <div>
               <h2>المصروفات</h2>
-              <p>كل مصروف يُرحَّل بقيده وضريبته، نقدًا أو آجلًا على المورد.</p>
+              <p>
+                كل مصروف يُرحَّل بقيده وضريبته: نقدًا، أو آجلًا على المورد، أو مستحقًا للمالك إن سدده من
+                بطاقته.
+              </p>
             </div>
             <button className="button primary" onClick={() => open({ kind: 'expense' })}>
               <Plus size={17} />
@@ -443,6 +524,15 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
                     >
                       <td>
                         <b>{voucher.number}</b>
+                        {voucher.attachmentCount > 0 && (
+                          <span
+                            className="led-attach-badge"
+                            title={`${voucher.attachmentCount} مرفق`}
+                          >
+                            <Paperclip size={12} aria-hidden />
+                            {voucher.attachmentCount}
+                          </span>
+                        )}
                         <small>القيد {voucher.entryNumber}</small>
                       </td>
                       <td className="num">{voucher.date}</td>
@@ -451,11 +541,15 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
                         {voucher.partyName && <small>{voucher.partyName}</small>}
                       </td>
                       <td>
-                        {voucher.kind === 'payment'
-                          ? 'سند سداد'
-                          : voucher.taxCode
-                            ? taxCodeLabel[voucher.taxCode]
-                            : '—'}
+                        {voucher.isOwnerRefund
+                          ? 'رد للمالك'
+                          : voucher.kind === 'payment'
+                            ? voucher.paidByOwner
+                              ? 'سداد من المالك'
+                              : 'سند سداد'
+                            : voucher.taxCode
+                              ? taxCodeLabel[voucher.taxCode]
+                              : '—'}
                       </td>
                       <td className="num">
                         <Money value={voucher.netHalalas} />
@@ -469,6 +563,15 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
                       <td>
                         {voucher.status === 'reversed' ? (
                           <Status text="معكوس" kind="bad" />
+                        ) : voucher.paidByOwner ? (
+                          voucher.ownerOutstandingHalalas > 0 ? (
+                            <Status
+                              text={`للمالك ${fmt(voucher.ownerOutstandingHalalas)}`}
+                              kind="waiting"
+                            />
+                          ) : (
+                            <Status text="رُدّ للمالك" kind="good" />
+                          )
                         ) : voucher.kind === 'expense' && !voucher.cashAccountCode ? (
                           voucher.outstandingHalalas > 0 ? (
                             <Status
@@ -483,6 +586,12 @@ export function Expenses({ overview, reload, action, go, notify }: ViewProps) {
                         )}
                       </td>
                       <td className="fin-actions">
+                        <button
+                          className="text-button"
+                          onClick={() => open({ kind: 'attachments', voucher })}
+                        >
+                          المرفقات
+                        </button>
                         {voucher.status === 'posted' && (
                           <>
                             {voucher.kind === 'expense' && voucher.outstandingHalalas > 0 && (
