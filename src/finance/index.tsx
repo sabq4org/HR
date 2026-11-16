@@ -1083,11 +1083,14 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                             {i.syncMessage && (
                               <small className="fin-message">{i.syncMessage}</small>
                             )}
-                            {['cleared', 'reported'].includes(i.status) && !i.qrCode && (
-                              <small className="fin-message">
-                                بانتظار مستند الاعتماد ورمز التحقق
-                              </small>
-                            )}
+                            {['cleared', 'reported'].includes(i.status) &&
+                              (i.qrCode ? (
+                                <small className="fin-message">معتمدة من الهيئة</small>
+                              ) : (
+                                <small className="fin-message">
+                                  بانتظار مستند الاعتماد ورمز التحقق
+                                </small>
+                              ))}
                           </td>
                           <td className="fin-actions">
                             {i.status === 'draft' ? (
@@ -2143,10 +2146,17 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
         >
           <div className="fin-preview-actions">
             {['cleared', 'reported'].includes(finalInvoice.status) && finalInvoice.qrCode ? (
-              <button className="button primary" onClick={() => window.print()}>
-                <Printer size={16} />
-                طباعة فاتورة سبق
-              </button>
+              <>
+                <button className="button primary" onClick={() => window.print()}>
+                  <Printer size={16} />
+                  طباعة فاتورة سبق
+                </button>
+                <ExportPdfButton
+                  path={`/invoices/${encodeURIComponent(finalInvoice.id)}/document.pdf`}
+                  filename={finalInvoice.number}
+                  label="تصدير فاتورة سبق PDF"
+                />
+              </>
             ) : finalInvoice.status === 'cancelled' ? (
               <Status text="فاتورة ملغاة · لا تُصدر ولا تُرسل" kind="cancelled" />
             ) : (

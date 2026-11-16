@@ -10,6 +10,7 @@ import type { FinanceInvoice, FinanceQuote, FinanceSeller } from '../../shared/f
 import type { CustomerStatement } from '../../shared/ledger.js';
 import { InvoicePaper, QuotePaper } from '../../src/finance/paper.js';
 import { invoiceQrSrc } from './qr-image.js';
+import { isOfficialInvoice } from './zatca-qr.js';
 import { StatementPaper } from '../../src/finance/statement-paper.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -95,13 +96,23 @@ export function quoteHtml(quote: FinanceQuote, seller: FinanceSeller): string {
   );
 }
 
+/**
+ * The invoice paper as a PDF page. Once the invoice is cleared and holds a verified official
+ * ZATCA QR, this is the tax invoice (QR drawn from the stored TLV, no internal-copy wording);
+ * before that it stays an internal copy.
+ */
 export function invoiceHtml(invoice: FinanceInvoice, seller: FinanceSeller): string {
-  const accepted = ['cleared', 'reported'].includes(invoice.status);
-  const qrSrc = accepted && invoice.qrCode ? invoiceQrSrc(invoice.qrCode) : undefined;
+  const official = isOfficialInvoice(invoice);
+  const qrSrc = official && invoice.qrCode ? invoiceQrSrc(invoice.qrCode) : undefined;
   return page(
     `فاتورة ${invoice.number}`,
     renderToStaticMarkup(
-      <InvoicePaper invoice={invoice} seller={seller} qrSrc={qrSrc} internalCopy />,
+      <InvoicePaper
+        invoice={invoice}
+        seller={seller}
+        qrSrc={qrSrc}
+        internalCopy={!(official && qrSrc)}
+      />,
     ),
     PREVIEW_PAGE_CSS,
   );

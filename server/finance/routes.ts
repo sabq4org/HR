@@ -45,6 +45,8 @@ import {
 } from '../integrations/wafeq.js';
 export type { WafeqClientLike } from '../integrations/wafeq.js';
 import { autoPostInvoice, customerStatement } from './ledger.js';
+import { isOfficialInvoice, isOfficialQr, officialQrFromPdf, ZatcaQrError } from './zatca-qr.js';
+import { qrDataUrl } from './qr-image.js';
 import { registerLedger } from './ledger-routes.js';
 import { invoicePdf, quotePdf } from './pdf.js';
 import { htmlToPdf } from './chromium-pdf.js';
@@ -654,6 +656,18 @@ function mappedInvoiceStatus(status: 'pending' | 'cleared' | 'rejected' | 'unkno
     return { status: 'rejected', zatcaStatus: 'rejected', canDownload: false };
   return { status: 'reconciliation_required', zatcaStatus: 'unknown', canDownload: false };
 }
+/** Response extra when the official QR could not be stored; the invoice itself is unchanged. */
+function qrNoticeBody(code: string | undefined) {
+  return code
+    ? {
+        qrNotice: {
+          code,
+          message:
+            'الفاتورة معتمدة، لكن تعذر حفظ رمز التحقق الرسمي من ملف وافق؛ أعد «تحديث حالة التحقق» لاحقًا.',
+        },
+      }
+    : {};
+}
 /** Invoice fields that record what Wafeq said about the tax authority, kept for reconciliation. */
 function taxAuthorityFields(result: WafeqInvoiceResult): Partial<FinanceInvoice> {
   return {
@@ -687,6 +701,80 @@ async function auditTaxVerdict(
       ...(after.taxAuthorityStatus ? { wafeqStatus: after.taxAuthorityStatus } : {}),
     },
   );
+}
+/**
+ * Wafeq's official PDF for an invoice: the encrypted cached copy when there is one, otherwise a
+ * read-only GET of /invoices/{id}/download/, cached for next time.
+ */
+async function officialInvoicePdf(
+  db: AsyncDb,
+  ownerId: string,
+  invoice: FinanceInvoice,
+  client: WafeqProvider,
+): Promise<Buffer> {
+  const artifact = (
+    await db.read<{ content_ciphertext: string }>(
+      "SELECT content_ciphertext FROM finance_private_artifacts WHERE owner_id=? AND invoice_id=? AND artifact_type='pdf'",
+      [ownerId, invoice.id],
+    )
+  )[0];
+  if (artifact)
+    return Buffer.from(
+      decryptSensitive(artifact.content_ciphertext, `finance:artifact:${invoice.id}:pdf`),
+      'base64',
+    );
+  if (!invoice.wafeqId) throw new ZatcaQrError('no_wafeq_invoice');
+  const bytes = await client.getInvoicePdf(invoice.wafeqId);
+  await db.execute(
+    "INSERT INTO finance_private_artifacts(owner_id,invoice_id,artifact_type,content_ciphertext,created_at) VALUES(?,?,'pdf',?,?) ON CONFLICT(owner_id,invoice_id,artifact_type) DO NOTHING",
+    [
+      ownerId,
+      invoice.id,
+      encryptSensitive(bytes.toString('base64'), `finance:artifact:${invoice.id}:pdf`),
+      now(),
+    ],
+  );
+  return bytes;
+}
+/**
+ * A cleared invoice without a QR takes the official one from Wafeq's PDF (GET only; nothing is
+ * reported again; the verified PDF also refreshes the cached copy). The QR is stored only when it
+ * decodes as a Phase 2 TLV whose invoice number, seller VAT number, total and VAT match this
+ * invoice. Any failure leaves the invoice as it was and is returned as a notice code; it never
+ * fails the surrounding sync or refresh.
+ */
+async function backfillOfficialQr(
+  db: AsyncDb,
+  actor: Actor,
+  invoice: FinanceInvoice,
+  client: WafeqProvider,
+): Promise<{ invoice: FinanceInvoice; qrNotice?: string }> {
+  if (!['cleared', 'reported'].includes(invoice.status) || invoice.qrCode || !invoice.wafeqId)
+    return { invoice };
+  let qr: string;
+  try {
+    // Always the current document from Wafeq (one GET), never a cached copy that may predate it.
+    const pdf = await client.getInvoicePdf(invoice.wafeqId);
+    qr = officialQrFromPdf(pdf, invoice).qr;
+    await db.execute(
+      "INSERT INTO finance_private_artifacts(owner_id,invoice_id,artifact_type,content_ciphertext,created_at) VALUES(?,?,'pdf',?,?) ON CONFLICT(owner_id,invoice_id,artifact_type) DO UPDATE SET content_ciphertext=excluded.content_ciphertext,created_at=excluded.created_at",
+      [
+        actor.id,
+        invoice.id,
+        encryptSensitive(pdf.toString('base64'), `finance:artifact:${invoice.id}:pdf`),
+        now(),
+      ],
+    );
+  } catch (error) {
+    const code = error instanceof ZatcaQrError ? error.code : 'official_pdf_unavailable';
+    console.warn(`Official QR not stored for invoice ${invoice.id} (${code})`);
+    return { invoice, qrNotice: code };
+  }
+  const updated = await updateInvoiceSnapshot(db, actor, invoice, { qrCode: qr });
+  await audited(db, actor, 'finance_invoice', invoice.id, 'official_qr_stored', updated.version, {
+    source: 'wafeq_pdf_embedded_zatca_xml',
+  });
+  return { invoice: updated };
 }
 async function updateInvoiceSnapshot(
   db: AsyncDb,
@@ -1974,6 +2062,14 @@ export function registerFinance(
     )[0];
     if (invoice.status === 'cancelled') throw invoiceCancelled();
     if (invoice.wafeqId && (!priorOperation || priorOperation.state === 'complete')) {
+      if (invoice.status === 'cleared' && !invoice.qrCode) {
+        const client = await storedClient(db, actor.id, clientFactory).catch(() => null);
+        const filled = client
+          ? await backfillOfficialQr(db, actor, invoice, client)
+          : { invoice, qrNotice: 'wafeq_not_connected' };
+        res.json({ invoice: filled.invoice, ...qrNoticeBody(filled.qrNotice) });
+        return;
+      }
       res.json({ invoice });
       return;
     }
@@ -2139,7 +2235,8 @@ export function registerFinance(
       ],
     );
     await autoPostInvoice(db, actor, updated);
-    res.json({ invoice: updated });
+    const filled = await backfillOfficialQr(db, actor, updated, client);
+    res.json({ invoice: filled.invoice, ...qrNoticeBody(filled.qrNotice) });
   });
   registerRoute(app, 'post', '/api/finance/invoices/:id/refresh', async (req, res) => {
     const actor = await auth(req);
@@ -2149,9 +2246,16 @@ export function registerFinance(
     if (!invoice.wafeqId)
       throw fault(409, 'WAFEQ_INVOICE_REQUIRED', 'لا توجد فاتورة وافق لمراجعة حالتها.');
     if (invoice.status === 'cancelled') throw invoiceCancelled();
+    const client = await storedClient(db, actor.id, clientFactory);
+    // A cleared invoice only lacks its QR: take it from Wafeq's PDF with GETs, never a new report.
+    if (invoice.status === 'cleared' && !invoice.qrCode) {
+      const filled = await backfillOfficialQr(db, actor, invoice, client);
+      res.json({ invoice: filled.invoice, ...qrNoticeBody(filled.qrNotice) });
+      return;
+    }
     let result: WafeqInvoiceResult;
     try {
-      result = await (await storedClient(db, actor.id, clientFactory)).getInvoice(invoice.wafeqId);
+      result = await client.getInvoice(invoice.wafeqId);
     } catch {
       throw fault(503, 'WAFEQ_REFRESH_FAILED', 'تعذر تحديث حالة الفاتورة من وافق.');
     }
@@ -2187,7 +2291,8 @@ export function registerFinance(
         [invoice.wafeqId, now(), actor.id, id],
       );
     await autoPostInvoice(db, actor, updated);
-    res.json({ invoice: updated });
+    const filled = await backfillOfficialQr(db, actor, updated, client);
+    res.json({ invoice: filled.invoice, ...qrNoticeBody(filled.qrNotice) });
   });
   registerRoute(app, 'get', '/api/finance/invoices/:id/pdf', async (req, res) => {
     const actor = await auth(req);
@@ -2196,31 +2301,16 @@ export function registerFinance(
       invoice = await readInvoice(db, actor.id, id);
     if (invoice.status !== 'cleared' || !invoice.wafeqId || !invoice.canDownload)
       throw fault(409, 'ARTIFACT_UNAVAILABLE', 'ملف PDF متاح بعد تأكيد قبول الفاتورة.');
-    const artifact = (
-      await db.read<{ content_ciphertext: string }>(
-        "SELECT content_ciphertext FROM finance_private_artifacts WHERE owner_id=? AND invoice_id=? AND artifact_type='pdf'",
-        [actor.id, id],
-      )
-    )[0];
     let bytes: Buffer;
-    if (artifact) {
-      bytes = Buffer.from(
-        decryptSensitive(artifact.content_ciphertext, `finance:artifact:${id}:pdf`),
-        'base64',
+    try {
+      bytes = await officialInvoicePdf(
+        db,
+        actor.id,
+        invoice,
+        await storedClient(db, actor.id, clientFactory),
       );
-    } else {
-      try {
-        bytes = await (
-          await storedClient(db, actor.id, clientFactory)
-        ).getInvoicePdf(invoice.wafeqId);
-      } catch {
-        throw fault(503, 'WAFEQ_PDF_UNAVAILABLE', 'تعذر جلب ملف PDF من وافق.');
-      }
-      const ciphertext = encryptSensitive(bytes.toString('base64'), `finance:artifact:${id}:pdf`);
-      await db.execute(
-        "INSERT INTO finance_private_artifacts(owner_id,invoice_id,artifact_type,content_ciphertext,created_at) VALUES(?,?,'pdf',?,?) ON CONFLICT(owner_id,invoice_id,artifact_type) DO NOTHING",
-        [actor.id, id, ciphertext, now()],
-      );
+    } catch {
+      throw fault(503, 'WAFEQ_PDF_UNAVAILABLE', 'تعذر جلب ملف PDF من وافق.');
     }
     res
       .status(200)
@@ -2234,8 +2324,11 @@ export function registerFinance(
     const invoice = await readInvoice(db, actor.id, routeId(req.params.id));
     if (invoice.status !== 'cleared' || invoice.zatcaStatus !== 'cleared')
       throw fault(409, 'ARTIFACT_UNAVAILABLE', 'رمز QR الرسمي لا يتاح قبل تأكيد الاعتماد.');
-    // The provider has no documented QR image contract yet; do not return JSON to an <img> caller.
-    throw fault(409, 'ARTIFACT_UNAVAILABLE', 'صيغة صورة QR الرسمية لم تثبت بعد.');
+    if (!invoice.qrCode || !isOfficialQr(invoice))
+      throw fault(409, 'ARTIFACT_UNAVAILABLE', 'رمز QR الرسمي لم يُحفظ بعد؛ حدّث حالة التحقق.');
+    // The stored ZATCA TLV, drawn as an SVG image for the in-app paper's <img>.
+    const svg = decodeURIComponent(qrDataUrl(invoice.qrCode).split(',', 2)[1]);
+    res.status(200).type('image/svg+xml').set('cache-control', 'private, no-store').send(svg);
   });
   const loadStatement = async (
     req: Request,
@@ -2285,7 +2378,7 @@ export function registerFinance(
       throw fault(
         503,
         'PDF_RENDERER_UNAVAILABLE',
-        'خدمة توليد PDF للمستندات الإنجليزية غير متاحة حاليًا.',
+        'خدمة توليد PDF غير متاحة حاليًا؛ أعد المحاولة لاحقًا.',
       );
     return { bytes: await fallback(), renderer: 'pdfkit' };
   };
@@ -2310,19 +2403,28 @@ export function registerFinance(
     requireFinance(actor, access);
     const invoice = await readInvoice(db, actor.id, routeId(req.params.id));
     const seller = await documentSeller(actor.id, invoice.seller);
+    // Cleared with a verified official QR: our paper is the tax invoice. The pdfkit fallback
+    // cannot draw the QR, so an official invoice is never downgraded to it.
+    const official = isOfficialInvoice(invoice);
     const pdf = await renderPdf(
       () => invoiceHtml(invoice, seller),
-      documentLanguage(invoice) === 'en' ? null : () => invoicePdf({ ...invoice, seller }),
+      official || documentLanguage(invoice) === 'en'
+        ? null
+        : () => invoicePdf({ ...invoice, seller }),
     );
     await audited(
       db,
       actor,
       'finance_invoice',
       invoice.id,
-      'invoice_copy_pdf_exported',
+      official ? 'invoice_official_pdf_exported' : 'invoice_copy_pdf_exported',
       invoice.version,
     );
-    sendPdf(res, `${invoice.number.replace(/[^A-Za-z0-9_-]/g, '_')}-internal`, pdf);
+    sendPdf(
+      res,
+      `${invoice.number.replace(/[^A-Za-z0-9_-]/g, '_')}${official ? '' : '-internal'}`,
+      pdf,
+    );
   });
   // Same query as the preview: optional from, to defaults to today in Riyadh. Landscape A4.
   registerRoute(app, 'get', '/api/finance/customers/:id/statement.pdf', async (req, res) => {
