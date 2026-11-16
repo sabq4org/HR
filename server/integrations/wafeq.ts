@@ -201,6 +201,16 @@ function responseContact(row: unknown): WafeqContact | null {
   };
 }
 
+/** Keeps only the optional contact fields that hold a value, trimmed. */
+function presentFields(fields: Record<string, string | undefined>): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed) kept[key] = trimmed;
+  }
+  return kept;
+}
+
 function findExactExternalId(pages: JsonObject[][], externalId: string): JsonObject | null {
   const matches = pages.flat().filter((row) => row.external_id === externalId);
   if (matches.length > 1) throw new WafeqApiError('duplicate_external_id');
@@ -234,22 +244,24 @@ export class WafeqClient implements WafeqClientLike {
     idempotencyKey: string,
   ): Promise<{ id: string }> {
     assertIdempotencyKey(idempotencyKey);
+    // Wafeq validates every field it is sent: an empty email is "not a valid email" and the whole
+    // contact is rejected. Optional fields go only when they hold a value.
     const body = {
-      name: input.name,
-      email: input.email,
-      tax_registration_number: input.vatNumber,
-      address: input.address.line,
-      city: input.address.city,
-      postal_code: input.address.postalCode,
+      name: input.name.trim(),
       country: input.address.country,
       is_customer: true,
       external_id: externalId,
-      ...(input.address.district ? { district: input.address.district } : {}),
-      ...(input.address.buildingNumber ? { building_number: input.address.buildingNumber } : {}),
-      ...(input.address.additionalNumber
-        ? { additional_number: input.address.additionalNumber }
-        : {}),
-      ...(input.phone ? { phone: input.phone } : {}),
+      ...presentFields({
+        email: input.email,
+        tax_registration_number: input.vatNumber,
+        address: input.address.line,
+        city: input.address.city,
+        postal_code: input.address.postalCode,
+        district: input.address.district,
+        building_number: input.address.buildingNumber,
+        additional_number: input.address.additionalNumber,
+        phone: input.phone,
+      }),
     };
     return this.idResult(await this.jsonRequest('POST', 'contacts/', body, idempotencyKey));
   }
@@ -503,6 +515,15 @@ export class WafeqClient implements WafeqClientLike {
         isObject(value) && isObject(value.error) ? string(value.error.code) : undefined;
       const code = nestedCode ?? (isObject(value) ? string(value.code) : undefined);
       if (code && /^[a-z][a-z0-9_]{0,63}$/i.test(code) && !code.includes(this.apiKey)) return code;
+      // Field validation errors name the rejected fields ({"email": ["Enter a valid email
+      // address."]}). Only the field name is kept, never the message or the submitted value.
+      if (!code && (status === 400 || status === 422) && isObject(value)) {
+        const fieldName = Object.keys(value).find(
+          (key) => /^[a-z][a-z0-9_]{0,40}$/.test(key) && Array.isArray(value[key]),
+        );
+        if (fieldName)
+          return fieldName === 'non_field_errors' ? 'invalid_request' : `invalid_${fieldName}`;
+      }
     } catch {
       /* response bodies are intentionally never surfaced */
     }
