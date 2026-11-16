@@ -91,9 +91,11 @@ test('accountant scope covers finance only, without the provider credential', ()
     '/api/financeX',
     '/api/finance/settings/api-key',
     '/api/finance/settings/test',
+    '/api/finance/settings/switch-organization',
   ])
     assert.ok(!inAccountantScope('GET', path), path);
   assert.ok(!inAccountantScope('DELETE', '/api/finance/customers/x'));
+  assert.ok(!inAccountantScope('POST', '/api/finance/settings/switch-organization'));
 });
 
 test('bidi runs keep Arabic words, numbers and brackets in visual order', () => {

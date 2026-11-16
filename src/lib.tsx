@@ -64,7 +64,11 @@ export async function api<T>(url: string, options?: RequestInit): Promise<T> {
     const payload = await response.json().catch(() => null);
     throw Object.assign(
       new Error(payload?.error?.message || 'تعذّر إكمال العملية. حاول مرة أخرى.'),
-      { code: payload?.error?.code as string | undefined, status: response.status },
+      {
+        code: payload?.error?.code as string | undefined,
+        status: response.status,
+        payload: payload as unknown,
+      },
     );
   }
   if (response.status === 204) return undefined as T;

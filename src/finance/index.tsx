@@ -225,6 +225,11 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
   }));
   const [settingsForm, setSettingsForm] = useState<FinanceSettings | null>(null);
   const [apiKey, setApiKey] = useState('');
+  const [switching, setSwitching] = useState<{
+    apiKey: string;
+    target: { from: { id: string; name: string }; to: { id: string; name: string } } | null;
+    error: string;
+  } | null>(null);
   const [convertDates, setConvertDates] = useState({ issueDate: today(), dueDate: '' });
   const [purchaseOrder, setPurchaseOrder] = useState('');
   const [finalInvoice, setFinalInvoice] = useState<FinanceInvoice | null>(null);
@@ -596,6 +601,40 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
       setSettingsForm(result.settings);
     } catch (e) {
       setLoadError(errorText(e));
+    } finally {
+      setBusy('');
+    }
+  };
+  // Two steps: the key is checked against Wafeq first, then the owner confirms the organization
+  // it belongs to. The key lives only in this dialog's state and is cleared when it closes.
+  const switchOrganization = async () => {
+    if (!switching?.apiKey) return;
+    setBusy('switch');
+    try {
+      const result = await mutate<{
+        settings: FinanceSettings;
+        reset: { customers: number; operations: number };
+      }>('/finance/settings/switch-organization', 'POST', {
+        apiKey: switching.apiKey,
+        ...(switching.target ? { confirmOrganizationId: switching.target.to.id } : {}),
+      });
+      setSwitching(null);
+      setOverview((o) => (o ? { ...o, settings: result.settings } : o));
+      setSettingsForm(result.settings);
+      notify(
+        `تم الانتقال إلى المؤسسة الجديدة وفُك ربط ${result.reset.customers} عميل. أعد مزامنة العملاء.`,
+      );
+      await load();
+    } catch (e) {
+      const failure = e as { code?: string; payload?: unknown };
+      const preview = (
+        failure.payload as {
+          switch?: { from: { id: string; name: string }; to: { id: string; name: string } };
+        } | null
+      )?.switch;
+      if (failure.code === 'WAFEQ_SWITCH_CONFIRMATION_REQUIRED' && preview)
+        setSwitching((s) => (s ? { ...s, target: preview, error: '' } : s));
+      else setSwitching((s) => (s ? { ...s, error: errorText(e) } : s));
     } finally {
       setBusy('');
     }
@@ -1220,6 +1259,14 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                 </button>
                 {settingsForm.connectionMessage && (
                   <p className="fin-message">{settingsForm.connectionMessage}</p>
+                )}
+                {settingsForm.canStoreApiKey && settingsForm.apiKeyConfigured && (
+                  <button
+                    className="text-button"
+                    onClick={() => setSwitching({ apiKey: '', target: null, error: '' })}
+                  >
+                    الانتقال إلى مؤسسة وافق أخرى
+                  </button>
                 )}
               </section>
               <form className="fin-settings" onSubmit={saveSettings}>
@@ -2000,6 +2047,47 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
           customer={statementCustomer}
           close={() => setStatementCustomer(null)}
         />
+      )}
+      {switching && (
+        <ConfirmDialog
+          title="الانتقال إلى مؤسسة وافق أخرى"
+          close={() => setSwitching(null)}
+          warning={
+            <>
+              يُفك ربط كل العملاء بالمؤسسة الحالية، وتُصفّر حسابات الإيراد والضريبة لأنها تخص المؤسسة
+              السابقة. لا يُحذف شيء من وافق. بعد الانتقال أعد مزامنة كل عميل لإنشائه في المؤسسة
+              الجديدة. يُرفض الانتقال إذا وُجدت فواتير أُرسلت إلى وافق.
+            </>
+          }
+          error={switching.error || undefined}
+          confirmLabel={
+            busy === 'switch'
+              ? 'جارٍ التحقق…'
+              : switching.target
+                ? 'تأكيد الانتقال'
+                : 'تحقق من المفتاح'
+          }
+          danger={!!switching.target}
+          busy={busy === 'switch'}
+          confirmDisabled={!switching.apiKey}
+          onConfirm={() => void switchOrganization()}
+        >
+          {switching.target ? (
+            <p>
+              من «{switching.target.from.name}» إلى «{switching.target.to.name}» (
+              <b dir="ltr">{switching.target.to.id}</b>).
+            </p>
+          ) : (
+            <Field label="مفتاح المؤسسة الجديدة" hint="لن يُعرض المفتاح بعد الحفظ.">
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={switching.apiKey}
+                onChange={(e) => setSwitching({ ...switching, apiKey: e.target.value })}
+              />
+            </Field>
+          )}
+        </ConfirmDialog>
       )}
       {cancelling && (
         <ConfirmDialog
