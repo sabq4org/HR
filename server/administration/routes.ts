@@ -4,6 +4,7 @@ import { todayInRiyadh, type AsyncDb } from '../database.js';
 import type {
   AdministrativeOverview,
   AdministrativeRequest,
+  DocumentExpiryItem,
   FormValues,
   RequestKind,
   RequestState,
@@ -37,6 +38,7 @@ import {
   createEmployee,
   filterProfileValues,
   getEmployeeFile,
+  getProfileValues,
   mayManageEmployee,
   mayReadEmployee,
   protectFormValues,
@@ -1044,7 +1046,7 @@ export function registerAdministration(
     },
   );
 
-  registerDocumentRoutes(app, { db, requireActor });
+  registerDocumentRoutes(app, { db, requireActor, privateMode });
   registerAttendanceRoutes(app, { db, requireActor });
   registerPolicyRoutes(app, { db, requireActor, privateMode });
   registerReportRoutes(app, { db, requireActor });
@@ -1280,8 +1282,12 @@ function validIsoDate(value: string) {
   return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
 
-function registerDocumentRoutes(app: Express, ctx: { db: AsyncDb; requireActor: RequireActor }) {
-  const { db, requireActor } = ctx;
+function registerDocumentRoutes(
+  app: Express,
+  ctx: { db: AsyncDb; requireActor: RequireActor; privateMode: boolean },
+) {
+  const { db, requireActor, privateMode } = ctx;
+  registerExpiryRoutes(app, ctx);
   routeWithActor(app, 'get', '/api/admin/documents', requireActor, async (req, res, actor) => {
     if (!['hr', 'auditor', 'finance', 'manager', 'employee'].includes(actor.role))
       throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية الاطلاع على المستندات.');
@@ -1353,15 +1359,13 @@ function registerDocumentRoutes(app: Express, ctx: { db: AsyncDb; requireActor: 
       if (!magic) throw fault(400, 'FILE_TYPE_MISMATCH', 'امتداد الملف لا يطابق محتواه.');
       const id = newId();
       const now = at();
-      const expiresAt = typeof b.expiresAt === 'string' ? b.expiresAt : null;
-      if (expiresAt && !validIsoDate(expiresAt))
-        throw fault(400, 'INVALID_DATE', 'تاريخ الانتهاء غير صالح.');
+      const { documentNumber, issuedAt, expiresAt } = documentDetails(b, def.hasExpiry === true);
       const doc = await idempotent(
         db,
         actor,
         `document:create:${employee.id}`,
         req.get('Idempotency-Key') ?? undefined,
-        { category, filename, mime, base, expiresAt },
+        { category, filename, mime, base, expiresAt, issuedAt, documentNumber },
         async (tx, m) => getDoc(tx, actor, m.id),
         async (tx) => {
           const totals = (
@@ -1369,9 +1373,12 @@ function registerDocumentRoutes(app: Express, ctx: { db: AsyncDb; requireActor: 
               'SELECT COUNT(*) AS count,COALESCE(SUM(size_bytes),0) AS bytes FROM employee_documents',
             )
           )[0];
+          // The 30-file cap protects the shared synthetic preview only; the private service keeps
+          // every employee's documents (decision 023).
           if (
-            Number(totals?.count ?? 0) >= 30 ||
-            Number(totals?.bytes ?? 0) + bytes.length > 6 * 1024 * 1024
+            !privateMode &&
+            (Number(totals?.count ?? 0) >= 30 ||
+              Number(totals?.bytes ?? 0) + bytes.length > 6 * 1024 * 1024)
           )
             throw fault(
               429,
@@ -1379,7 +1386,7 @@ function registerDocumentRoutes(app: Express, ctx: { db: AsyncDb; requireActor: 
               'وصلت مساحة المعاينة إلى حد المستندات والملفات المسموح.',
             );
           await tx.execute(
-            'INSERT INTO employee_documents(id,employee_id,category,filename,mime_type,size_bytes,expires_at,uploaded_at,uploaded_by,checksum,encrypted_content) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+            'INSERT INTO employee_documents(id,employee_id,category,filename,mime_type,size_bytes,expires_at,uploaded_at,uploaded_by,checksum,encrypted_content,issued_at,document_number_encrypted) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
             [
               id,
               employee.id,
@@ -1392,6 +1399,10 @@ function registerDocumentRoutes(app: Express, ctx: { db: AsyncDb; requireActor: 
               actor.id,
               sha256(bytes),
               encryptSensitive(bytes.toString('base64'), `employee-document:${id}`),
+              issuedAt,
+              documentNumber
+                ? encryptSensitive(documentNumber, `employee-document-number:${id}`)
+                : null,
             ],
           );
           await appendEvent(
@@ -1454,6 +1465,88 @@ function registerDocumentRoutes(app: Express, ctx: { db: AsyncDb; requireActor: 
       res.send(bytes);
     },
   );
+  // Details of a document already on file: its number and dates, e.g. after an iqama renewal.
+  // The file itself never changes; a new scan is uploaded as a new document.
+  routeWithActor(
+    app,
+    'patch',
+    '/api/admin/documents/:id',
+    requireActor,
+    async (req, res, actor) => {
+      const b = requireRecord(req.body);
+      const version = versionValue(b.version);
+      const reason = requiredString(b.reason, 'REASON_REQUIRED', 'أدخل سبب التعديل.', 1000);
+      const id = param(req, 'id');
+      const current = await getDocRow(db, id);
+      if (!current) throw fault(404, 'DOCUMENT_NOT_FOUND', 'المستند غير موجود.');
+      const def = documentCategories.find((c) => c.key === current.category);
+      const details = documentDetails(b, def?.hasExpiry === true);
+      const doc = await idempotent(
+        db,
+        actor,
+        `document:details:${id}`,
+        req.get('Idempotency-Key') ?? undefined,
+        { version, reason, ...details },
+        async (tx, m) => getDoc(tx, actor, m.id),
+        async (tx) => {
+          const row = await getDocRow(tx, id);
+          if (!row) throw fault(404, 'DOCUMENT_NOT_FOUND', 'المستند غير موجود.');
+          const e = await readEmployee(tx, row.employee_id);
+          if (!e || !mayManageEmployee(actor, e))
+            throw fault(403, 'FORBIDDEN', 'تعديل بيانات المستند متاح للشؤون الإدارية.');
+          if (row.state !== 'active')
+            throw fault(409, 'DOCUMENT_ARCHIVED', 'المستند مؤرشف ولا تعدل بياناته.');
+          if (Number(row.version) !== version) throw fault(409, 'STALE_VERSION', 'تغير المستند.');
+          const before = {
+            documentNumber: documentNumberOf(row),
+            issuedAt: row.issued_at ?? null,
+            expiresAt: row.expires_at ?? null,
+          };
+          const changed = (Object.keys(before) as (keyof typeof before)[]).filter(
+            (k) => (before[k] ?? null) !== (details[k] ?? null),
+          );
+          if (!changed.length) throw fault(400, 'NO_CHANGE', 'لم يتغير شيء في بيانات المستند.');
+          const updated = await tx.execute(
+            'UPDATE employee_documents SET document_number_encrypted=?,issued_at=?,expires_at=?,version=version+1 WHERE id=? AND version=?',
+            [
+              details.documentNumber
+                ? encryptSensitive(details.documentNumber, `employee-document-number:${row.id}`)
+                : null,
+              details.issuedAt,
+              details.expiresAt,
+              row.id,
+              version,
+            ],
+          );
+          if (updated.rowCount !== 1) throw fault(409, 'STALE_VERSION', 'تغير المستند.');
+          // Dates are kept in the trail; the number is personal data and is only named as changed.
+          await appendEvent(
+            tx,
+            actor,
+            'document',
+            row.id,
+            'document_details_updated',
+            reason,
+            {
+              changed,
+              ...(changed.includes('expiresAt')
+                ? { expiresAt: { from: before.expiresAt, to: details.expiresAt } }
+                : {}),
+              ...(changed.includes('issuedAt')
+                ? { issuedAt: { from: before.issuedAt, to: details.issuedAt } }
+                : {}),
+            },
+            version + 1,
+          );
+          return {
+            marker: { type: 'document', id: row.id },
+            result: await getDoc(tx, actor, row.id),
+          };
+        },
+      );
+      res.json({ document: doc });
+    },
+  );
   app.post(
     '/api/admin/documents/:id/archive',
     route(async (req, res) => {
@@ -1506,6 +1599,133 @@ function documentCanRead(actor: Actor, category: string) {
   if (actor.role === 'finance') return sensitivity === 'financial';
   return sensitivity === undefined;
 }
+function documentNumberOf(row: any): string | null {
+  if (!row.document_number_encrypted) return null;
+  return decryptSensitive(row.document_number_encrypted, `employee-document-number:${row.id}`);
+}
+/** Number, issue date and expiry of a document. Expiry is required where the category expires. */
+function documentDetails(
+  b: Record<string, unknown>,
+  expiryRequired: boolean,
+): { documentNumber: string | null; issuedAt: string | null; expiresAt: string | null } {
+  const dateOf = (value: unknown, label: string) => {
+    if (value === undefined || value === null || value === '') return null;
+    if (typeof value !== 'string' || !validIsoDate(value))
+      throw fault(400, 'INVALID_DATE', `${label} غير صالح.`);
+    return value;
+  };
+  const expiresAt = dateOf(b.expiresAt, 'تاريخ الانتهاء');
+  const issuedAt = dateOf(b.issuedAt, 'تاريخ الإصدار');
+  if (expiryRequired && !expiresAt)
+    throw fault(400, 'EXPIRY_REQUIRED', 'أدخل تاريخ انتهاء الوثيقة؛ عليه تقوم تنبيهات التجديد.');
+  if (issuedAt && expiresAt && issuedAt > expiresAt)
+    throw fault(400, 'INVALID_DATE', 'تاريخ الإصدار بعد تاريخ الانتهاء.');
+  let documentNumber: string | null = null;
+  if (b.documentNumber !== undefined && b.documentNumber !== null) {
+    if (typeof b.documentNumber !== 'string' || b.documentNumber.length > 60)
+      throw fault(400, 'INVALID_DOCUMENT_NUMBER', 'رقم الوثيقة غير صالح.');
+    documentNumber = b.documentNumber.trim() || null;
+  }
+  return { documentNumber, issuedAt, expiresAt };
+}
+const EXPIRY_HORIZON_DAYS = 120;
+const profileExpiries = [
+  {
+    field: 'nationalIdExpiry',
+    title: 'الهوية / الإقامة',
+    category: 'identity',
+    number: 'nationalId',
+  },
+  { field: 'passportExpiry', title: 'جواز السفر', category: 'passport', number: 'passportNumber' },
+  { field: 'contractEnd', title: 'نهاية العقد', category: 'contract', number: undefined },
+] as const;
+/**
+ * Expiry follow-up for HR (decision 023): every expired document and every one expiring within
+ * the horizon, for staff on duty. A date entered in the employee file (iqama, passport, contract
+ * end) counts too, unless a document of that kind with an expiry is already on file.
+ */
+function registerExpiryRoutes(app: Express, ctx: { db: AsyncDb; requireActor: RequireActor }) {
+  const { db, requireActor } = ctx;
+  routeWithActor(app, 'get', '/api/admin/expiries', requireActor, async (_req, res, actor) => {
+    if (actor.role !== 'hr')
+      throw fault(403, 'FORBIDDEN', 'متابعة انتهاء الوثائق متاحة للشؤون الإدارية.');
+    const today = todayInRiyadh();
+    const until = addDays(today, EXPIRY_HORIZON_DAYS);
+    const employees = (
+      await db.read<EmployeeRow>(
+        "SELECT * FROM employee_access WHERE status IN ('active','on_leave')",
+      )
+    ).filter((e) => mayReadEmployee(actor, e));
+    const byId = new Map(employees.map((e) => [e.id, e]));
+    const items: DocumentExpiryItem[] = [];
+    const covered = new Set<string>();
+    const docs = await db.read<any>(
+      "SELECT * FROM employee_documents WHERE state='active' AND expires_at IS NOT NULL AND expires_at<=? ORDER BY expires_at",
+      [until],
+    );
+    for (const doc of docs) {
+      const employee = byId.get(doc.employee_id);
+      if (!employee) continue;
+      covered.add(`${doc.employee_id}:${doc.category}`);
+      items.push({
+        id: doc.id,
+        employeeId: employee.id,
+        employeeName: employee.name,
+        title: documentCategories.find((c) => c.key === doc.category)?.label ?? 'مستند',
+        category: doc.category,
+        documentNumber: documentNumberOf(doc),
+        expiresAt: doc.expires_at,
+        daysLeft: daysBetween(today, doc.expires_at),
+        source: 'document',
+        documentId: doc.id,
+        version: Number(doc.version),
+        issuedAt: doc.issued_at ?? null,
+      });
+    }
+    // Documents with an expiry beyond the horizon still cover the matching file date.
+    for (const row of await db.read<{ employee_id: string; category: string }>(
+      "SELECT employee_id,category FROM employee_documents WHERE state='active' AND expires_at>?",
+      [until],
+    ))
+      covered.add(`${row.employee_id}:${row.category}`);
+    for (const employee of employees) {
+      const values = await getProfileValues(db, employee.id);
+      for (const p of profileExpiries) {
+        const value = values[p.field];
+        if (typeof value !== 'string' || !validIsoDate(value) || value > until) continue;
+        if (covered.has(`${employee.id}:${p.category}`)) continue;
+        const number = p.number ? values[p.number] : undefined;
+        items.push({
+          id: `profile-${employee.id}-${p.field}`,
+          employeeId: employee.id,
+          employeeName: employee.name,
+          title: p.title,
+          category: p.category,
+          documentNumber: typeof number === 'string' && number.trim() ? number.trim() : null,
+          expiresAt: value,
+          daysLeft: daysBetween(today, value),
+          source: 'profile',
+          documentId: null,
+          version: null,
+          issuedAt: null,
+        });
+      }
+    }
+    items.sort(
+      (a, b) =>
+        a.expiresAt.localeCompare(b.expiresAt) || a.employeeName.localeCompare(b.employeeName),
+    );
+    res.json({ today, horizonDays: EXPIRY_HORIZON_DAYS, items });
+  });
+}
+function addDays(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000);
+}
 async function getDocRow(db: AsyncDb, id: string) {
   return (await db.read<any>('SELECT * FROM employee_documents WHERE id=?', [id]))[0];
 }
@@ -1519,6 +1739,8 @@ function docView(row: any, actor: Actor) {
     mimeType: row.mime_type,
     size: Number(row.size_bytes),
     expiresAt: row.expires_at,
+    issuedAt: row.issued_at ?? null,
+    documentNumber: actor.role === 'auditor' ? null : documentNumberOf(row),
     uploadedAt: row.uploaded_at,
     uploadedBy: actor.role === 'auditor' ? '' : row.uploaded_by,
     checksum: actor.role === 'auditor' ? '' : row.checksum,

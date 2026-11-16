@@ -5,6 +5,7 @@ import {
   Archive,
   ArrowDownToLine,
   ArrowRight,
+  CalendarClock,
   Check,
   Clock3,
   FileText,
@@ -32,6 +33,7 @@ import {
   splitFields,
 } from './profile-visibility';
 import type {
+  DocumentExpiryItem,
   AdministrativeOverview,
   AdministrativeRequest,
   AttendanceRecord,
@@ -848,6 +850,274 @@ function RequestRows({ requests }: { requests: AdministrativeRequest[] }) {
     <Empty>لا توجد طلبات مسجلة</Empty>
   );
 }
+
+/** Arabic count of days, Latin digits: «يوم واحد»، «يومان»، «5 أيام»، «12 يومًا». */
+function daysWord(n: number): string {
+  if (n === 1) return 'يوم واحد';
+  if (n === 2) return 'يومان';
+  if (n >= 3 && n <= 10) return `${n} أيام`;
+  return `${n} يومًا`;
+}
+export function expiryLabel(daysLeft: number): string {
+  if (daysLeft < 0) return `منتهية منذ ${daysWord(-daysLeft)}`;
+  if (daysLeft === 0) return 'تنتهي اليوم';
+  return `باقي ${daysWord(daysLeft)}`;
+}
+export function expiryTone(daysLeft: number): 'expired' | 'urgent' | 'soon' | 'later' {
+  if (daysLeft < 0) return 'expired';
+  if (daysLeft <= 14) return 'urgent';
+  if (daysLeft <= 30) return 'soon';
+  return 'later';
+}
+function daysFromToday(isoDate: string): number {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Riyadh' }).format(new Date());
+  return Math.round(
+    (Date.parse(`${isoDate}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / 86_400_000,
+  );
+}
+function ExpiryBadge({ date: iso }: { date: string | null | undefined }) {
+  if (!iso) return <>—</>;
+  const left = daysFromToday(iso);
+  return (
+    <span className="adm-expiry">
+      {date(iso)}
+      {left <= 120 && (
+        <em className={`adm-expiry-badge ${expiryTone(left)}`}>{expiryLabel(left)}</em>
+      )}
+    </span>
+  );
+}
+const categoryExpires = (key: string) =>
+  (documentCategories as DocumentCategory[]).find((c) => c.key === key)?.hasExpiry === true;
+/** Number, issue date and expiry of a document; expiry is required where the category expires. */
+function DocumentDetailsInputs({
+  category,
+  number,
+  setNumber,
+  issuedAt,
+  setIssuedAt,
+  expiresAt,
+  setExpiresAt,
+}: {
+  category: string;
+  number: string;
+  setNumber: (v: string) => void;
+  issuedAt: string;
+  setIssuedAt: (v: string) => void;
+  expiresAt: string;
+  setExpiresAt: (v: string) => void;
+}) {
+  const required = categoryExpires(category);
+  return (
+    <>
+      <label className="adm-field">
+        <span>رقم الوثيقة</span>
+        <input
+          value={number}
+          maxLength={60}
+          dir="ltr"
+          inputMode="text"
+          onChange={(e) => setNumber(e.target.value)}
+        />
+      </label>
+      <label className="adm-field">
+        <span>تاريخ الإصدار (اختياري)</span>
+        <input type="date" value={issuedAt} onChange={(e) => setIssuedAt(e.target.value)} />
+      </label>
+      <label className="adm-field">
+        <span>{required ? 'تاريخ الانتهاء *' : 'تاريخ الانتهاء (إن وجد)'}</span>
+        <input
+          type="date"
+          required={required}
+          value={expiresAt}
+          onChange={(e) => setExpiresAt(e.target.value)}
+        />
+      </label>
+    </>
+  );
+}
+const expiryFilters = [
+  ['all', 'الكل'],
+  ['expired', 'منتهية'],
+  ['14', 'خلال أسبوعين'],
+  ['30', 'خلال شهر'],
+  ['90', 'خلال 3 أشهر'],
+] as const;
+/**
+ * HR follow-up of expiring documents (decision 023): expired first, then by date, with the days
+ * left. A document's number and dates are updated in place after a renewal, with a reason.
+ */
+function ExpiryFollowUp({ refreshKey, onUpdated }: { refreshKey: number; onUpdated: () => void }) {
+  const { notify } = useApp();
+  const { value, loading, error, reload } = useLoadRaw<{
+    items: DocumentExpiryItem[];
+    horizonDays: number;
+  }>(`/admin/expiries?r=${refreshKey}`);
+  const [filter, setFilter] = useState<(typeof expiryFilters)[number][0]>('all');
+  const [editing, setEditing] = useState<DocumentExpiryItem | null>(null);
+  const [number, setNumber] = useState('');
+  const [issuedAt, setIssuedAt] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const items = value?.items ?? [];
+  const count = (test: (d: number) => boolean) => items.filter((i) => test(i.daysLeft)).length;
+  const visible = items.filter((i) =>
+    filter === 'all'
+      ? true
+      : filter === 'expired'
+        ? i.daysLeft < 0
+        : i.daysLeft >= 0 && i.daysLeft <= Number(filter),
+  );
+  const startEdit = (item: DocumentExpiryItem) => {
+    setEditing(item);
+    setNumber(item.documentNumber ?? '');
+    setIssuedAt(item.issuedAt ?? '');
+    setExpiresAt(item.expiresAt);
+    setReason('تجديد الوثيقة');
+  };
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editing?.documentId || editing.version === null) return;
+    setBusy(true);
+    try {
+      await api(
+        `/admin/documents/${editing.documentId}`,
+        json('PATCH', {
+          version: editing.version,
+          reason,
+          documentNumber: number,
+          issuedAt: issuedAt || null,
+          expiresAt: expiresAt || null,
+        }),
+      );
+      setEditing(null);
+      notify('حُدّثت بيانات الوثيقة وسُجّل التعديل');
+      onUpdated();
+      void reload();
+    } catch (err) {
+      notify((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="adm-section adm-expiries" aria-labelledby="expiries-title">
+      <h3 id="expiries-title">
+        <CalendarClock size={17} /> متابعة انتهاء الوثائق
+      </h3>
+      <p className="adm-note">
+        المنتهية وما ينتهي خلال {value?.horizonDays ?? 120} يومًا لمن هم على رأس العمل، من الوثائق
+        المرفوعة ومن تواريخ الملف الوظيفي (الهوية أو الإقامة، الجواز، نهاية العقد).
+      </p>
+      {loading ? (
+        <Busy />
+      ) : error ? (
+        <Notice error={error} retry={() => void reload()} />
+      ) : (
+        <>
+          <div className="adm-expiry-filters" role="group" aria-label="تصفية حسب المدة">
+            {expiryFilters.map(([key, label]) => {
+              const n =
+                key === 'all'
+                  ? items.length
+                  : key === 'expired'
+                    ? count((d) => d < 0)
+                    : count((d) => d >= 0 && d <= Number(key));
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={filter === key ? 'active' : ''}
+                  aria-pressed={filter === key}
+                  onClick={() => setFilter(key)}
+                >
+                  {label} <span>{n}</span>
+                </button>
+              );
+            })}
+          </div>
+          {visible.length ? (
+            <Table headers={['الموظف', 'الوثيقة', 'الرقم', 'تاريخ الانتهاء', 'المتبقي', 'إجراء']}>
+              {visible.map((item) => (
+                <tr key={item.id} className={`adm-expiry-row ${expiryTone(item.daysLeft)}`}>
+                  <td>
+                    <Link to={`/employees/${item.employeeId}`}>{item.employeeName}</Link>
+                  </td>
+                  <td>
+                    {item.title}
+                    {item.source === 'profile' && <small className="adm-muted"> · من الملف</small>}
+                  </td>
+                  <td>{item.documentNumber ? <bdi dir="ltr">{item.documentNumber}</bdi> : '—'}</td>
+                  <td>{date(item.expiresAt)}</td>
+                  <td>
+                    <em className={`adm-expiry-badge ${expiryTone(item.daysLeft)}`}>
+                      {expiryLabel(item.daysLeft)}
+                    </em>
+                  </td>
+                  <td>
+                    {item.source === 'document' ? (
+                      <button type="button" className="adm-link" onClick={() => startEdit(item)}>
+                        تحديث بعد التجديد
+                      </button>
+                    ) : (
+                      <Link className="adm-link" to={`/employees/${item.employeeId}`}>
+                        فتح الملف
+                      </Link>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </Table>
+          ) : (
+            <Empty>
+              {items.length ? 'لا شيء في هذه المدة' : 'لا توجد وثائق منتهية أو قريبة الانتهاء'}
+            </Empty>
+          )}
+          {editing && (
+            <form className="adm-upload adm-expiry-edit" onSubmit={save}>
+              <h4>
+                تحديث {editing.title} — {editing.employeeName}
+              </h4>
+              <div className="adm-fields">
+                <DocumentDetailsInputs
+                  category={editing.category}
+                  number={number}
+                  setNumber={setNumber}
+                  issuedAt={issuedAt}
+                  setIssuedAt={setIssuedAt}
+                  expiresAt={expiresAt}
+                  setExpiresAt={setExpiresAt}
+                />
+                <label className="adm-field">
+                  <span>سبب التعديل *</span>
+                  <input required value={reason} onChange={(e) => setReason(e.target.value)} />
+                </label>
+              </div>
+              <p className="adm-note">
+                يبقى الملف المرفوع كما هو. إن كان لديك صورة الوثيقة الجديدة فارفعها وثيقةً جديدة
+                وأرشف القديمة.
+              </p>
+              <div className="adm-heading-actions">
+                <ActionButton type="submit" disabled={busy || !reason.trim()}>
+                  {busy ? 'جارٍ الحفظ…' : 'حفظ البيانات'}
+                </ActionButton>
+                <button
+                  type="button"
+                  className="adm-button secondary"
+                  onClick={() => setEditing(null)}
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function DocumentTable({
   documents,
   onDownload,
@@ -856,7 +1126,7 @@ function DocumentTable({
   onDownload?: (document: EmployeeDocument) => void;
 }) {
   return documents.length ? (
-    <Table headers={['الوثيقة', 'الصنف', 'تاريخ الرفع', 'الانتهاء', 'الحالة']}>
+    <Table headers={['الوثيقة', 'الصنف', 'الرقم', 'تاريخ الرفع', 'الانتهاء', 'الحالة']}>
       {documents.map((d) => (
         <tr key={d.id}>
           <td>
@@ -869,8 +1139,9 @@ function DocumentTable({
             )}
           </td>
           <td>{docCategoryLabel(d.category)}</td>
+          <td>{d.documentNumber ? <bdi dir="ltr">{d.documentNumber}</bdi> : '—'}</td>
           <td>{date(d.uploadedAt)}</td>
-          <td>{date(d.expiresAt)}</td>
+          <td>{d.state === 'active' ? <ExpiryBadge date={d.expiresAt} /> : date(d.expiresAt)}</td>
           <td>{d.state === 'active' ? 'سارية' : 'مؤرشفة'}</td>
         </tr>
       ))}
@@ -891,6 +1162,8 @@ function ProfileDocumentUpload({
   const [category, setCategory] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [expiresAt, setExpiresAt] = useState('');
+  const [issuedAt, setIssuedAt] = useState('');
+  const [documentNumber, setDocumentNumber] = useState('');
   const [busy, setBusy] = useState(false);
   if (data.me.role !== 'hr') return null;
   const upload = async (e: FormEvent) => {
@@ -915,10 +1188,15 @@ function ProfileDocumentUpload({
           mimeType: file.type,
           contentBase64,
           expiresAt: expiresAt || undefined,
+          issuedAt: issuedAt || undefined,
+          documentNumber: documentNumber || undefined,
         }),
       );
       onUploaded(r.document);
       setFile(null);
+      setDocumentNumber('');
+      setIssuedAt('');
+      setExpiresAt('');
       notify('تم رفع الوثيقة');
     } catch (e) {
       notify((e as Error).message);
@@ -943,10 +1221,15 @@ function ProfileDocumentUpload({
             ))}
           </select>
         </label>
-        <label className="adm-field">
-          <span>تاريخ الانتهاء</span>
-          <input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
-        </label>
+        <DocumentDetailsInputs
+          category={category}
+          number={documentNumber}
+          setNumber={setDocumentNumber}
+          issuedAt={issuedAt}
+          setIssuedAt={setIssuedAt}
+          expiresAt={expiresAt}
+          setExpiresAt={setExpiresAt}
+        />
         <label className="adm-field">
           <span>ملف حتى 2 ميغابايت</span>
           <input
@@ -1795,6 +2078,9 @@ export function DocumentsPage() {
   const [employeeId, setEmployeeId] = useState(data.me.id);
   const [category, setCategory] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
+  const [issuedAt, setIssuedAt] = useState('');
+  const [documentNumber, setDocumentNumber] = useState('');
+  const [expiryKey, setExpiryKey] = useState(0);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [archiveDoc, setArchiveDoc] = useState<EmployeeDocument | null>(null);
@@ -1825,10 +2111,16 @@ export function DocumentsPage() {
           mimeType: file.type,
           contentBase64,
           expiresAt: expiresAt || undefined,
+          issuedAt: issuedAt || undefined,
+          documentNumber: documentNumber || undefined,
         }),
       );
       setValue([r.document, ...(docs || [])]);
       setFile(null);
+      setDocumentNumber('');
+      setIssuedAt('');
+      setExpiresAt('');
+      setExpiryKey((k) => k + 1);
       notify('تم رفع الوثيقة');
     } catch (e) {
       notify((e as Error).message);
@@ -1861,6 +2153,7 @@ export function DocumentsPage() {
       setValue((docs || []).map((x) => (x.id === archiveDoc.id ? r.document : x)));
       setArchiveDoc(null);
       setArchiveReason('');
+      setExpiryKey((k) => k + 1);
       notify('تمت أرشفة الوثيقة وحفظ نسختها');
     } catch (e) {
       notify((e as Error).message);
@@ -1878,6 +2171,7 @@ export function DocumentsPage() {
           />
         </label>
       </div>
+      {canManage && <ExpiryFollowUp refreshKey={expiryKey} onUpdated={() => void reload()} />}
       {canManage && (
         <form className="adm-section adm-upload" onSubmit={upload}>
           <h3>
@@ -1905,10 +2199,15 @@ export function DocumentsPage() {
                 ))}
               </select>
             </label>
-            <label className="adm-field">
-              <span>تاريخ الانتهاء</span>
-              <input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
-            </label>
+            <DocumentDetailsInputs
+              category={category}
+              number={documentNumber}
+              setNumber={setDocumentNumber}
+              issuedAt={issuedAt}
+              setIssuedAt={setIssuedAt}
+              expiresAt={expiresAt}
+              setExpiresAt={setExpiresAt}
+            />
             <label className="adm-field">
               <span>الملف (حتى 2 ميغابايت)</span>
               <input
@@ -1929,14 +2228,28 @@ export function DocumentsPage() {
       ) : error ? (
         <Notice error={error} retry={() => void reload()} />
       ) : visible.length ? (
-        <Table headers={['الموظف', 'الوثيقة', 'الصنف', 'رفعت في', 'تنتهي في', 'الحالة', 'إجراءات']}>
+        <Table
+          headers={[
+            'الموظف',
+            'الوثيقة',
+            'الصنف',
+            'الرقم',
+            'رفعت في',
+            'تنتهي في',
+            'الحالة',
+            'إجراءات',
+          ]}
+        >
           {visible.map((d) => (
             <tr key={d.id}>
               <td>{d.employeeName}</td>
               <td>{d.filename}</td>
               <td>{docCategoryLabel(d.category)}</td>
+              <td>{d.documentNumber ? <bdi dir="ltr">{d.documentNumber}</bdi> : '—'}</td>
               <td>{date(d.uploadedAt)}</td>
-              <td>{date(d.expiresAt)}</td>
+              <td>
+                {d.state === 'active' ? <ExpiryBadge date={d.expiresAt} /> : date(d.expiresAt)}
+              </td>
               <td>{d.state === 'active' ? 'نشطة' : 'مؤرشفة'}</td>
               <td className="adm-row-actions">
                 <button aria-label="تنزيل" onClick={() => void download(d)}>

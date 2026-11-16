@@ -1194,3 +1194,73 @@ details.adm-section.profile-extra > summary {
 .profile-section .profile-total {
   margin: 0 0 14px;
 }
+
+/* Expiry follow-up (decision 023). */
+.adm-expiries h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.adm-muted {
+  color: var(--adm-muted);
+}
+.adm-expiry {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.adm-expiry-badge {
+  display: inline-block;
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: #eef3f8;
+  color: #315b7b;
+}
+.adm-expiry-badge.expired {
+  background: #fde8e8;
+  color: #a61b1b;
+}
+.adm-expiry-badge.urgent {
+  background: #fff0e0;
+  color: #9a4a00;
+}
+.adm-expiry-badge.soon {
+  background: #fff8d6;
+  color: #7a5b00;
+}
+.adm-expiry-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+.adm-expiry-filters button {
+  padding: 6px 12px;
+  border: 1px solid var(--adm-line);
+  border-radius: 999px;
+  color: var(--adm-muted);
+  background: var(--adm-surface);
+}
+.adm-expiry-filters button span {
+  font-weight: 700;
+  margin-inline-start: 4px;
+}
+.adm-expiry-filters button.active {
+  border-color: var(--adm-blue);
+  color: var(--adm-blue);
+  font-weight: 700;
+}
+.adm-expiry-edit {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--adm-line);
+  border-radius: 8px;
+}
+.adm-expiry-edit h4 {
+  margin: 0 0 10px;
+}

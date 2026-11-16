@@ -1124,6 +1124,29 @@
     padding-top: 13px;
     font-size: 10px;
   }
+  .expiry-alert {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: -10px 0 22px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    border: 1px solid #f1dc9a;
+    background: #fff9e6;
+    color: #6b5000;
+    text-decoration: none;
+  }
+  .expiry-alert.urgent {
+    border-color: #f3c3c3;
+    background: #fdf0f0;
+    color: #8f1d1d;
+  }
+  .expiry-alert > span {
+    flex: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
   .stat-strip {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
