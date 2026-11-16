@@ -123,6 +123,9 @@ function BalanceCard() {
     </section>
   );
 }
+/** On duty = active or on leave; suspended and terminated staff are not counted. */
+const isOnDuty = (e: Employee) => e.status === 'active' || e.status === 'on_leave';
+
 export function Dashboard() {
   const { data, newLeave, showLeave } = useApp();
   const { me, employees, leaves, today } = data;
@@ -183,8 +186,8 @@ export function Dashboard() {
           <div>
             <small>{me.role === 'employee' ? 'ملفك الوظيفي' : 'أفراد الفريق'}</small>
             <strong>
-              {me.role === 'employee' ? 'نشط' : employees.length}
-              <em>{me.role === 'employee' ? 'في سبق' : 'موظفين في نطاقك'}</em>
+              {me.role === 'employee' ? 'نشط' : employees.filter(isOnDuty).length}
+              <em>{me.role === 'employee' ? 'في سبق' : 'على رأس العمل في نطاقك'}</em>
             </strong>
           </div>
         </div>
@@ -579,7 +582,6 @@ export function PeoplePage() {
   const [department, setDepartment] = useState('all');
   const departments = [...new Set(data.employees.map((e) => e.department))];
   const [duty, setDuty] = useState<'on' | 'off'>('on');
-  const isOnDuty = (e: Employee) => e.status === 'active' || e.status === 'on_leave';
   const matching = data.employees.filter(
     (e) =>
       (department === 'all' || department === e.department) &&
