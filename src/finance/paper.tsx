@@ -235,8 +235,6 @@ export function InvoicePaper({
         title={en ? title.en : title.ar}
         subtitle={en ? undefined : title.en}
         number={invoice.number}
-        status={status}
-        statusKind={statusKind}
       />
       <div className="fin-document-rule" />
       {internalCopy && (
@@ -245,12 +243,8 @@ export function InvoicePaper({
           <span lang="en">Internal copy – not the official tax invoice</span>
         </div>
       )}
-      {accepted ? (
-        <div className="fin-final-banner">
-          <Check size={17} />
-          {status} · {en ? 'Status confirmed by Wafeq and ZATCA' : 'حالة مصدرها وافق والهيئة'}
-        </div>
-      ) : (
+      {/* The status is shown once, in the details card; an issued invoice needs no banner. */}
+      {!accepted && (
         <div className="fin-draft-watermark">
           {cancelled
             ? en
@@ -370,8 +364,9 @@ function DocumentHeader({
   seller: FinanceSeller;
   title: string;
   number: string;
-  status: string;
-  statusKind: StatusKind;
+  /** Omitted on invoices: their status appears once, in the details card. */
+  status?: string;
+  statusKind?: StatusKind;
   subtitle?: string;
 }) {
   return (
@@ -380,7 +375,7 @@ function DocumentHeader({
       <aside className="fin-doc-heading">
         <h1>{title}</h1>
         {subtitle && <span>{subtitle}</span>}
-        <Status text={status} kind={statusKind} />
+        {status && <Status text={status} kind={statusKind} />}
         <b className="fin-doc-number" dir="ltr">
           {number}
         </b>

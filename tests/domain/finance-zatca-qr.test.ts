@@ -134,9 +134,15 @@ test('our paper is the tax invoice only when cleared with a matching QR; otherwi
   assert.equal(html.includes('نسخة داخلية'), false);
   assert.match(html, /<img class="fin-qr" src="data:image\/svg\+xml/);
   assert.ok(html.includes('Synthetic Beneficiary'), 'bank details stay on the invoice');
+  // The status appears once, in the details card: no header badge, no banner under the header.
+  const issued = (page: string) => page.split('فاتورة ضريبية صادرة').length - 1;
+  assert.equal(issued(html), 1);
+  assert.equal(html.includes('class="fin-final-banner"'), false);
+  assert.equal(html.includes('حالة مصدرها وافق والهيئة'), false);
 
   const noQr = invoiceHtml(invoice, invoice.seller);
   assert.ok(noQr.includes('Internal copy – not the official tax invoice'));
+  assert.equal(issued(noQr), 1);
   assert.equal(noQr.includes('class="fin-qr"'), false);
 
   const wrongQr = {
