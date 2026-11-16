@@ -74,6 +74,17 @@ export function visibleRequestValues(
 export function mayManageEmployee(actor: Actor, employee: EmployeeRow): boolean {
   return actor.role === 'hr' && actor.id !== employee.id;
 }
+/**
+ * The system owner edits their own file (owner, 2026-11-16, decision 024): personal, job and
+ * document data. Salary and bank fields stay with another HR account, so nobody sets the pay
+ * they later approve. Every such edit is marked `selfEdit` in the audit trail.
+ */
+export function mayEditOwnFileAsOwner(actor: Actor, employee: EmployeeRow): boolean {
+  return actor.role === 'hr' && actor.owner === true && actor.id === employee.id;
+}
+export function mayEditFile(actor: Actor, employee: EmployeeRow): boolean {
+  return mayManageEmployee(actor, employee) || mayEditOwnFileAsOwner(actor, employee);
+}
 
 function initials(name: string): string {
   const words = name.trim().split(/\s+/u).filter(Boolean);
@@ -278,7 +289,8 @@ export async function saveProfileValues(
   validateEffectiveAt(effectiveAt);
   const employee = await readEmployee(tx, employeeId);
   if (!employee) throw fault(404, 'EMPLOYEE_NOT_FOUND', 'الموظف غير موجود.');
-  if (!mayManageEmployee(actor, employee) && !approvedWorkflow)
+  const ownerSelf = !approvedWorkflow && mayEditOwnFileAsOwner(actor, employee);
+  if (!mayManageEmployee(actor, employee) && !ownerSelf && !approvedWorkflow)
     throw fault(403, 'FORBIDDEN', 'لا تملك صلاحية تعديل هذا الملف.');
   if (expectedVersion !== undefined && employee.record_version !== expectedVersion)
     throw fault(409, 'STALE_VERSION', 'تغير الملف؛ حدّث البيانات ثم أعد المحاولة.');
@@ -286,6 +298,20 @@ export async function saveProfileValues(
     throw fault(400, 'REASON_REQUIRED', 'أدخل سببًا للتعديل.');
   const validated = validateValues(employeeFields, values, { partial: true });
   const before = await getProfileValues(tx, employeeId);
+  if (ownerSelf) {
+    const financialChanged = employeeFields.some(
+      (field) =>
+        field.sensitive === 'financial' &&
+        field.key in validated &&
+        JSON.stringify(validated[field.key] ?? null) !== JSON.stringify(before[field.key] ?? null),
+    );
+    if (financialChanged)
+      throw fault(
+        403,
+        'OWNER_SELF_FINANCIAL',
+        'الراتب والبنك في ملفك يعدلهما حساب موارد بشرية آخر؛ لا يحدد أحد أجرًا يعتمده لاحقًا.',
+      );
+  }
   const bankKeys = [
     'bankCountry',
     'bankAccountName',
@@ -1268,7 +1294,8 @@ export async function getEmployeeFile(
       : null,
     version: employee.record_version,
     values,
-    editable: mayManageEmployee(actor, employee),
+    editable: mayEditFile(actor, employee),
+    ...(mayEditOwnFileAsOwner(actor, employee) ? { ownerSelfEdit: true } : {}),
     periods: periods.map((period) => ({
       id: period.id,
       startDate: period.start_date,

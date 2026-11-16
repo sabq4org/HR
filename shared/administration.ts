@@ -118,6 +118,8 @@ export interface EmployeeFile {
   version: number;
   values: FormValues;
   editable: boolean;
+  /** The system owner editing their own file: salary and bank fields stay read-only. */
+  ownerSelfEdit?: boolean;
   periods: EmploymentPeriod[];
   requests: AdministrativeRequest[];
   documents: EmployeeDocument[];
@@ -184,6 +186,8 @@ export interface EmployeeDocument {
   issuedAt?: string | null;
   /** Number printed on the document (iqama, passport…); hidden from auditors. */
   documentNumber?: string | null;
+  /** Expected renewal fee in halalas, entered by HR (decision 024). */
+  renewalFeeHalalas?: number | null;
   uploadedAt: string;
   uploadedBy: string;
   checksum: string;
@@ -205,6 +209,8 @@ export interface DocumentExpiryItem {
   documentId: string | null;
   version: number | null;
   issuedAt: string | null;
+  /** Expected renewal fee in halalas; null when not entered or the date is from the file. */
+  renewalFeeHalalas: number | null;
 }
 export interface DocumentCategory {
   key: string;

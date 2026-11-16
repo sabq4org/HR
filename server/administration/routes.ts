@@ -39,6 +39,7 @@ import {
   filterProfileValues,
   getEmployeeFile,
   getProfileValues,
+  mayEditFile,
   mayManageEmployee,
   mayReadEmployee,
   protectFormValues,
@@ -495,7 +496,7 @@ export function registerAdministration(
             employeeId,
             'profile_updated',
             reason,
-            { fields: Object.keys(values) },
+            { fields: Object.keys(values), ...(actor.id === employeeId ? { selfEdit: true } : {}) },
             version + 1,
           );
           return {
@@ -1324,7 +1325,7 @@ function registerDocumentRoutes(
       const actor = actorOrThrow(await requireActor(req));
       const employee = await readEmployee(db, param(req, 'id'));
       if (!employee) throw fault(404, 'EMPLOYEE_NOT_FOUND', 'الموظف غير موجود.');
-      if (!mayManageEmployee(actor, employee))
+      if (!mayEditFile(actor, employee))
         throw fault(403, 'FORBIDDEN', 'رفع المستندات متاح للشؤون الإدارية.');
       const b = requireRecord(req.body);
       const category = requiredString(b.category, 'INVALID_CATEGORY', 'اختر فئة مستند.', 60);
@@ -1359,13 +1360,16 @@ function registerDocumentRoutes(
       if (!magic) throw fault(400, 'FILE_TYPE_MISMATCH', 'امتداد الملف لا يطابق محتواه.');
       const id = newId();
       const now = at();
-      const { documentNumber, issuedAt, expiresAt } = documentDetails(b, def.hasExpiry === true);
+      const { documentNumber, issuedAt, expiresAt, renewalFeeHalalas } = documentDetails(
+        b,
+        def.hasExpiry === true,
+      );
       const doc = await idempotent(
         db,
         actor,
         `document:create:${employee.id}`,
         req.get('Idempotency-Key') ?? undefined,
-        { category, filename, mime, base, expiresAt, issuedAt, documentNumber },
+        { category, filename, mime, base, expiresAt, issuedAt, documentNumber, renewalFeeHalalas },
         async (tx, m) => getDoc(tx, actor, m.id),
         async (tx) => {
           const totals = (
@@ -1386,7 +1390,7 @@ function registerDocumentRoutes(
               'وصلت مساحة المعاينة إلى حد المستندات والملفات المسموح.',
             );
           await tx.execute(
-            'INSERT INTO employee_documents(id,employee_id,category,filename,mime_type,size_bytes,expires_at,uploaded_at,uploaded_by,checksum,encrypted_content,issued_at,document_number_encrypted) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            'INSERT INTO employee_documents(id,employee_id,category,filename,mime_type,size_bytes,expires_at,uploaded_at,uploaded_by,checksum,encrypted_content,issued_at,document_number_encrypted,renewal_fee_halalas) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             [
               id,
               employee.id,
@@ -1403,6 +1407,7 @@ function registerDocumentRoutes(
               documentNumber
                 ? encryptSensitive(documentNumber, `employee-document-number:${id}`)
                 : null,
+              renewalFeeHalalas,
             ],
           );
           await appendEvent(
@@ -1492,7 +1497,7 @@ function registerDocumentRoutes(
           const row = await getDocRow(tx, id);
           if (!row) throw fault(404, 'DOCUMENT_NOT_FOUND', 'المستند غير موجود.');
           const e = await readEmployee(tx, row.employee_id);
-          if (!e || !mayManageEmployee(actor, e))
+          if (!e || !mayEditFile(actor, e))
             throw fault(403, 'FORBIDDEN', 'تعديل بيانات المستند متاح للشؤون الإدارية.');
           if (row.state !== 'active')
             throw fault(409, 'DOCUMENT_ARCHIVED', 'المستند مؤرشف ولا تعدل بياناته.');
@@ -1501,19 +1506,21 @@ function registerDocumentRoutes(
             documentNumber: documentNumberOf(row),
             issuedAt: row.issued_at ?? null,
             expiresAt: row.expires_at ?? null,
+            renewalFeeHalalas: feeOf(row),
           };
           const changed = (Object.keys(before) as (keyof typeof before)[]).filter(
             (k) => (before[k] ?? null) !== (details[k] ?? null),
           );
           if (!changed.length) throw fault(400, 'NO_CHANGE', 'لم يتغير شيء في بيانات المستند.');
           const updated = await tx.execute(
-            'UPDATE employee_documents SET document_number_encrypted=?,issued_at=?,expires_at=?,version=version+1 WHERE id=? AND version=?',
+            'UPDATE employee_documents SET document_number_encrypted=?,issued_at=?,expires_at=?,renewal_fee_halalas=?,version=version+1 WHERE id=? AND version=?',
             [
               details.documentNumber
                 ? encryptSensitive(details.documentNumber, `employee-document-number:${row.id}`)
                 : null,
               details.issuedAt,
               details.expiresAt,
+              details.renewalFeeHalalas,
               row.id,
               version,
             ],
@@ -1534,6 +1541,14 @@ function registerDocumentRoutes(
                 : {}),
               ...(changed.includes('issuedAt')
                 ? { issuedAt: { from: before.issuedAt, to: details.issuedAt } }
+                : {}),
+              ...(changed.includes('renewalFeeHalalas')
+                ? {
+                    renewalFeeHalalas: {
+                      from: before.renewalFeeHalalas,
+                      to: details.renewalFeeHalalas,
+                    },
+                  }
                 : {}),
             },
             version + 1,
@@ -1565,7 +1580,7 @@ function registerDocumentRoutes(
           const row = await getDocRow(tx, param(req, 'id'));
           if (!row) throw fault(404, 'DOCUMENT_NOT_FOUND', 'المستند غير موجود.');
           const e = await readEmployee(tx, row.employee_id);
-          if (!e || !mayManageEmployee(actor, e))
+          if (!e || !mayEditFile(actor, e))
             throw fault(403, 'FORBIDDEN', 'أرشفة المستند متاحة للشؤون الإدارية.');
           if (row.version !== version) throw fault(409, 'STALE_VERSION', 'تغير المستند.');
           const archived = await tx.execute(
@@ -1603,11 +1618,36 @@ function documentNumberOf(row: any): string | null {
   if (!row.document_number_encrypted) return null;
   return decryptSensitive(row.document_number_encrypted, `employee-document-number:${row.id}`);
 }
+function feeOf(row: any): number | null {
+  return row.renewal_fee_halalas === null || row.renewal_fee_halalas === undefined
+    ? null
+    : Number(row.renewal_fee_halalas);
+}
+/** Renewal fee in riyals ("650", "1,500.50") stored as whole halalas (decision 024). */
+function feeHalalas(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const text = typeof value === 'number' ? String(value) : value;
+  const bad = () => fault(400, 'INVALID_FEE', 'اكتب رسوم التجديد رقمًا بالريال، مثل 650 أو 650.50.');
+  if (typeof text !== 'string') throw bad();
+  const normalized = text
+    .trim()
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[,،٬]/g, '')
+    .replace('٫', '.');
+  if (!/^\d{1,9}(\.\d{1,2})?$/.test(normalized)) throw bad();
+  const [whole, frac = ''] = normalized.split('.');
+  return Number(whole) * 100 + Number(frac.padEnd(2, '0'));
+}
 /** Number, issue date and expiry of a document. Expiry is required where the category expires. */
 function documentDetails(
   b: Record<string, unknown>,
   expiryRequired: boolean,
-): { documentNumber: string | null; issuedAt: string | null; expiresAt: string | null } {
+): {
+  documentNumber: string | null;
+  issuedAt: string | null;
+  expiresAt: string | null;
+  renewalFeeHalalas: number | null;
+} {
   const dateOf = (value: unknown, label: string) => {
     if (value === undefined || value === null || value === '') return null;
     if (typeof value !== 'string' || !validIsoDate(value))
@@ -1626,7 +1666,7 @@ function documentDetails(
       throw fault(400, 'INVALID_DOCUMENT_NUMBER', 'رقم الوثيقة غير صالح.');
     documentNumber = b.documentNumber.trim() || null;
   }
-  return { documentNumber, issuedAt, expiresAt };
+  return { documentNumber, issuedAt, expiresAt, renewalFeeHalalas: feeHalalas(b.renewalFee) };
 }
 const EXPIRY_HORIZON_DAYS = 120;
 const profileExpiries = [
@@ -1680,6 +1720,7 @@ function registerExpiryRoutes(app: Express, ctx: { db: AsyncDb; requireActor: Re
         documentId: doc.id,
         version: Number(doc.version),
         issuedAt: doc.issued_at ?? null,
+        renewalFeeHalalas: feeOf(doc),
       });
     }
     // Documents with an expiry beyond the horizon still cover the matching file date.
@@ -1708,6 +1749,7 @@ function registerExpiryRoutes(app: Express, ctx: { db: AsyncDb; requireActor: Re
           documentId: null,
           version: null,
           issuedAt: null,
+          renewalFeeHalalas: null,
         });
       }
     }
@@ -1741,6 +1783,7 @@ function docView(row: any, actor: Actor) {
     expiresAt: row.expires_at,
     issuedAt: row.issued_at ?? null,
     documentNumber: actor.role === 'auditor' ? null : documentNumberOf(row),
+    renewalFeeHalalas: feeOf(row),
     uploadedAt: row.uploaded_at,
     uploadedBy: actor.role === 'auditor' ? '' : row.uploaded_by,
     checksum: actor.role === 'auditor' ? '' : row.checksum,

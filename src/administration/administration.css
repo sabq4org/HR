@@ -1255,6 +1255,10 @@ details.adm-section.profile-extra > summary {
   color: var(--adm-blue);
   font-weight: 700;
 }
+.adm-expiry-fees {
+  margin: 0 0 8px;
+  color: var(--adm-text, inherit);
+}
 .adm-expiry-edit {
   margin-top: 12px;
   padding: 14px;
