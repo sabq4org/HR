@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowUpLeft,
@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  FileClock,
   FileCheck2,
   Mail,
   MapPin,
@@ -34,6 +35,7 @@ import {
   useApp,
 } from './lib';
 import type { Employee } from '../shared/contracts';
+import type { DocumentExpiryItem } from '../shared/administration';
 import { EmployeeCreateDialog } from './administration';
 
 export function WorkspaceArt() {
@@ -123,6 +125,44 @@ function BalanceCard() {
     </section>
   );
 }
+/** HR only: expired documents and those ending within 30 days, linking to the follow-up list. */
+function ExpiryAlert() {
+  const [items, setItems] = useState<DocumentExpiryItem[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    api<{ items: DocumentExpiryItem[] }>('/admin/expiries')
+      .then((r) => live && setItems(r.items))
+      .catch(() => live && setItems(null));
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!items) return null;
+  const expired = items.filter((i) => i.daysLeft < 0).length;
+  const twoWeeks = items.filter((i) => i.daysLeft >= 0 && i.daysLeft <= 14).length;
+  const month = items.filter((i) => i.daysLeft > 14 && i.daysLeft <= 30).length;
+  if (!expired && !twoWeeks && !month) return null;
+  return (
+    <Link to="/documents" className={`expiry-alert ${expired || twoWeeks ? 'urgent' : ''}`}>
+      <FileClock size={20} aria-hidden="true" />
+      <span>
+        <b>متابعة الوثائق</b>
+        {[
+          expired ? `${expired} منتهية` : '',
+          twoWeeks ? `${twoWeeks} تنتهي خلال أسبوعين` : '',
+          month ? `${month} خلال شهر` : '',
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+      </span>
+      <ArrowUpLeft size={17} aria-hidden="true" />
+    </Link>
+  );
+}
+
+/** On duty = active or on leave; suspended and terminated staff are not counted. */
+const isOnDuty = (e: Employee) => e.status === 'active' || e.status === 'on_leave';
+
 export function Dashboard() {
   const { data, newLeave, showLeave } = useApp();
   const { me, employees, leaves, today } = data;
@@ -183,8 +223,8 @@ export function Dashboard() {
           <div>
             <small>{me.role === 'employee' ? 'ملفك الوظيفي' : 'أفراد الفريق'}</small>
             <strong>
-              {me.role === 'employee' ? 'نشط' : employees.length}
-              <em>{me.role === 'employee' ? 'في سبق' : 'موظفين في نطاقك'}</em>
+              {me.role === 'employee' ? 'نشط' : employees.filter(isOnDuty).length}
+              <em>{me.role === 'employee' ? 'في سبق' : 'على رأس العمل في نطاقك'}</em>
             </strong>
           </div>
         </div>
@@ -227,6 +267,7 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+      {me.role === 'hr' && <ExpiryAlert />}
       <div className="dashboard-bottom">
         <section className="panel requests-panel">
           <SectionTitle
@@ -579,7 +620,6 @@ export function PeoplePage() {
   const [department, setDepartment] = useState('all');
   const departments = [...new Set(data.employees.map((e) => e.department))];
   const [duty, setDuty] = useState<'on' | 'off'>('on');
-  const isOnDuty = (e: Employee) => e.status === 'active' || e.status === 'on_leave';
   const matching = data.employees.filter(
     (e) =>
       (department === 'all' || department === e.department) &&

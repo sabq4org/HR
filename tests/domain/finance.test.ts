@@ -1023,7 +1023,7 @@ test(
             'SELECT version FROM schema_migrations ORDER BY version',
           )
         ).map((row) => row.version),
-        [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22],
+        [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23],
       );
       assert.equal(
         (await call('/api/finance/settings/api-key', { apiKey: 'pg-fake-secret' })).status,
@@ -1497,4 +1497,28 @@ test('a customer abroad keeps its country and tax ID, and its documents default 
     )
   ).invoice;
   assert.equal(invoice.language, 'en');
+});
+
+test('a customer can be saved without an email; a typed email must still be valid', async () => {
+  const { email: _omit, ...withoutEmail } = customerBody;
+  const created = await api('/api/finance/customers', post(withoutEmail, 'no-email'));
+  assert.equal(created.status, 201);
+  const customer = (await json<{ customer: { id: string; email: string } }>(created)).customer;
+  assert.equal(customer.email, '');
+  const blank = await api(
+    '/api/finance/customers',
+    post({ ...customerBody, email: '  ' }, 'blank'),
+  );
+  assert.equal(blank.status, 201);
+  const invalid = await api(
+    '/api/finance/customers',
+    post({ ...customerBody, email: 'not-an-email' }, 'bad-email'),
+  );
+  assert.equal(invalid.status, 400);
+  assert.match(await invalid.text(), /INVALID_EMAIL/);
+  // Documents and the statement work for a customer with no email.
+  const quote = await api('/api/finance/quotes', post(quoteBody(customer.id), 'no-email-quote'));
+  assert.equal(quote.status, 201);
+  const statement = await api(`/api/finance/customers/${customer.id}/statement`);
+  assert.equal(statement.status, 200);
 });

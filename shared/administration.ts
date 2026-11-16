@@ -180,11 +180,31 @@ export interface EmployeeDocument {
   mimeType: string;
   size: number;
   expiresAt: string | null;
+  /** Optional issue date (decision 023). */
+  issuedAt?: string | null;
+  /** Number printed on the document (iqama, passport…); hidden from auditors. */
+  documentNumber?: string | null;
   uploadedAt: string;
   uploadedBy: string;
   checksum: string;
   version: number;
   state: 'active' | 'archived';
+}
+/** One row of the HR expiry follow-up (decision 023). `daysLeft` < 0 means already expired. */
+export interface DocumentExpiryItem {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  title: string;
+  category: string;
+  documentNumber: string | null;
+  expiresAt: string;
+  daysLeft: number;
+  /** `profile`: the date comes from the employee file, no document is on file for it. */
+  source: 'document' | 'profile';
+  documentId: string | null;
+  version: number | null;
+  issuedAt: string | null;
 }
 export interface DocumentCategory {
   key: string;

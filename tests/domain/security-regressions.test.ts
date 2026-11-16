@@ -91,6 +91,8 @@ test('employee documents stay owner-scoped and auditors receive redacted metadat
         filename: 'Sara-identity.pdf',
         mimeType: 'application/pdf',
         contentBase64: bytes.toString('base64'),
+        // An identity document needs its expiry since decision 023.
+        expiresAt: '2030-01-01',
       },
       'security-document-upload',
     );

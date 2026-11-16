@@ -77,6 +77,7 @@ function knownApi(method: string, path: string): boolean {
     [
       '/api/admin/overview',
       '/api/admin/documents',
+      '/api/admin/expiries',
       '/api/admin/reports',
       '/api/admin/reports/export',
       '/api/admin/audit',
@@ -97,7 +98,10 @@ function knownApi(method: string, path: string): boolean {
     )
   )
     return true;
-  if (method === 'PATCH' && /^\/api\/admin\/(employees\/[^/]+|requests\/[^/]+)$/.test(path))
+  if (
+    method === 'PATCH' &&
+    /^\/api\/admin\/(employees\/[^/]+|requests\/[^/]+|documents\/[^/]+)$/.test(path)
+  )
     return true;
   if (method === 'GET' && /^\/api\/admin\/documents\/[^/]+\/download$/.test(path)) return true;
   if (

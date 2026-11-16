@@ -33,6 +33,9 @@ test('owner-paid expenses: attach the invoice, export what is owed, record a ref
 
   await page.goto('/');
   await page.getByRole('button', { name: /مسؤول الفوترة التجريبي/ }).click();
+  // Wait for the sign-in to finish before navigating, as the other finance specs do; navigating
+  // straight away can abort the session request and leave the page on the account picker.
+  await expect(page.getByRole('heading', { name: 'لوحة العمل', exact: true })).toBeVisible();
   await page.goto('/finance');
   const setup = page.getByRole('button', { name: 'تهيئة دليل الحسابات المقترح' });
   await expect(setup.or(page.getByText('الدفاتر متوازنة', { exact: false }))).toBeVisible({
