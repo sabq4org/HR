@@ -53,7 +53,11 @@ export function inAccountantScope(method: string, path: string): boolean {
   if (path === '/api/health') return true;
   if (path !== '/api/finance' && !path.startsWith('/api/finance/')) return false;
   // The provider credential and its live connection test stay with the human owner.
-  if (path === '/api/finance/settings/api-key' || path === '/api/finance/settings/test')
+  if (
+    path === '/api/finance/settings/api-key' ||
+    path === '/api/finance/settings/test' ||
+    path === '/api/finance/settings/switch-organization'
+  )
     return false;
   return ['GET', 'HEAD', 'POST', 'PATCH'].includes(method.toUpperCase());
 }

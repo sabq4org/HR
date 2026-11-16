@@ -938,6 +938,205 @@ export function registerFinance(
       throw fault(409, 'WAFEQ_ORGANIZATION_MISMATCH', 'المفتاح المحفوظ يشير إلى مؤسسة مختلفة.');
     res.json({ settings: await getSettings(db, actor.id, privateMode) });
   });
+  // Moving the workspace to another Wafeq organization. Saving a key keeps refusing a different
+  // organization; only this owner-only route does it, and only when the caller names the new
+  // organization the key belongs to. Every local customer link points at the old organization,
+  // so the links reset in the same transaction and each customer syncs again through
+  // `/customers/:id/sync`, which looks its contact up by external id before creating it.
+  registerRoute(app, 'post', '/api/finance/settings/switch-organization', async (req, res) => {
+    const actor = await auth(req);
+    requireFinance(actor, access);
+    if (!privateMode)
+      throw fault(409, 'PRIVATE_FINANCE_REQUIRED', 'إعداد الربط متاح في النسخة الخاصة فقط.');
+    const b = requireRecord(req.body),
+      apiKey = text(b.apiKey, 2000),
+      confirmed = typeof b.confirmOrganizationId === 'string' ? b.confirmOrganizationId.trim() : '';
+    // Like the key route: the request key is required but never stored with this secret payload.
+    if (!req.get('idempotency-key')?.trim())
+      throw fault(400, 'IDEMPOTENCY_KEY_REQUIRED', 'أرسل مفتاح منع تكرار صالحًا.');
+    const organization = await clientFactory(apiKey).getOrganization();
+    const boundOrganization = async (tx: AsyncDb) => {
+      const row = (
+        await tx.read<{ organization_ciphertext: string }>(
+          'SELECT organization_ciphertext FROM finance_provider_credentials WHERE owner_id=?',
+          [actor.id],
+        )
+      )[0];
+      if (!row)
+        throw fault(
+          409,
+          'WAFEQ_NOT_CONNECTED',
+          'لا يوجد ربط سابق بوافق؛ احفظ المفتاح من «الاتصال بوافق» مباشرة.',
+        );
+      return safeJson<{ id: string; name: string }>(
+        row.organization_ciphertext,
+        `finance:credential-organization:${actor.id}`,
+      );
+    };
+    const previous = await boundOrganization(db);
+    if (previous.id === organization.id)
+      throw fault(
+        409,
+        'WAFEQ_SAME_ORGANIZATION',
+        'المفتاح يتبع المؤسسة المرتبطة نفسها؛ استخدم «حفظ المفتاح» لتحديثه.',
+      );
+    if (confirmed !== organization.id) {
+      res.status(409).json({
+        error: {
+          code: 'WAFEQ_SWITCH_CONFIRMATION_REQUIRED',
+          message: `المفتاح يتبع مؤسسة أخرى في وافق (${organization.name}). أكّد معرّفها للانتقال إليها.`,
+        },
+        switch: { from: previous, to: organization },
+      });
+      return;
+    }
+    const result = await db.transaction(async (tx) => {
+      // Re-read under the transaction so a concurrent save or switch cannot be overwritten.
+      const current = await boundOrganization(tx);
+      if (current.id !== previous.id)
+        throw fault(
+          409,
+          'VERSION_CONFLICT',
+          'تغير ربط وافق أثناء الطلب؛ حدّث الصفحة ثم أعد المحاولة.',
+        );
+      // Documents already sent to the old organization stay there; moving would orphan them.
+      const invoiceOperations = await tx.read<{ n: number | string }>(
+        "SELECT COUNT(*) AS n FROM finance_provider_operations WHERE owner_id=? AND resource_type<>'customer'",
+        [actor.id],
+      );
+      const invoiceRows = await tx.read<InvoiceRow>(
+        'SELECT * FROM finance_invoices WHERE owner_id=?',
+        [actor.id],
+      );
+      const sentInvoices = invoiceRows.filter((row) => {
+        const invoice = safeJson<FinanceInvoice>(
+          row.invoice_ciphertext,
+          `finance:invoice:${row.id}`,
+        );
+        return (
+          !!invoice.wafeqId ||
+          (invoice.zatcaStatus !== undefined && invoice.zatcaStatus !== 'not_submitted')
+        );
+      }).length;
+      if (Number(invoiceOperations[0]?.n ?? 0) > 0 || sentInvoices > 0)
+        throw fault(
+          409,
+          'WAFEQ_SWITCH_BLOCKED',
+          'توجد فواتير أُرسلت إلى مؤسسة وافق الحالية؛ لا يمكن الانتقال دون معالجتها.',
+        );
+      const at = now();
+      const busy = await tx.read<{ n: number | string }>(
+        "SELECT COUNT(*) AS n FROM finance_provider_operations WHERE owner_id=? AND resource_type='customer' AND state='in_flight' AND lease_until IS NOT NULL AND lease_until>?",
+        [actor.id, at],
+      );
+      if (Number(busy[0]?.n ?? 0) > 0)
+        throw fault(
+          409,
+          'WAFEQ_SYNC_IN_PROGRESS',
+          'توجد مزامنة جارية؛ انتظر اكتمالها ثم أعد المحاولة.',
+        );
+      const customers = await tx.read<CustomerRow>(
+        'SELECT * FROM finance_customers WHERE owner_id=? ORDER BY created_at',
+        [actor.id],
+      );
+      for (const row of customers) {
+        // The snapshot holds only the customer's own details; drop any provider fields an older
+        // record might carry so the columns stay the single source of the link.
+        const snapshot = safeJson<Record<string, unknown>>(
+          row.customer_ciphertext,
+          `finance:customer:${row.id}`,
+        );
+        delete snapshot.wafeqId;
+        delete snapshot.syncStatus;
+        delete snapshot.syncMessage;
+        const changed = await tx.execute(
+          "UPDATE finance_customers SET version=?,customer_ciphertext=?,updated_at=?,wafeq_id=NULL,sync_status='not_synced',sync_message=NULL WHERE owner_id=? AND id=? AND version=?",
+          [
+            row.version + 1,
+            encryptSensitive(JSON.stringify(snapshot), `finance:customer:${row.id}`),
+            at,
+            actor.id,
+            row.id,
+            row.version,
+          ],
+        );
+        if (changed.rowCount !== 1)
+          throw fault(409, 'VERSION_CONFLICT', 'تغير أحد العملاء أثناء الانتقال؛ أعد المحاولة.');
+        await audited(
+          tx,
+          actor,
+          'finance_customer',
+          row.id,
+          'provider_link_reset',
+          row.version + 1,
+        );
+      }
+      const cleared = await tx.execute(
+        "DELETE FROM finance_provider_operations WHERE owner_id=? AND resource_type='customer'",
+        [actor.id],
+      );
+      await tx.execute(
+        'UPDATE finance_provider_credentials SET api_key_ciphertext=?,organization_ciphertext=?,updated_at=? WHERE owner_id=?',
+        [
+          encryptSensitive(apiKey, `finance:api-key:${actor.id}`),
+          encryptSensitive(
+            JSON.stringify(organization),
+            `finance:credential-organization:${actor.id}`,
+          ),
+          at,
+          actor.id,
+        ],
+      );
+      // Account and tax-rate ids belong to the old organization; they must be chosen again.
+      const settingsRow = (
+        await tx.read<{ version: number }>(
+          'SELECT version FROM finance_settings WHERE owner_id=?',
+          [actor.id],
+        )
+      )[0];
+      const organizationCipher = encryptSensitive(
+        JSON.stringify(organization),
+        `finance:organization:${actor.id}`,
+      );
+      if (settingsRow)
+        await tx.execute(
+          "UPDATE finance_settings SET version=version+1,organization_ciphertext=?,revenue_account_id='',standard_tax_rate_id='',zero_tax_rate_id='',updated_at=? WHERE owner_id=?",
+          [organizationCipher, at, actor.id],
+        );
+      else
+        await tx.execute(
+          'INSERT INTO finance_settings(owner_id,version,seller_ciphertext,organization_ciphertext,updated_at) VALUES(?,1,?,?,?)',
+          [
+            actor.id,
+            encryptSensitive(JSON.stringify(emptySeller()), `finance:seller:${actor.id}`),
+            organizationCipher,
+            at,
+          ],
+        );
+      const reset = { customers: customers.length, operations: cleared.rowCount ?? 0 };
+      await tx.execute(
+        'INSERT INTO administration_events(id,resource_type,resource_id,actor_id,actor_role,action,reason,details_json,resource_version,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+        [
+          newId(),
+          'finance_settings',
+          actor.id,
+          actor.id,
+          actor.role,
+          'provider_organization_switched',
+          'Wafeq organization switch confirmed by the finance owner',
+          JSON.stringify({ from: current.id, to: organization.id, ...reset }),
+          (settingsRow?.version ?? 0) + 1,
+          at,
+        ],
+      );
+      return reset;
+    });
+    res.json({
+      settings: await getSettings(db, actor.id, privateMode),
+      organization,
+      reset: result,
+    });
+  });
   registerRoute(app, 'post', '/api/finance/customers', async (req, res) => {
     const actor = await auth(req);
     requireFinance(actor, access);
