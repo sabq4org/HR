@@ -11,6 +11,7 @@ export interface FinanceAddress {
 }
 export interface FinanceCustomerInput {
   name: string;
+  /** Optional: '' when the customer has no email. */
   email: string;
   vatNumber: string;
   address: FinanceAddress;

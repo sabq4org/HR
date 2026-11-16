@@ -208,9 +208,11 @@ export function validateVat(value: unknown, optional = true): string {
 }
 function customerInput(value: unknown): FinanceCustomerInput {
   const x = requireRecord(value);
-  const email = text(x.email, 254);
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-    throw fault(400, 'INVALID_EMAIL', 'أدخل بريدًا إلكترونيًا صحيحًا.');
+  // Email is optional (owner, 2026-11-16): an empty value is stored as '' and never sent to Wafeq.
+  // A value that is entered must still be a valid address.
+  const email = optionalText(x.email, 254);
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    throw fault(400, 'INVALID_EMAIL', 'البريد الإلكتروني غير صحيح؛ صحّحه أو اتركه فارغًا.');
   const address = addressValue(x.address);
   if (x.language !== undefined && x.language !== 'ar' && x.language !== 'en')
     throw fault(400, 'INVALID_LANGUAGE', 'لغة المستندات غير صالحة.');

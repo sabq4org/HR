@@ -1536,7 +1536,7 @@ export function FinancePage({ embedded = false }: { embedded?: boolean } = {}) {
                   }
                 />
               </Field>
-              <Field label="البريد الإلكتروني">
+              <Field label="البريد الإلكتروني (اختياري)">
                 <input
                   type="email"
                   value={customerForm.email}
