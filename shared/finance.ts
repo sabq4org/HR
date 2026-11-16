@@ -217,6 +217,10 @@ export interface FinanceInvoice {
   wafeqId: string | null;
   zatcaStatus: 'not_submitted' | 'pending' | 'cleared' | 'reported' | 'rejected' | 'unknown';
   qrCode: string | null;
+  /** Raw tax authority status Wafeq last returned (for example REPORTED), kept for reconciliation. */
+  taxAuthorityStatus?: string;
+  /** When Wafeq says the invoice was reported to the tax authority (ISO timestamp). */
+  taxAuthorityReportedAt?: string;
   syncMessage?: string;
   canDownload: boolean;
   /** Official artifact availability; never generated from local draft fields. */

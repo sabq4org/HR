@@ -14,8 +14,11 @@ export interface WafeqInvoiceResult {
   id: string;
   number?: string;
   status: 'pending' | 'cleared' | 'rejected' | 'unknown';
-  /** Raw status string; the public schema does not enumerate final verdict values. */
+  /** Raw tax authority status as Wafeq returned it (upper case), e.g. REPORTED or PENDING. */
   taxAuthorityStatus?: string;
+  /** When Wafeq says the document was reported to the tax authority (ISO timestamp). */
+  reportedAt?: string;
+  /** Base64 ZATCA TLV payload, only when Wafeq returns one in a documented-looking field. */
   qrCode: string | null;
 }
 
@@ -105,21 +108,78 @@ function isObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/**
+ * Maps a Wafeq tax authority status to the local verdict.
+ *
+ * The accounting report action documents only PENDING; its schema leaves `status` a free string.
+ * The final values come from Wafeq's own e-invoicing engine, which the report action runs: its
+ * documents end as REPORTED (accepted; standard invoices included) and Bahrain's as CLEARED, while
+ * FAILED is a tax authority rejection. ERROR is a transmission problem that Wafeq retries, so it
+ * stays unknown. Anything not listed here stays unknown and is never treated as clearance.
+ */
+const ACCEPTED_TAX_STATUSES = new Set([
+  'REPORTED',
+  'CLEARED',
+  'REPORTED_WITH_WARNINGS',
+  'CLEARED_WITH_WARNINGS',
+]);
+const REJECTED_TAX_STATUSES = new Set(['FAILED', 'REJECTED', 'NOT_CLEARED', 'NOT_REPORTED']);
+const PENDING_TAX_STATUSES = new Set(['PENDING', 'PROCESSING', 'QUEUED']);
+export function taxAuthorityVerdict(rawStatus: string | undefined): WafeqInvoiceResult['status'] {
+  if (!rawStatus) return 'unknown';
+  if (ACCEPTED_TAX_STATUSES.has(rawStatus)) return 'cleared';
+  if (REJECTED_TAX_STATUSES.has(rawStatus)) return 'rejected';
+  if (PENDING_TAX_STATUSES.has(rawStatus)) return 'pending';
+  return 'unknown';
+}
+
+function rawTaxStatus(value: unknown): string | undefined {
+  const raw = string(value)?.trim().toUpperCase();
+  return raw && /^[A-Z][A-Z_]{0,39}$/.test(raw) ? raw : undefined;
+}
+
+function qrPayload(value: JsonObject): string | null {
+  for (const key of ['qr_code_data', 'qr_code']) {
+    const raw = string(value[key])?.trim();
+    if (raw && raw.length <= 4000 && /^[A-Za-z0-9+/]{20,}={0,2}$/.test(raw)) return raw;
+  }
+  return null;
+}
+
+function timestamp(value: unknown): string | undefined {
+  const raw = string(value);
+  return raw && raw.length <= 40 && !Number.isNaN(Date.parse(raw)) ? raw : undefined;
+}
+
+/**
+ * Reads an invoice or report response. A report response carries the tax authority result at
+ * the top level ({status, reported_ts, metadata}). An invoice read carries only the accounting
+ * status (DRAFT, SENT, FINALIZED), which is never a tax verdict; if Wafeq adds a `tax_authority`
+ * object with the report shape, it is read the same way.
+ */
 function responseInvoice(value: unknown, isReportResponse = false): WafeqInvoiceResult {
   if (!isObject(value)) throw new WafeqApiError('invalid_response');
   const id = string(value.id);
   if (!id) throw new WafeqApiError('invalid_response');
-  // Invoice lifecycle and report-action responses have separate schemas.
-  const rawStatus = isReportResponse ? string(value.status)?.toUpperCase() : undefined;
-  // Only PENDING has a documented meaning in the report operation text.
-  const status = rawStatus === 'PENDING' ? 'pending' : 'unknown';
+  const taxAuthority = isReportResponse
+    ? value
+    : isObject(value.tax_authority)
+      ? value.tax_authority
+      : null;
+  const rawStatus = taxAuthority
+    ? rawTaxStatus(taxAuthority.status)
+    : rawTaxStatus(value.tax_authority_status);
+  const status = taxAuthorityVerdict(rawStatus);
+  const reportedAt = taxAuthority ? timestamp(taxAuthority.reported_ts) : undefined;
+  const qrCode =
+    status === 'cleared' ? (taxAuthority && qrPayload(taxAuthority)) || qrPayload(value) : null;
   return {
     id,
     ...(string(value.invoice_number) ? { number: string(value.invoice_number) } : {}),
     status,
     ...(rawStatus ? { taxAuthorityStatus: rawStatus } : {}),
-    // QR is absent from the documented Public API invoice and report schemas.
-    qrCode: null,
+    ...(reportedAt ? { reportedAt } : {}),
+    qrCode,
   };
 }
 
@@ -370,12 +430,14 @@ export class WafeqClient implements WafeqClientLike {
   }
 
   async getInvoicePdf(id: string): Promise<Buffer> {
+    // Wafeq answers 406 to `Accept: application/pdf` alone (seen 2026-11-16) but returns the PDF
+    // when JSON is also acceptable; the content type is still required to be application/pdf.
     const response = await this.request(
       'GET',
       `invoices/${pathPart(id, 'invoice_id')}/download/`,
       undefined,
       undefined,
-      'application/pdf',
+      'application/pdf, application/json;q=0.9',
       MAX_PDF_BYTES,
     );
     const type = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();

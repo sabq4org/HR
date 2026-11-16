@@ -1,0 +1,9 @@
+{
+  "_source": "Report action response for POST /v1/invoices/{id}/tax-authority/report/, built from Wafeq's published schema api-v1-invoice-tax-authority ({status, reported_ts, metadata:{errors, warnings}}). REPORTED is the accepted value in Wafeq's e-invoicing status enum (ERROR, FAILED, PENDING, PROCESSING, QUEUED, REPORTED). Not captured live: reporting was not re-sent for this test.",
+  "status": "REPORTED",
+  "reported_ts": "2026-11-16T08:06:38Z",
+  "metadata": {
+    "errors": [],
+    "warnings": []
+  }
+}
