@@ -649,7 +649,10 @@ export function EmployeeFilePage({
   if (!file) return null;
   if (reportOpen) return <EmployeeProfileReport file={file} onBack={() => setReportOpen(false)} />;
   const employee = file.employee;
-  const editableEmployeeFields = visibleEmployeeFields(file);
+  // The system owner edits their own file without salary and bank fields (decision 024).
+  const editableEmployeeFields = visibleEmployeeFields(file).filter(
+    (field) => !(file.ownerSelfEdit && field.sensitive === 'financial'),
+  );
   const detailsTabs = profileTabs(file);
   const tabs = [...detailsTabs, 'الوثائق', 'السجل'];
   return (
@@ -694,6 +697,12 @@ export function EmployeeFilePage({
           عرض الملخص الوظيفي <ArrowRight size={14} />
         </Link>
       </div>
+      {file.ownerSelfEdit && (
+        <p className="adm-note">
+          <ShieldCheck size={16} /> تعدّل ملفك بصفتك مالك النظام، ويُسجَّل كل تعديل باسمك. الراتب والبنك
+          يعدّلهما حساب موارد بشرية آخر.
+        </p>
+      )}
       {!editable && (
         <p className="adm-note">
           <ShieldCheck size={16} /> بياناتك للعرض فقط. تواصل مع الشؤون الإدارية لتصحيحها.
@@ -887,6 +896,12 @@ function ExpiryBadge({ date: iso }: { date: string | null | undefined }) {
     </span>
   );
 }
+/** Halalas as riyals for display, e.g. 65050 → "650.50 ريال". */
+const riyals = (halalas: number) =>
+  `${(halalas / 100).toLocaleString('en-US', { maximumFractionDigits: 2 })} ريال`;
+/** Halalas back into the text of the fee input. */
+const feeText = (halalas: number | null | undefined) =>
+  halalas === null || halalas === undefined ? '' : String(halalas / 100);
 const categoryExpires = (key: string) =>
   (documentCategories as DocumentCategory[]).find((c) => c.key === key)?.hasExpiry === true;
 /** Number, issue date and expiry of a document; expiry is required where the category expires. */
@@ -898,6 +913,8 @@ function DocumentDetailsInputs({
   setIssuedAt,
   expiresAt,
   setExpiresAt,
+  fee,
+  setFee,
 }: {
   category: string;
   number: string;
@@ -906,6 +923,8 @@ function DocumentDetailsInputs({
   setIssuedAt: (v: string) => void;
   expiresAt: string;
   setExpiresAt: (v: string) => void;
+  fee: string;
+  setFee: (v: string) => void;
 }) {
   const required = categoryExpires(category);
   return (
@@ -933,6 +952,19 @@ function DocumentDetailsInputs({
           onChange={(e) => setExpiresAt(e.target.value)}
         />
       </label>
+      {(required || expiresAt) && (
+        <label className="adm-field">
+          <span>رسوم التجديد بالريال (اختياري)</span>
+          <input
+            value={fee}
+            dir="ltr"
+            inputMode="decimal"
+            placeholder="650"
+            maxLength={14}
+            onChange={(e) => setFee(e.target.value)}
+          />
+        </label>
+      )}
     </>
   );
 }
@@ -958,6 +990,7 @@ function ExpiryFollowUp({ refreshKey, onUpdated }: { refreshKey: number; onUpdat
   const [number, setNumber] = useState('');
   const [issuedAt, setIssuedAt] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
+  const [fee, setFee] = useState('');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const items = value?.items ?? [];
@@ -969,11 +1002,14 @@ function ExpiryFollowUp({ refreshKey, onUpdated }: { refreshKey: number; onUpdat
         ? i.daysLeft < 0
         : i.daysLeft >= 0 && i.daysLeft <= Number(filter),
   );
+  const feeTotal = visible.reduce((sum, i) => sum + (i.renewalFeeHalalas ?? 0), 0);
+  const withoutFee = visible.filter((i) => i.renewalFeeHalalas === null).length;
   const startEdit = (item: DocumentExpiryItem) => {
     setEditing(item);
     setNumber(item.documentNumber ?? '');
     setIssuedAt(item.issuedAt ?? '');
     setExpiresAt(item.expiresAt);
+    setFee(feeText(item.renewalFeeHalalas));
     setReason('تجديد الوثيقة');
   };
   const save = async (e: FormEvent) => {
@@ -989,6 +1025,7 @@ function ExpiryFollowUp({ refreshKey, onUpdated }: { refreshKey: number; onUpdat
           documentNumber: number,
           issuedAt: issuedAt || null,
           expiresAt: expiresAt || null,
+          renewalFee: fee.trim() || null,
         }),
       );
       setEditing(null);
@@ -1038,37 +1075,62 @@ function ExpiryFollowUp({ refreshKey, onUpdated }: { refreshKey: number; onUpdat
             })}
           </div>
           {visible.length ? (
-            <Table headers={['الموظف', 'الوثيقة', 'الرقم', 'تاريخ الانتهاء', 'المتبقي', 'إجراء']}>
-              {visible.map((item) => (
-                <tr key={item.id} className={`adm-expiry-row ${expiryTone(item.daysLeft)}`}>
-                  <td>
-                    <Link to={`/employees/${item.employeeId}`}>{item.employeeName}</Link>
-                  </td>
-                  <td>
-                    {item.title}
-                    {item.source === 'profile' && <small className="adm-muted"> · من الملف</small>}
-                  </td>
-                  <td>{item.documentNumber ? <bdi dir="ltr">{item.documentNumber}</bdi> : '—'}</td>
-                  <td>{date(item.expiresAt)}</td>
-                  <td>
-                    <em className={`adm-expiry-badge ${expiryTone(item.daysLeft)}`}>
-                      {expiryLabel(item.daysLeft)}
-                    </em>
-                  </td>
-                  <td>
-                    {item.source === 'document' ? (
-                      <button type="button" className="adm-link" onClick={() => startEdit(item)}>
-                        تحديث بعد التجديد
-                      </button>
-                    ) : (
-                      <Link className="adm-link" to={`/employees/${item.employeeId}`}>
-                        فتح الملف
-                      </Link>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </Table>
+            <>
+              <p className="adm-expiry-fees" aria-live="polite">
+                رسوم التجديد المسجلة لما يظهر هنا: <strong>{riyals(feeTotal)}</strong>
+                {withoutFee > 0 && (
+                  <small className="adm-muted"> · {withoutFee} بلا رسوم مسجلة</small>
+                )}
+              </p>
+              <Table
+                headers={[
+                  'الموظف',
+                  'الوثيقة',
+                  'الرقم',
+                  'تاريخ الانتهاء',
+                  'المتبقي',
+                  'رسوم التجديد',
+                  'إجراء',
+                ]}
+              >
+                {visible.map((item) => (
+                  <tr key={item.id} className={`adm-expiry-row ${expiryTone(item.daysLeft)}`}>
+                    <td>
+                      <Link to={`/employees/${item.employeeId}`}>{item.employeeName}</Link>
+                    </td>
+                    <td>
+                      {item.title}
+                      {item.source === 'profile' && (
+                        <small className="adm-muted"> · من الملف</small>
+                      )}
+                    </td>
+                    <td>
+                      {item.documentNumber ? <bdi dir="ltr">{item.documentNumber}</bdi> : '—'}
+                    </td>
+                    <td>{date(item.expiresAt)}</td>
+                    <td>
+                      <em className={`adm-expiry-badge ${expiryTone(item.daysLeft)}`}>
+                        {expiryLabel(item.daysLeft)}
+                      </em>
+                    </td>
+                    <td>
+                      {item.renewalFeeHalalas === null ? '—' : riyals(item.renewalFeeHalalas)}
+                    </td>
+                    <td>
+                      {item.source === 'document' ? (
+                        <button type="button" className="adm-link" onClick={() => startEdit(item)}>
+                          تحديث بعد التجديد
+                        </button>
+                      ) : (
+                        <Link className="adm-link" to={`/employees/${item.employeeId}`}>
+                          فتح الملف
+                        </Link>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </>
           ) : (
             <Empty>
               {items.length ? 'لا شيء في هذه المدة' : 'لا توجد وثائق منتهية أو قريبة الانتهاء'}
@@ -1088,6 +1150,8 @@ function ExpiryFollowUp({ refreshKey, onUpdated }: { refreshKey: number; onUpdat
                   setIssuedAt={setIssuedAt}
                   expiresAt={expiresAt}
                   setExpiresAt={setExpiresAt}
+                  fee={fee}
+                  setFee={setFee}
                 />
                 <label className="adm-field">
                   <span>سبب التعديل *</span>
@@ -1164,6 +1228,7 @@ function ProfileDocumentUpload({
   const [expiresAt, setExpiresAt] = useState('');
   const [issuedAt, setIssuedAt] = useState('');
   const [documentNumber, setDocumentNumber] = useState('');
+  const [fee, setFee] = useState('');
   const [busy, setBusy] = useState(false);
   if (data.me.role !== 'hr') return null;
   const upload = async (e: FormEvent) => {
@@ -1190,11 +1255,13 @@ function ProfileDocumentUpload({
           expiresAt: expiresAt || undefined,
           issuedAt: issuedAt || undefined,
           documentNumber: documentNumber || undefined,
+          renewalFee: fee.trim() || undefined,
         }),
       );
       onUploaded(r.document);
       setFile(null);
       setDocumentNumber('');
+      setFee('');
       setIssuedAt('');
       setExpiresAt('');
       notify('تم رفع الوثيقة');
@@ -1229,6 +1296,8 @@ function ProfileDocumentUpload({
           setIssuedAt={setIssuedAt}
           expiresAt={expiresAt}
           setExpiresAt={setExpiresAt}
+          fee={fee}
+          setFee={setFee}
         />
         <label className="adm-field">
           <span>ملف حتى 2 ميغابايت</span>
@@ -2080,6 +2149,7 @@ export function DocumentsPage() {
   const [expiresAt, setExpiresAt] = useState('');
   const [issuedAt, setIssuedAt] = useState('');
   const [documentNumber, setDocumentNumber] = useState('');
+  const [fee, setFee] = useState('');
   const [expiryKey, setExpiryKey] = useState(0);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -2113,11 +2183,13 @@ export function DocumentsPage() {
           expiresAt: expiresAt || undefined,
           issuedAt: issuedAt || undefined,
           documentNumber: documentNumber || undefined,
+          renewalFee: fee.trim() || undefined,
         }),
       );
       setValue([r.document, ...(docs || [])]);
       setFile(null);
       setDocumentNumber('');
+      setFee('');
       setIssuedAt('');
       setExpiresAt('');
       setExpiryKey((k) => k + 1);
@@ -2207,6 +2279,8 @@ export function DocumentsPage() {
               setIssuedAt={setIssuedAt}
               expiresAt={expiresAt}
               setExpiresAt={setExpiresAt}
+              fee={fee}
+              setFee={setFee}
             />
             <label className="adm-field">
               <span>الملف (حتى 2 ميغابايت)</span>

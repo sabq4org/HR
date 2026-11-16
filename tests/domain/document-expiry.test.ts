@@ -206,3 +206,129 @@ test('HR follow-up lists expired and soon-to-expire items with days left; renewa
     await h.close();
   }
 });
+
+// Decision 024: an optional renewal fee per expiring document, stored in halalas.
+test('renewal fee is optional, parsed from riyals, totalled in the follow-up and kept in the trail', async () => {
+  const h = await harness();
+  try {
+    const bad = await h.upload({ category: 'identity', expiresAt: plus(5), renewalFee: 'abc' });
+    assert.equal(bad.status, 400);
+    assert.match(await bad.text(), /INVALID_FEE/);
+    const negative = await h.upload({ category: 'identity', expiresAt: plus(5), renewalFee: '-5' });
+    assert.equal(negative.status, 400);
+    const withFee = await h.upload({
+      category: 'identity',
+      expiresAt: plus(5),
+      renewalFee: '1,500.5',
+    });
+    assert.equal(withFee.status, 201, await withFee.clone().text());
+    const doc = (
+      (await withFee.json()) as {
+        document: { id: string; version: number; renewalFeeHalalas: number | null };
+      }
+    ).document;
+    assert.equal(doc.renewalFeeHalalas, 150050);
+    const noFee = await h.upload({ category: 'passport', expiresAt: plus(8) });
+    assert.equal(noFee.status, 201);
+    assert.equal(
+      ((await noFee.json()) as { document: { renewalFeeHalalas: number | null } }).document
+        .renewalFeeHalalas,
+      null,
+    );
+
+    const { items } = (await (await h.call('hr', 'GET', '/admin/expiries')).json()) as {
+      items: { documentId: string | null; renewalFeeHalalas: number | null }[];
+    };
+    assert.deepEqual(
+      items.map((i) => i.renewalFeeHalalas),
+      [150050, null],
+    );
+
+    // Arabic digits are accepted; the change is recorded with from/to.
+    const updated = await h.call('hr', 'PATCH', `/admin/documents/${doc.id}`, {
+      version: doc.version,
+      reason: 'رسوم السنة القادمة',
+      expiresAt: plus(5),
+      renewalFee: '٦٥٠',
+    });
+    assert.equal(updated.status, 200, await updated.clone().text());
+    assert.equal(
+      ((await updated.json()) as { document: { renewalFeeHalalas: number } }).document
+        .renewalFeeHalalas,
+      65000,
+    );
+    const events = await h.db.read<{ details_json: string }>(
+      "SELECT details_json FROM administration_events WHERE resource_id=? AND action='document_details_updated'",
+      [doc.id],
+    );
+    assert.deepEqual(JSON.parse(events[0].details_json).renewalFeeHalalas, {
+      from: 150050,
+      to: 65000,
+    });
+  } finally {
+    await h.close();
+  }
+});
+
+// Decision 024: the system owner may edit his own file, except salary and bank.
+test('the system owner edits his own file and documents, but not his own salary or bank', async () => {
+  const h = await harness();
+  try {
+    await h.db.execute(
+      'INSERT INTO system_owners(employee_id,granted_at,granted_reason) VALUES(?,?,?)',
+      [personas.hr, new Date().toISOString(), 'synthetic owner'],
+    );
+    const own = (await (await h.call('hr', 'GET', `/admin/employees/${personas.hr}`)).json()) as {
+      file: { version: number; editable: boolean; ownerSelfEdit?: boolean };
+    };
+    assert.equal(own.file.editable, true);
+    assert.equal(own.file.ownerSelfEdit, true);
+    const saved = await h.call('hr', 'PATCH', `/admin/employees/${personas.hr}`, {
+      version: own.file.version,
+      values: { nationalIdExpiry: plus(40) },
+      reason: 'تحديث ملفي',
+    });
+    assert.equal(saved.status, 200, await saved.clone().text());
+    const pay = await h.call('hr', 'PATCH', `/admin/employees/${personas.hr}`, {
+      version: own.file.version + 1,
+      values: { bankName: 'Synthetic Owner Bank 024' },
+      reason: 'x',
+    });
+    assert.equal(pay.status, 403);
+    assert.match(await pay.text(), /OWNER_SELF_FINANCIAL/);
+    const ownDoc = await h.call('hr', 'POST', `/admin/employees/${personas.hr}/documents`, {
+      category: 'passport',
+      filename: 'passport.pdf',
+      mimeType: 'application/pdf',
+      contentBase64: pdf,
+      expiresAt: plus(90),
+    });
+    assert.equal(ownDoc.status, 201, await ownDoc.clone().text());
+    const events = await h.db.read<{ details_json: string }>(
+      "SELECT details_json FROM administration_events WHERE resource_id=? AND action='profile_updated'",
+      [personas.hr],
+    );
+    assert.ok(events.some((e) => JSON.parse(e.details_json).selfEdit === true));
+  } finally {
+    await h.close();
+  }
+});
+
+test('an HR account that is not the owner still cannot edit its own file', async () => {
+  const h = await harness();
+  try {
+    const own = (await (await h.call('hr', 'GET', `/admin/employees/${personas.hr}`)).json()) as {
+      file: { version: number; editable: boolean; ownerSelfEdit?: boolean };
+    };
+    assert.equal(own.file.editable, false);
+    assert.equal(own.file.ownerSelfEdit, undefined);
+    const saved = await h.call('hr', 'PATCH', `/admin/employees/${personas.hr}`, {
+      version: own.file.version,
+      values: { nationalIdExpiry: plus(40) },
+      reason: 'x',
+    });
+    assert.equal(saved.status, 403);
+  } finally {
+    await h.close();
+  }
+});
