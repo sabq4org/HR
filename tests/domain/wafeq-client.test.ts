@@ -454,3 +454,52 @@ test('lists customer contacts across pages leniently and skips supplier-only row
     /invalid_response/,
   );
 });
+
+test('contact payload omits empty optional fields and names the field Wafeq rejects', async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const client = new WafeqClient(apiKey, async (_input, init = {}) => {
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    bodies.push(body);
+    if ('email' in body && !String(body.email).trim())
+      return json({ email: ['Enter a valid email address.'] }, 400);
+    return json({ id: 'contact-2' }, 201);
+  });
+  const sparse: FinanceCustomerInput = {
+    name: '  عميل بلا بريد  ',
+    email: '',
+    vatNumber: '   ',
+    phone: '',
+    address: { line: '', city: ' ', postalCode: '', country: 'SA', district: '' },
+  };
+  assert.deepEqual(await client.createCustomer(sparse, 'hr-customer-8', uuid), {
+    id: 'contact-2',
+  });
+  assert.deepEqual(bodies[0], {
+    name: 'عميل بلا بريد',
+    country: 'SA',
+    is_customer: true,
+    external_id: 'hr-customer-8',
+  });
+
+  // The real rejection shape: the field name surfaces, never the message or the value.
+  const strict = new WafeqClient(apiKey, async () =>
+    json({ email: ['Enter a valid email address.'] }, 400),
+  );
+  await assert.rejects(
+    () => strict.createCustomer(customer, 'hr-customer-9', uuid),
+    (error: unknown) => {
+      assert.ok(error instanceof WafeqApiError);
+      assert.equal(error.code, 'invalid_email');
+      assert.equal(error.status, 400);
+      assert.equal(error.message.includes('Enter a valid'), false);
+      return true;
+    },
+  );
+  const general = new WafeqClient(apiKey, async () =>
+    json({ non_field_errors: ['Something'] }, 400),
+  );
+  await assert.rejects(
+    () => general.createCustomer(customer, 'hr-customer-10', uuid),
+    (error: unknown) => error instanceof WafeqApiError && error.code === 'invalid_request',
+  );
+});
