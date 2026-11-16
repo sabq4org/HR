@@ -41,6 +41,7 @@ import {
   WafeqClient,
   type WafeqClientLike as WafeqProvider,
   type WafeqContact,
+  type WafeqInvoiceResult,
 } from '../integrations/wafeq.js';
 export type { WafeqClientLike } from '../integrations/wafeq.js';
 import { autoPostInvoice, customerStatement } from './ledger.js';
@@ -653,6 +654,40 @@ function mappedInvoiceStatus(status: 'pending' | 'cleared' | 'rejected' | 'unkno
     return { status: 'rejected', zatcaStatus: 'rejected', canDownload: false };
   return { status: 'reconciliation_required', zatcaStatus: 'unknown', canDownload: false };
 }
+/** Invoice fields that record what Wafeq said about the tax authority, kept for reconciliation. */
+function taxAuthorityFields(result: WafeqInvoiceResult): Partial<FinanceInvoice> {
+  return {
+    ...(result.taxAuthorityStatus ? { taxAuthorityStatus: result.taxAuthorityStatus } : {}),
+    ...(result.reportedAt ? { taxAuthorityReportedAt: result.reportedAt } : {}),
+  };
+}
+/**
+ * Records a tax authority verdict change (for example reconciliation_required → cleared) as its
+ * own audit event, next to the generic provider_status_updated one written by the snapshot update.
+ */
+async function auditTaxVerdict(
+  db: AsyncDb,
+  actor: Actor,
+  before: FinanceInvoice['status'],
+  after: FinanceInvoice,
+  source: 'report' | 'refresh',
+) {
+  if (before === after.status || !['cleared', 'rejected'].includes(after.status)) return;
+  await audited(
+    db,
+    actor,
+    'finance_invoice',
+    after.id,
+    after.status === 'cleared' ? 'tax_authority_cleared' : 'tax_authority_rejected',
+    after.version,
+    {
+      from: before,
+      to: after.status,
+      source,
+      ...(after.taxAuthorityStatus ? { wafeqStatus: after.taxAuthorityStatus } : {}),
+    },
+  );
+}
 async function updateInvoiceSnapshot(
   db: AsyncDb,
   actor: Actor,
@@ -713,6 +748,7 @@ export function audited(
   id: string,
   action: string,
   version: number,
+  details: Record<string, string> = {},
 ) {
   return db.execute(
     'INSERT INTO administration_events(id,resource_type,resource_id,actor_id,actor_role,action,reason,details_json,resource_version,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
@@ -724,7 +760,7 @@ export function audited(
       actor.role,
       action,
       'Finance preview action',
-      '{}',
+      JSON.stringify(details),
       version,
       now(),
     ],
@@ -2084,12 +2120,14 @@ export function registerFinance(
       current,
       {
         ...mapped,
+        ...taxAuthorityFields(reported),
         number: reported.number ?? current.number,
         qrCode: mapped.status === 'cleared' ? reported.qrCode : null,
         ...(mapped.status === 'cleared' ? {} : { canDownloadXml: false }),
       },
       reported.id,
     );
+    await auditTaxVerdict(db, actor, invoice.status, updated, 'report');
     await db.execute(
       'UPDATE finance_provider_operations SET state=?,provider_id=?,lease_until=NULL,updated_at=? WHERE owner_id=? AND id=?',
       [
@@ -2110,23 +2148,46 @@ export function registerFinance(
       invoice = await readInvoice(db, actor.id, id);
     if (!invoice.wafeqId)
       throw fault(409, 'WAFEQ_INVOICE_REQUIRED', 'لا توجد فاتورة وافق لمراجعة حالتها.');
+    if (invoice.status === 'cancelled') throw invoiceCancelled();
+    let result: WafeqInvoiceResult;
     try {
-      const result = await (
-        await storedClient(db, actor.id, clientFactory)
-      ).getInvoice(invoice.wafeqId);
-      const mapped = mappedInvoiceStatus(result.status);
-      const updated = await updateInvoiceSnapshot(db, actor, invoice, {
-        ...mapped,
-        number: result.number ?? invoice.number,
-        qrCode: mapped.status === 'cleared' ? result.qrCode : null,
-        ...(mapped.status === 'cleared' ? {} : { canDownloadXml: false }),
-        syncMessage: undefined,
-      });
-      await autoPostInvoice(db, actor, updated);
-      res.json({ invoice: updated });
+      result = await (await storedClient(db, actor.id, clientFactory)).getInvoice(invoice.wafeqId);
     } catch {
       throw fault(503, 'WAFEQ_REFRESH_FAILED', 'تعذر تحديث حالة الفاتورة من وافق.');
     }
+    // Wafeq's invoice read (GET /invoices/{id}/) carries only the accounting status; the tax
+    // authority result comes back from the report action. With no verdict in the read, a known
+    // local verdict is kept rather than regressed to reconciliation_required.
+    if (result.status === 'unknown' && invoice.status !== 'syncing') {
+      res.json({
+        invoice,
+        notice: {
+          code: 'WAFEQ_TAX_STATUS_NOT_IN_READ',
+          message:
+            invoice.status === 'reconciliation_required'
+              ? 'قراءة الفاتورة من وافق لا تتضمن حالة الهيئة؛ استخدم «إعادة محاولة المزامنة» لقراءة نتيجة التبليغ بالمفتاح نفسه.'
+              : 'قراءة الفاتورة من وافق لا تتضمن حالة الهيئة؛ بقيت الحالة المسجلة كما هي.',
+        },
+      });
+      return;
+    }
+    const mapped = mappedInvoiceStatus(result.status);
+    const updated = await updateInvoiceSnapshot(db, actor, invoice, {
+      ...mapped,
+      ...taxAuthorityFields(result),
+      number: result.number ?? invoice.number,
+      qrCode: mapped.status === 'cleared' ? result.qrCode : null,
+      ...(mapped.status === 'cleared' ? {} : { canDownloadXml: false }),
+      syncMessage: undefined,
+    });
+    await auditTaxVerdict(db, actor, invoice.status, updated, 'refresh');
+    if (result.status !== 'unknown')
+      await db.execute(
+        "UPDATE finance_provider_operations SET state='complete',provider_id=?,lease_until=NULL,updated_at=? WHERE owner_id=? AND resource_type='invoice' AND resource_id=? AND state='reconciliation_required'",
+        [invoice.wafeqId, now(), actor.id, id],
+      );
+    await autoPostInvoice(db, actor, updated);
+    res.json({ invoice: updated });
   });
   registerRoute(app, 'get', '/api/finance/invoices/:id/pdf', async (req, res) => {
     const actor = await auth(req);

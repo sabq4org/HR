@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import type { FinanceCustomerInput, FinanceInvoice } from '../../shared/finance.js';
 import { WafeqApiError, WafeqClient } from '../../server/integrations/wafeq.js';
 
@@ -299,6 +300,7 @@ test('reports B2B invoices via the invoice tax-authority action and treats PENDI
     id: 'inv-1',
     status: 'pending',
     taxAuthorityStatus: 'PENDING',
+    reportedAt: '2026-11-14T10:00:00Z',
     qrCode: null,
   });
   assert.equal(request?.url, 'https://api.wafeq.com/v1/invoices/inv-1/tax-authority/report/');
@@ -317,6 +319,7 @@ test('409 report_in_progress rereads the invoice, and undocumented states remain
     id: 'inv-1',
     number: 'W-3',
     status: 'unknown',
+    taxAuthorityStatus: 'VALIDATED',
     qrCode: null,
   });
   assert.deepEqual(methods, ['POST', 'GET']);
@@ -327,17 +330,74 @@ test('does not treat accounting status or undocumented report statuses as cleara
     json({ id: 'inv-1', invoice_number: 'W-3', status: 'FINALIZED' }),
   );
   assert.deepEqual((await client.getInvoice('inv-1')).status, 'unknown');
-  const unknown = new WafeqClient(apiKey, async () =>
-    json({
-      status: 'CLEARED',
-      reported_ts: '2026-11-14T10:00:00Z',
-      metadata: { errors: [], warnings: [] },
-    }),
-  );
-  const result = await unknown.reportInvoice('inv-1', uuid);
-  assert.equal(result.status, 'unknown');
-  assert.equal(result.taxAuthorityStatus, 'CLEARED');
-  assert.equal(result.qrCode, null);
+  for (const status of ['VALIDATED', 'ERROR', 'SENT', 'accepted?']) {
+    const unknown = new WafeqClient(apiKey, async () =>
+      json({ status, reported_ts: '2026-11-14T10:00:00Z', metadata: { errors: [], warnings: [] } }),
+    );
+    const result = await unknown.reportInvoice('inv-1', uuid);
+    assert.equal(result.status, 'unknown', status);
+    assert.equal(result.qrCode, null);
+  }
+});
+
+const fixture = (name: string) =>
+  JSON.parse(
+    readFileSync(new URL(`../fixtures/wafeq/${name}.json`, import.meta.url), 'utf8'),
+  ) as Record<string, unknown>;
+
+test('the real invoice read of a reported invoice carries no tax verdict: it stays unknown', async () => {
+  const body = fixture('invoice-retrieve-reported');
+  const client = new WafeqClient(apiKey, async () => json(body));
+  assert.deepEqual(await client.getInvoice('inv_SyntheticInvoice00000'), {
+    id: 'inv_SyntheticInvoice00000',
+    number: 'HR-INV-000001',
+    status: 'unknown',
+    qrCode: null,
+  });
+});
+
+test('report statuses map to verdicts: REPORTED and CLEARED clear, FAILED rejects, queue states wait', async () => {
+  const cases: Array<[string, string]> = [
+    ['REPORTED', 'cleared'],
+    ['reported', 'cleared'],
+    ['CLEARED', 'cleared'],
+    ['FAILED', 'rejected'],
+    ['REJECTED', 'rejected'],
+    ['NOT_CLEARED', 'rejected'],
+    ['PENDING', 'pending'],
+    ['PROCESSING', 'pending'],
+    ['QUEUED', 'pending'],
+  ];
+  for (const [status, verdict] of cases) {
+    const client = new WafeqClient(apiKey, async () =>
+      json({ ...fixture('report-reported'), status }),
+    );
+    const result = await client.reportInvoice('inv-1', uuid);
+    assert.equal(result.status, verdict, status);
+    assert.equal(result.taxAuthorityStatus, status.toUpperCase());
+    assert.equal(result.reportedAt, '2026-11-16T08:06:38Z');
+  }
+});
+
+test('a tax_authority object on the invoice read is honoured, and a QR is kept only on clearance', async () => {
+  const qr = Buffer.from('synthetic TLV payload for the test only').toString('base64');
+  const read = (tax: unknown) =>
+    new WafeqClient(apiKey, async () =>
+      json({ ...fixture('invoice-retrieve-reported'), tax_authority: tax }),
+    ).getInvoice('inv_SyntheticInvoice00000');
+  const cleared = await read({
+    status: 'REPORTED',
+    reported_ts: '2026-11-16T08:06:38Z',
+    qr_code_data: qr,
+  });
+  assert.equal(cleared.status, 'cleared');
+  assert.equal(cleared.qrCode, qr);
+  assert.equal(cleared.reportedAt, '2026-11-16T08:06:38Z');
+  const rejected = await read({ status: 'FAILED', qr_code_data: qr });
+  assert.equal(rejected.status, 'rejected');
+  assert.equal(rejected.qrCode, null);
+  const bogus = await read({ status: 'REPORTED', qr_code_data: 'not base64 <script>' });
+  assert.equal(bogus.qrCode, null);
 });
 
 test('downloads PDF only from the fixed invoice path with a bounded response', async () => {
@@ -349,11 +409,31 @@ test('downloads PDF only from the fixed invoice path with a bounded response', a
   });
   assert.deepEqual(await client.getInvoicePdf('inv-1'), bytes);
   assert.equal(request?.url, 'https://api.wafeq.com/v1/invoices/inv-1/download/');
-  assert.equal(new Headers(request?.init.headers).get('accept'), 'application/pdf');
+  assert.equal(
+    new Headers(request?.init.headers).get('accept'),
+    'application/pdf, application/json;q=0.9',
+  );
   assert.equal(request?.init.redirect, 'error');
   await assert.rejects(
     () => client.getInvoicePdf('https://attacker.test/file'),
     (error: unknown) => error instanceof WafeqApiError && error.code === 'invalid_invoice_id',
+  );
+});
+
+test('PDF download works with Wafeq content negotiation, which refuses Accept: application/pdf alone', async () => {
+  // Wafeq on 2026-11-16: `Accept: application/pdf` → 406; with JSON also acceptable → the PDF.
+  const client = new WafeqClient(apiKey, async (_input, init = {}) =>
+    new Headers(init.headers).get('accept') === 'application/pdf'
+      ? json({ type: 'client_error', errors: [{ code: 'not_acceptable' }] }, 406)
+      : new Response(Buffer.from('%PDF-1.7 synthetic'), {
+          headers: { 'content-type': 'application/pdf' },
+        }),
+  );
+  assert.equal((await client.getInvoicePdf('inv-1')).subarray(0, 5).toString(), '%PDF-');
+  const notPdf = new WafeqClient(apiKey, async () => json({ detail: 'not a pdf' }));
+  await assert.rejects(
+    () => notPdf.getInvoicePdf('inv-1'),
+    (error: unknown) => error instanceof WafeqApiError && error.code === 'invalid_pdf_response',
   );
 });
 
