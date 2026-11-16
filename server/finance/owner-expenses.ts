@@ -51,7 +51,7 @@ const byDate = (a: LedgerVoucher, b: LedgerVoucher) =>
 
 /** Owner-paid documents that still carry a balance, oldest first. */
 export async function openClaims(db: AsyncDb, ownerId: string): Promise<LedgerVoucher[]> {
-  return (await listVouchers(db, ownerId, ['expense', 'payment']))
+  return (await listVouchers(db, ownerId, ['expense', 'payment'], null))
     .filter((v) => v.paidByOwner && v.status === 'posted' && v.ownerOutstandingHalalas > 0)
     .sort(byDate);
 }
@@ -139,7 +139,18 @@ export async function ownerStatement(
 ): Promise<OwnerStatement> {
   const code = await ownerAccountCode(db, ownerId);
   const accounts = await accountRows(db, ownerId);
-  const vouchers = await listVouchers(db, ownerId, ['expense', 'payment']);
+  const vouchers = await listVouchers(db, ownerId, ['expense', 'payment'], null);
+  // A document reversed after `asOf` was still in force on that date.
+  const reversedOn = new Map(
+    (
+      await db.read<{ reversal_of: string; entry_date: string }>(
+        "SELECT reversal_of, entry_date FROM finance_journal_entries WHERE owner_id=? AND kind='reversal' AND reversal_of IS NOT NULL",
+        [ownerId],
+      )
+    ).map((row) => [row.reversal_of, row.entry_date]),
+  );
+  const liveOn = (v: LedgerVoucher) =>
+    v.date <= asOf && (v.status === 'posted' || (reversedOn.get(v.entryId) ?? '') > asOf);
   const byId = new Map(vouchers.map((v) => [v.id, v]));
   const refunds = vouchers
     .filter((v) => v.isOwnerRefund && v.date <= asOf)
@@ -150,7 +161,7 @@ export async function ownerStatement(
         [ownerId],
       )
     : [];
-  const counted = new Set(refunds.filter((r) => r.status === 'posted').map((r) => r.id));
+  const counted = new Set(refunds.filter(liveOn).map((r) => r.id));
   const refunded = new Map<string, number>();
   for (const row of allocationRows)
     if (counted.has(row.refund_voucher_id))
@@ -161,7 +172,7 @@ export async function ownerStatement(
     return (source?.accountCode && accounts.get(source.accountCode)?.name) || '';
   };
   const claims: OwnerClaimRow[] = vouchers
-    .filter((v) => v.paidByOwner && v.status === 'posted' && v.date <= asOf)
+    .filter((v) => v.paidByOwner && liveOn(v))
     .sort(byDate)
     .map((v) => {
       const back = refunded.get(v.id) ?? 0;
@@ -188,7 +199,8 @@ export async function ownerStatement(
     cashAccountName: (r.cashAccountCode && accounts.get(r.cashAccountCode)?.name) || '',
     reference: r.reference,
     totalHalalas: r.totalHalalas,
-    status: r.status,
+    // As it stood on `asOf`: a refund reversed later still shows as posted.
+    status: counted.has(r.id) ? 'posted' : 'reversed',
     allocations: allocationRows
       .filter((row) => row.refund_voucher_id === r.id)
       .sort((a, b) => (rank.get(a.claim_voucher_id) ?? 0) - (rank.get(b.claim_voucher_id) ?? 0))

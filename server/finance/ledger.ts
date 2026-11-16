@@ -728,9 +728,11 @@ export async function listVouchers(
   db: AsyncDb,
   ownerId: string,
   kinds?: VoucherKind[],
+  /** Screens show the newest 1000; reconciliation (owner dues) passes null to read them all. */
+  limit: number | null = 1000,
 ): Promise<LedgerVoucher[]> {
   const rows = await db.read<VoucherRow>(
-    `${voucherSelect} WHERE v.owner_id=?${kinds?.length ? ` AND v.kind IN (${kinds.map(() => '?').join(',')})` : ''} ORDER BY v.doc_date DESC, v.number DESC LIMIT 1000`,
+    `${voucherSelect} WHERE v.owner_id=?${kinds?.length ? ` AND v.kind IN (${kinds.map(() => '?').join(',')})` : ''} ORDER BY v.doc_date DESC, v.number DESC${limit === null ? '' : ` LIMIT ${Math.trunc(limit)}`}`,
     [ownerId, ...(kinds ?? [])],
   );
   const context = await voucherContext(db, ownerId);

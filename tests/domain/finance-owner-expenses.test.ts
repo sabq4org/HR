@@ -227,6 +227,11 @@ async function scenario(db: AsyncDb, legacyLedger = false) {
     statement = (await h.get<OwnerStatement>('/api/finance/ledger/owner?asOf=2026-11-30')).body;
     assert.equal(statement.outstandingHalalas, 165000);
     assert.equal(statement.refunds[0]!.status, 'reversed');
+    // As of 11-11 the refund (11-10) was still in force; it was reversed only on 11-12.
+    const before = (await h.get<OwnerStatement>('/api/finance/ledger/owner?asOf=2026-11-11')).body;
+    assert.equal(before.outstandingHalalas, 45000);
+    assert.equal(before.ledgerBalanceHalalas, 45000);
+    assert.equal(before.refunds[0]!.status, 'posted');
 
     // Chosen items, in the order given.
     const chosen = await h.send<{ voucher: LedgerVoucher }>('/api/finance/ledger/owner/refunds', {
