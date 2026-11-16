@@ -115,7 +115,7 @@ export function quoteStatus(quote: FinanceQuote, invoice?: FinanceInvoice) {
     kind: invoiceStatusKind(invoice.status),
   };
 }
-/** Always shown on API document.pdf copies; the official tax invoice is /api/finance/invoices/:id/pdf. */
+/** Shown on document.pdf copies until the invoice is cleared with a verified ZATCA QR (then it is the tax invoice). */
 export const INTERNAL_COPY_LABEL =
   'نسخة داخلية – ليست الفاتورة الضريبية الرسمية / Internal copy – not the official tax invoice';
 
