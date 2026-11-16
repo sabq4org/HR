@@ -1438,9 +1438,21 @@ export function registerFinance(
       created = found ?? (await client.createCustomer(input, id, operation.idempotency_key));
     } catch (error) {
       const safe = providerFailure(error);
+      // A definite rejection (Wafeq answered 4xx, e.g. a field failed validation) created
+      // nothing, so the next attempt gets a fresh idempotency key: Wafeq may otherwise replay the
+      // stored rejection for the old key even after the payload is fixed. Timeouts, 5xx, 409 and
+      // 429 stay uncertain and keep the key, and every retry looks the contact up first.
+      const rejected =
+        error instanceof WafeqApiError &&
+        error.status !== null &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        ![408, 409, 425, 429].includes(error.status);
       await db.execute(
-        "UPDATE finance_provider_operations SET state='reconciliation_required',lease_until=NULL,updated_at=? WHERE owner_id=? AND id=?",
-        [now(), actor.id, operation.id],
+        rejected
+          ? "UPDATE finance_provider_operations SET state='reconciliation_required',idempotency_key=?,lease_until=NULL,updated_at=? WHERE owner_id=? AND id=?"
+          : "UPDATE finance_provider_operations SET state='reconciliation_required',lease_until=NULL,updated_at=? WHERE owner_id=? AND id=?",
+        rejected ? [newId(), now(), actor.id, operation.id] : [now(), actor.id, operation.id],
       );
       const customer = await setCustomerSync(
         db,
