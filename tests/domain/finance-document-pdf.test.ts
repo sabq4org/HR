@@ -27,6 +27,7 @@ import {
   statementHtml,
 } from '../../server/finance/document-html.js';
 import { invoiceQrSrc } from '../../server/finance/qr-image.js';
+import { syntheticTlv } from '../support/zatca-pdf.js';
 import { completeSeller, formatIban, type FinanceSeller } from '../../shared/finance.js';
 import {
   INTERNAL_COPY_LABEL,
@@ -295,26 +296,47 @@ test('converted quote footer follows the real status', async () => {
   }
 });
 
-test('cleared invoice HTML shows the stored QR and an internal-copy label', async () => {
+test('cleared invoice HTML with the verified ZATCA QR is the tax invoice; anything else is an internal copy', async () => {
   const app = await serve();
   try {
     const full = completeSeller(app.invoice.seller, seller);
-    const payload = 'SA-TEST-QR-PAYLOAD-001';
+    const amount = (halalas: number) => (halalas / 100).toFixed(2);
+    const official = syntheticTlv({
+      vat: full.vatNumber,
+      total: amount(app.invoice.totalHalalas),
+      tax: amount(app.invoice.taxHalalas),
+    });
     const cleared = invoiceHtml(
-      { ...app.invoice, status: 'cleared', zatcaStatus: 'cleared', qrCode: payload },
+      { ...app.invoice, status: 'cleared', zatcaStatus: 'cleared', qrCode: official },
       full,
     );
-    const qrSrc = invoiceQrSrc(payload);
+    const qrSrc = invoiceQrSrc(official);
     assert.ok(qrSrc, 'QR data URL');
     assert.ok(cleared.includes('class="fin-qr"'), 'QR image is present');
-    assert.ok(cleared.includes(qrSrc), 'QR encodes the stored payload');
-    assert.ok(cleared.includes(INTERNAL_COPY_LABEL));
-    assert.ok(cleared.includes('نسخة داخلية – ليست الفاتورة الضريبية الرسمية'));
-    assert.ok(
-      !cleared.includes('فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'),
-      'API copy must not claim ZATCA compliance',
-    );
+    assert.ok(cleared.includes(qrSrc), 'QR encodes the stored TLV');
+    assert.ok(!cleared.includes(INTERNAL_COPY_LABEL));
+    assert.ok(!cleared.includes('نسخة داخلية'));
+    assert.ok(cleared.includes('فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'));
+    assert.ok(cleared.includes(formatIban(full.bankAccount!.iban)), 'bank details are kept');
     assert.ok(!cleared.includes('/api/finance/invoices/') && !cleared.includes('"/qr"'));
+
+    // A stored value that is not a matching ZATCA TLV never makes the copy official.
+    const unverified = invoiceHtml(
+      {
+        ...app.invoice,
+        status: 'cleared',
+        zatcaStatus: 'cleared',
+        qrCode: 'SA-TEST-QR-PAYLOAD-001',
+      },
+      full,
+    );
+    assert.ok(unverified.includes(INTERNAL_COPY_LABEL));
+    assert.ok(unverified.includes('نسخة داخلية – ليست الفاتورة الضريبية الرسمية'));
+    assert.ok(!unverified.includes('class="fin-qr"'));
+    assert.ok(
+      !unverified.includes('فاتورة سبق متوافقة مع متطلبات هيئة الزكاة والضريبة والجمارك.'),
+      'an internal copy must not claim ZATCA compliance',
+    );
 
     const draft = invoiceHtml(app.invoice, full);
     assert.equal(app.invoice.status, 'draft');

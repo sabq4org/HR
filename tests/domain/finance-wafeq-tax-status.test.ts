@@ -7,6 +7,7 @@ import { createServer, type Server } from 'node:http';
 import { registerFinance } from '../../server/finance/routes.js';
 import { WafeqClient } from '../../server/integrations/wafeq.js';
 import { createDatabase, type AsyncDb } from '../../server/database.js';
+import { syntheticTlv, syntheticUbl, syntheticWafeqPdf } from '../support/zatca-pdf.js';
 
 const fixture = (name: string) =>
   JSON.parse(
@@ -21,8 +22,15 @@ const fixture = (name: string) =>
 function fakeWafeqHttp() {
   const invoices = new Map<string, { externalId: string; number: string }>();
   const reportReplay = new Map<string, unknown>();
-  const stats = { reportsProcessed: 0, reportsReplayed: 0, posts: [] as string[] };
+  const stats = {
+    reportsProcessed: 0,
+    reportsReplayed: 0,
+    posts: [] as string[],
+    gets: [] as string[],
+  };
   let loseNextReportReply = false;
+  let downloadPdf: (number: string) => Buffer = () =>
+    Buffer.from('%PDF-1.7 synthetic official copy');
   let readTaxAuthority: unknown;
   const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
     new Response(JSON.stringify(body), {
@@ -34,6 +42,7 @@ function fakeWafeqHttp() {
     const path = url.pathname.replace(/^\/v1\//, '');
     const method = init.method ?? 'GET';
     if (method === 'POST') stats.posts.push(path);
+    else stats.gets.push(path);
     if (path === 'organization/') return json({ id: 'org-new', name: { ar: 'الشركة' } });
     if (path === 'contacts/' && method === 'GET')
       return json({ count: 0, next: null, results: [] });
@@ -92,8 +101,9 @@ function fakeWafeqHttp() {
         ...(readTaxAuthority === undefined ? {} : { tax_authority: readTaxAuthority }),
       });
     }
-    if (/^invoices\/[^/]+\/download\/$/.test(path) && method === 'GET')
-      return new Response(Buffer.from('%PDF-1.7 synthetic official copy'), {
+    const download = /^invoices\/([^/]+)\/download\/$/.exec(path);
+    if (download && method === 'GET')
+      return new Response(new Uint8Array(downloadPdf(invoices.get(download[1])?.number ?? '')), {
         status: 200,
         headers: { 'content-type': 'application/pdf' },
       });
@@ -104,6 +114,7 @@ function fakeWafeqHttp() {
     stats,
     loseNextReportReply: () => (loseNextReportReply = true),
     setReadTaxAuthority: (value: unknown) => (readTaxAuthority = value),
+    setDownloadPdf: (make: (number: string) => Buffer) => (downloadPdf = make),
   };
 }
 
@@ -210,11 +221,14 @@ async function harness() {
     ).body.invoice;
   };
   const sync = (invoice: Invoice) =>
-    call<{ invoice: Invoice }>(`/api/finance/invoices/${invoice.id}/sync`, {
-      version: invoice.version,
-    });
+    call<{ invoice: Invoice; qrNotice?: { code: string } }>(
+      `/api/finance/invoices/${invoice.id}/sync`,
+      {
+        version: invoice.version,
+      },
+    );
   const refresh = (invoice: Invoice) =>
-    call<{ invoice: Invoice; notice?: { code: string } }>(
+    call<{ invoice: Invoice; notice?: { code: string }; qrNotice?: { code: string } }>(
       `/api/finance/invoices/${invoice.id}/refresh`,
       {},
     );
@@ -244,6 +258,7 @@ async function harness() {
     events,
     pdf,
     operationState,
+    url: (path: string) => `${base}${path}`,
     close: async () => {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
@@ -377,6 +392,96 @@ test('refresh never regresses a cleared invoice when the read has no verdict, an
     assert.equal(rejected.body.invoice.zatcaStatus, 'rejected');
     assert.equal(rejected.body.invoice.canDownload, false);
     assert.ok((await h.events(second.id)).some((e) => e.action === 'tax_authority_rejected'));
+  } finally {
+    await h.close();
+  }
+});
+
+const officialQr = (values: Partial<{ vat: string; total: string; tax: string }> = {}) =>
+  syntheticTlv({ vat: '310000000000003', total: '3450.00', tax: '450.00', ...values });
+const officialPdf =
+  (qr = officialQr()) =>
+  (number: string) =>
+    syntheticWafeqPdf(syntheticUbl(number, qr));
+
+test('sync stores the official QR from the ZATCA XML embedded in Wafeq’s PDF, with an audit entry', async () => {
+  const h = await harness();
+  try {
+    h.wafeq.setDownloadPdf(officialPdf());
+    const invoice = await h.issueInvoice();
+    const synced = await h.sync(invoice);
+    assert.equal(synced.body.invoice.status, 'cleared');
+    assert.equal(synced.body.invoice.qrCode, officialQr());
+    assert.equal(synced.body.qrNotice, undefined);
+    const stored = (await h.events(invoice.id)).filter((e) => e.action === 'official_qr_stored');
+    assert.equal(stored.length, 1);
+    assert.deepEqual(JSON.parse(stored[0].details_json), {
+      source: 'wafeq_pdf_embedded_zatca_xml',
+    });
+    const qr = await fetch(h.url(`/api/finance/invoices/${invoice.id}/qr`));
+    assert.equal(qr.status, 200);
+    assert.match(qr.headers.get('content-type') ?? '', /^image\/svg\+xml/);
+    assert.match(await qr.text(), /^<svg|^<\?xml/);
+  } finally {
+    await h.close();
+  }
+});
+
+test('refresh backfills the QR of an already cleared invoice with GETs only: no report, no POST', async () => {
+  const h = await harness();
+  try {
+    const invoice = await h.issueInvoice();
+    const synced = await h.sync(invoice);
+    assert.equal(synced.body.invoice.status, 'cleared');
+    assert.equal(synced.body.invoice.qrCode, null);
+    assert.equal(synced.body.qrNotice?.code, 'no_embedded_zatca_xml');
+    assert.equal((await fetch(h.url(`/api/finance/invoices/${invoice.id}/qr`))).status, 409);
+
+    h.wafeq.setDownloadPdf(officialPdf());
+    const posts = h.wafeq.stats.posts.length;
+    const gets = h.wafeq.stats.gets.length;
+    const refreshed = await h.refresh(synced.body.invoice);
+    assert.equal(refreshed.status, 200);
+    assert.equal(refreshed.body.invoice.status, 'cleared');
+    assert.equal(refreshed.body.invoice.qrCode, officialQr());
+    assert.equal(h.wafeq.stats.posts.length, posts, 'refresh never POSTs to Wafeq');
+    const seen = h.wafeq.stats.gets.slice(gets);
+    assert.ok(seen.some((path) => /^invoices\/[^/]+\/download\/$/.test(path)));
+    assert.ok(
+      seen.every((path) => path === 'organization/' || /^invoices\/[^/]+\/download\/$/.test(path)),
+      `only the PDF download is read: ${seen.join(', ')}`,
+    );
+    assert.equal(h.wafeq.stats.reportsProcessed, 1);
+    assert.ok((await h.events(invoice.id)).some((e) => e.action === 'official_qr_stored'));
+    // Once stored, refresh does not touch the QR again.
+    const again = await h.refresh(refreshed.body.invoice);
+    assert.equal(again.body.invoice.qrCode, officialQr());
+    assert.equal(
+      (await h.events(invoice.id)).filter((e) => e.action === 'official_qr_stored').length,
+      1,
+    );
+  } finally {
+    await h.close();
+  }
+});
+
+test('a QR that does not match the invoice is refused and nothing is stored', async () => {
+  const h = await harness();
+  try {
+    h.wafeq.setDownloadPdf(officialPdf(officialQr({ total: '3449.00' })));
+    const invoice = await h.issueInvoice();
+    const synced = await h.sync(invoice);
+    assert.equal(synced.body.invoice.status, 'cleared');
+    assert.equal(synced.body.invoice.qrCode, null);
+    assert.equal(synced.body.qrNotice?.code, 'qr_total_mismatch');
+    h.wafeq.setDownloadPdf(officialPdf(officialQr({ vat: '399999999999993' })));
+    const refreshed = await h.refresh(synced.body.invoice);
+    assert.equal(refreshed.body.invoice.qrCode, null);
+    assert.equal(refreshed.body.qrNotice?.code, 'qr_seller_vat_mismatch');
+    assert.equal(
+      (await h.events(invoice.id)).some((e) => e.action === 'official_qr_stored'),
+      false,
+    );
   } finally {
     await h.close();
   }
