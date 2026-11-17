@@ -14,6 +14,7 @@ import { createAccountAccess } from './access/index.js';
 import { registerPilotStatus } from './pilot-status.js';
 import { currentPolicy, leaveChangesFor, registerLeaveRoutes } from './leave/routes.js';
 import { registerEntitlementRoutes } from './leave/entitlement.js';
+import { registerRenewals } from './administration/renewals.js';
 import { registerEndOfServiceRoutes } from './end-of-service/index.js';
 import { annualLeaveDays } from '../shared/leave.js';
 import { isSystemOwner } from './system-owner.js';
@@ -1271,6 +1272,7 @@ export function createApp(
     privateData,
   });
   registerAdministration(app, { db, requireActor, privateMode: privateData });
+  registerRenewals(app, { db, requireActor });
   registerFinance(app, {
     db,
     requireActor,

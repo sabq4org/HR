@@ -40,6 +40,7 @@ import {
 } from 'lucide-react';
 import type { Bootstrap, DemoPersona, Employee } from '../shared/contracts';
 import type { AdministrativeOverview } from '../shared/administration';
+import { OwnerDesk, RenewalsPage } from './administration/Renewals';
 import { ThemeMenu } from './theme/ThemeMenu';
 import { api, AppContext, Avatar, Modal, roleLabel } from './lib';
 import {
@@ -295,13 +296,13 @@ export default function App() {
   >(null);
   const [leaveId, setLeaveId] = useState<string | null>(null);
   const [toast, setToast] = useState('');
-  const [administrativePending, setAdministrativePending] = useState(0);
+  const [administrativePending, setAdministrativePending] = useState<number | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
   useEffect(() => {
     let current = true;
-    setAdministrativePending(0);
+    setAdministrativePending(null);
     if (data)
       void api<{ overview: AdministrativeOverview }>('/admin/overview')
         .then(({ overview }) => {
@@ -425,6 +426,7 @@ export default function App() {
       '/requests': 'الطلبات الإدارية',
       '/attendance': 'الحضور والعمل',
       '/documents': 'المستندات',
+      '/renewals': 'معاملات التجديد',
       '/payroll': 'الرواتب',
       '/finance': 'النظام المالي',
       '/reports': 'التقارير',
@@ -529,7 +531,7 @@ export default function App() {
       ? [{ to: '/employees', label: 'دليل الفريق', Icon: Users }]
       : []),
     { to: '/calendar', label: 'تقويم الفريق', Icon: CalendarDays },
-    { to: '/documents', label: 'المستندات', Icon: Files },
+    { to: '/documents', label: 'المستندات', Icon: Files, match: ['/documents', '/renewals'] },
     ...(!accountMode
       ? [
           {
@@ -589,8 +591,8 @@ export default function App() {
           >
             <Icon size={20} />
             <span>{label}</span>
-            {to === '/approvals' && actionable + administrativePending > 0 && (
-              <b className="nav-count">{actionable + administrativePending}</b>
+            {to === '/approvals' && actionable + (administrativePending ?? 0) > 0 && (
+              <b className="nav-count">{actionable + (administrativePending ?? 0)}</b>
             )}
           </NavLink>
         );
@@ -726,7 +728,19 @@ export default function App() {
                 path="/"
                 element={
                   <>
-                    <Dashboard />
+                    <Dashboard
+                      priorityPanel={
+                        data.me.role === 'hr' ? (
+                          <OwnerDesk
+                            approvals={
+                              administrativePending === null
+                                ? null
+                                : actionable + administrativePending
+                            }
+                          />
+                        ) : undefined
+                      }
+                    />
                     <AdminOverviewPanel openRequest={(id) => navigate(`/requests/${id}`)} />
                   </>
                 }
@@ -771,6 +785,10 @@ export default function App() {
               <Route path="/requests/:id" element={<RequestRoute />} />
               <Route path="/attendance" element={<AttendancePage />} />
               <Route path="/documents" element={<DocumentsPage />} />
+              <Route
+                path="/renewals"
+                element={data.me.role === 'hr' ? <RenewalsPage /> : <Navigate to="/" replace />}
+              />
               <Route path="/finance" element={<FinancePortal />} />
               <Route path="/payroll" element={<PayrollPage actor={data.me} />} />
               <Route path="/reports" element={<ReportsPage />} />

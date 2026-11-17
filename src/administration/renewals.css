@@ -1,0 +1,98 @@
+.renewal-desk {
+  background: white;
+  border: 1px solid var(--adm-line);
+  border-inline-start: 4px solid var(--adm-blue);
+  border-radius: 12px;
+  padding: 18px 22px;
+  margin: 0 0 18px;
+}
+.renewal-header,
+.renewal-row,
+.renewal-shortcuts,
+.renewal-shortcuts a,
+.renewal-header a,
+.renewal-timing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.renewal-header,
+.renewal-row {
+  justify-content: space-between;
+}
+.renewal-header {
+  flex-wrap: wrap;
+}
+.renewal-header h2,
+.renewal-page h2 {
+  margin: 0;
+}
+.renewal-shortcuts {
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  margin-block: 12px;
+}
+.renewal-shortcuts a {
+  min-height: 36px;
+  color: var(--adm-ink);
+}
+.renewal-shortcuts strong {
+  color: var(--adm-blue);
+}
+.renewal-row {
+  padding: 12px 0;
+  border-block-start: 1px solid var(--adm-line);
+  color: var(--adm-ink);
+}
+.renewal-row span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.renewal-row small {
+  display: block;
+  margin-block-start: 3px;
+  color: var(--adm-muted);
+}
+.renewal-row:hover b,
+.renewal-row:focus-visible b {
+  text-decoration: underline;
+}
+.renewal-timing {
+  color: var(--adm-blue);
+  flex-shrink: 0;
+}
+.renewal-form {
+  display: grid;
+  align-items: start;
+  gap: 14px;
+  margin-block-start: 18px;
+}
+.renewal-form > button {
+  justify-self: start;
+}
+.renewal-search {
+  max-width: 32rem;
+  margin-block: 16px;
+}
+.renewal-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 36px;
+  margin-block: 16px;
+}
+.renewal-facts dt,
+.renewal-form small {
+  color: var(--adm-muted);
+}
+.renewal-facts dd {
+  margin: 4px 0;
+  font-weight: 650;
+}
+@media (max-width: 600px) {
+  .renewal-desk {
+    padding: 14px;
+  }
+  .renewal-row {
+    flex-wrap: wrap;
+  }
+}

@@ -488,6 +488,26 @@ export function registerAdministration(
         async (tx, m) => getEmployeeFile(tx, actor, m.id),
         async (tx) => {
           const effectiveAt = requestedEffectiveAt ?? at();
+          const current = await readEmployee(tx, employeeId);
+          if (!current) throw fault(404, 'EMPLOYEE_NOT_FOUND', 'الموظف غير موجود.');
+          if (values.employmentStatus === 'terminated' && current.status !== 'terminated')
+            throw fault(
+              409,
+              'SEPARATION_REQUIRED',
+              'إنهاء العلاقة يتطلب طلبًا مؤرخًا بآخر يوم عمل وخطة تسليم ومراجعة مستقلة.',
+            );
+          if (values.employmentStatus === 'active' && current.status === 'terminated') {
+            const periods = await tx.read<{ end_date: string | null }>(
+              'SELECT end_date FROM employment_periods WHERE employee_id=?',
+              [employeeId],
+            );
+            if (periods.length && periods.every((period) => period.end_date !== null))
+              throw fault(
+                409,
+                'REHIRE_REQUIRED',
+                'انتهت خدمة هذا الموظف بتاريخ مسجل؛ استخدم إعادة التعيين من ملفه.',
+              );
+          }
           await saveProfileValues(tx, actor, employeeId, values, reason, effectiveAt, version);
           await appendEvent(
             tx,
@@ -556,6 +576,12 @@ export function registerAdministration(
           const wasOnDuty = e.status === 'active' || e.status === 'on_leave';
           if (wasOnDuty === onDuty)
             throw fault(409, 'STATUS_UNCHANGED', 'الحالة الوظيفية مطابقة لما طلبته.');
+          if (!onDuty)
+            throw fault(
+              409,
+              'SEPARATION_REQUIRED',
+              'لا يمكن إنهاء العلاقة من التبديل السريع؛ أنشئ طلب إنهاء علاقة عمل بتاريخ وآخر يوم عمل وخطة تسليم.',
+            );
           if (onDuty && e.status === 'terminated') {
             const periods = await tx.read<{ end_date: string | null }>(
               'SELECT end_date FROM employment_periods WHERE employee_id=?',
@@ -569,10 +595,8 @@ export function registerAdministration(
                 'انتهت خدمة هذا الموظف بتاريخ مسجل؛ استخدم إعادة التعيين من ملفه.',
               );
           }
-          const next = onDuty ? 'active' : 'terminated';
-          const reason = onDuty
-            ? 'ضبط سريع من دليل الفريق: على رأس العمل.'
-            : 'ضبط سريع من دليل الفريق: ليس على رأس العمل.';
+          const next = 'active';
+          const reason = 'تصحيح سريع من دليل الفريق: على رأس العمل.';
           const version = await saveProfileValues(
             tx,
             actor,
@@ -1494,7 +1518,7 @@ function registerDocumentRoutes(
         { version, reason, ...details },
         async (tx, m) => getDoc(tx, actor, m.id),
         async (tx) => {
-          const row = await getDocRow(tx, id);
+          const row = await getDocRow(tx, id, true);
           if (!row) throw fault(404, 'DOCUMENT_NOT_FOUND', 'المستند غير موجود.');
           const e = await readEmployee(tx, row.employee_id);
           if (!e || !mayEditFile(actor, e))
@@ -1511,6 +1535,7 @@ function registerDocumentRoutes(
           const changed = (Object.keys(before) as (keyof typeof before)[]).filter(
             (k) => (before[k] ?? null) !== (details[k] ?? null),
           );
+          if (changed.includes('expiresAt')) await requireNoOpenRenewal(tx, id);
           if (!changed.length) throw fault(400, 'NO_CHANGE', 'لم يتغير شيء في بيانات المستند.');
           const updated = await tx.execute(
             'UPDATE employee_documents SET document_number_encrypted=?,issued_at=?,expires_at=?,renewal_fee_halalas=?,version=version+1 WHERE id=? AND version=?',
@@ -1577,12 +1602,19 @@ function registerDocumentRoutes(
         { version, reason },
         async (tx, m) => getDoc(tx, actor, m.id),
         async (tx) => {
-          const row = await getDocRow(tx, param(req, 'id'));
+          const row = await getDocRow(tx, param(req, 'id'), true);
           if (!row) throw fault(404, 'DOCUMENT_NOT_FOUND', 'المستند غير موجود.');
           const e = await readEmployee(tx, row.employee_id);
           if (!e || !mayEditFile(actor, e))
             throw fault(403, 'FORBIDDEN', 'أرشفة المستند متاحة للشؤون الإدارية.');
           if (row.version !== version) throw fault(409, 'STALE_VERSION', 'تغير المستند.');
+          await requireNoOpenRenewal(tx, row.id);
+          const proof = await tx.read(
+            'SELECT id FROM document_renewals WHERE proof_document_id=?',
+            [row.id],
+          );
+          if (proof.length)
+            throw fault(409, 'RENEWAL_PROOF_IN_USE', 'هذا الإثبات مرتبط بمعاملة تجديد مكتملة.');
           const archived = await tx.execute(
             "UPDATE employee_documents SET state='archived',version=version+1 WHERE id=? AND version=?",
             [row.id, version],
@@ -1700,7 +1732,7 @@ function registerExpiryRoutes(app: Express, ctx: { db: AsyncDb; requireActor: Re
     const items: DocumentExpiryItem[] = [];
     const covered = new Set<string>();
     const docs = await db.read<any>(
-      "SELECT * FROM employee_documents WHERE state='active' AND expires_at IS NOT NULL AND expires_at<=? ORDER BY expires_at",
+      "SELECT id,employee_id,category,document_number_encrypted,expires_at,issued_at,version,renewal_fee_halalas FROM employee_documents WHERE state='active' AND expires_at IS NOT NULL AND expires_at<=? ORDER BY expires_at",
       [until],
     );
     for (const doc of docs) {
@@ -1768,8 +1800,21 @@ function addDays(isoDate: string, days: number): string {
 function daysBetween(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000);
 }
-async function getDocRow(db: AsyncDb, id: string) {
-  return (await db.read<any>('SELECT * FROM employee_documents WHERE id=?', [id]))[0];
+async function requireNoOpenRenewal(tx: AsyncDb, documentId: string) {
+  const open = await tx.read(
+    "SELECT id FROM document_renewals WHERE document_id=? AND status='open'",
+    [documentId],
+  );
+  if (open.length)
+    throw fault(
+      409,
+      'OPEN_RENEWAL',
+      'لهذه الوثيقة معاملة تجديد مفتوحة. أكمل المعاملة أو ألغها أولًا.',
+    );
+}
+async function getDocRow(db: AsyncDb, id: string, lock = false) {
+  const suffix = lock && db.dialect === 'postgres' ? ' FOR UPDATE' : '';
+  return (await db.read<any>('SELECT * FROM employee_documents WHERE id=?' + suffix, [id]))[0];
 }
 function docView(row: any, actor: Actor) {
   return {

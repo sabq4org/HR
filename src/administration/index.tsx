@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { IssuedLetter } from '../letters';
+import { useLoadRaw } from './useLoadRaw';
 import {
   Archive,
   ArrowDownToLine,
@@ -119,7 +120,7 @@ const attendanceStates: Record<string, string> = {
   approved: 'معتمد',
   rejected: 'مرفوض',
 };
-const docCategoryLabel = (key: string) =>
+export const docCategoryLabel = (key: string) =>
   documentCategories.find((c) => c.key === key)?.label || 'وثيقة وظيفية';
 const requestTitle = (kind: RequestKind) => formByKind[kind]?.title || kind;
 function fieldLabel(key: string, fields: FormField[] = []) {
@@ -204,31 +205,6 @@ function useLoad<T>(url: string, field: string) {
     void load();
   }, [load]);
   return { value, loading, error, reload: load, setValue };
-}
-function useLoadRaw<T>(url: string) {
-  const { data } = useApp();
-  const [value, setValue] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const generation = useRef(0);
-  const load = useCallback(async () => {
-    const current = ++generation.current;
-    setLoading(true);
-    setError('');
-    setValue(null);
-    try {
-      const result = await api<T>(url);
-      if (current === generation.current) setValue(result);
-    } catch (e) {
-      if (current === generation.current) setError((e as Error).message);
-    } finally {
-      if (current === generation.current) setLoading(false);
-    }
-  }, [url, data.me.id]);
-  useEffect(() => {
-    void load();
-  }, [load]);
-  return { value, loading, error, reload: load };
 }
 function Shell({
   title,
@@ -650,9 +626,13 @@ export function EmployeeFilePage({
   if (reportOpen) return <EmployeeProfileReport file={file} onBack={() => setReportOpen(false)} />;
   const employee = file.employee;
   // The system owner edits their own file without salary and bank fields (decision 024).
-  const editableEmployeeFields = visibleEmployeeFields(file).filter(
-    (field) => !(file.ownerSelfEdit && field.sensitive === 'financial'),
-  );
+  const editableEmployeeFields = visibleEmployeeFields(file)
+    .filter((field) => !(file.ownerSelfEdit && field.sensitive === 'financial'))
+    .map((field) =>
+      field.key === 'employmentStatus' && employee.status !== 'terminated'
+        ? { ...field, options: field.options?.filter((option) => option.value !== 'terminated') }
+        : field,
+    );
   const detailsTabs = profileTabs(file);
   const tabs = [...detailsTabs, 'الوثائق', 'السجل'];
   return (
@@ -717,18 +697,32 @@ export function EmployeeFilePage({
       </nav>
       {detailsTabs.includes(tab) &&
         (editing ? (
-          <EmployeeWizard
-            fields={editableEmployeeFields}
-            values={values}
-            setValues={setValues}
-            busy={busy}
-            error=""
-            onSubmit={save}
-            reason={reason}
-            setReason={setReason}
-            reasonRequired
-            submitLabel="حفظ التعديلات"
-          />
+          <>
+            {data.me.role === 'hr' &&
+              employee.id !== data.me.id &&
+              employee.status !== 'terminated' && (
+                <p className="adm-note">
+                  لإنهاء العلاقة، استخدم الطلب المؤرخ الذي يحدد آخر يوم عمل وخطة التسليم:{' '}
+                  <Link
+                    to={`/services?kind=separation&employeeId=${encodeURIComponent(employee.id)}`}
+                  >
+                    بدء طلب إنهاء العلاقة
+                  </Link>
+                </p>
+              )}
+            <EmployeeWizard
+              fields={editableEmployeeFields}
+              values={values}
+              setValues={setValues}
+              busy={busy}
+              error=""
+              onSubmit={save}
+              reason={reason}
+              setReason={setReason}
+              reasonRequired
+              submitLabel="حفظ التعديلات"
+            />
+          </>
         ) : (
           <ProfileTab file={file} tab={tab} />
         ))}
@@ -897,7 +891,7 @@ function ExpiryBadge({ date: iso }: { date: string | null | undefined }) {
   );
 }
 /** Halalas as riyals for display, e.g. 65050 → "650.50 ريال". */
-const riyals = (halalas: number) =>
+export const riyals = (halalas: number) =>
   `${(halalas / 100).toLocaleString('en-US', { maximumFractionDigits: 2 })} ريال`;
 /** Halalas back into the text of the fee input. */
 const feeText = (halalas: number | null | undefined) =>
@@ -1118,12 +1112,27 @@ function ExpiryFollowUp({ refreshKey, onUpdated }: { refreshKey: number; onUpdat
                     </td>
                     <td>
                       {item.source === 'document' ? (
-                        <button type="button" className="adm-link" onClick={() => startEdit(item)}>
-                          تحديث بعد التجديد
-                        </button>
+                        <div className="adm-heading-actions">
+                          <Link
+                            className="adm-link"
+                            to={`/renewals?document=${encodeURIComponent(item.documentId!)}`}
+                          >
+                            معاملة التجديد
+                          </Link>
+                          <button
+                            type="button"
+                            className="adm-link"
+                            onClick={() => startEdit(item)}
+                          >
+                            تحديث بيانات الوثيقة
+                          </button>
+                        </div>
                       ) : (
-                        <Link className="adm-link" to={`/employees/${item.employeeId}`}>
-                          فتح الملف
+                        <Link
+                          className="adm-link"
+                          to={`/renewals?profile=${encodeURIComponent(item.id)}`}
+                        >
+                          إرفاق الوثيقة للتجديد
                         </Link>
                       )}
                     </td>
@@ -1381,17 +1390,25 @@ export function ServicesPage() {
       `${f.title} ${f.description}`.includes(query),
   );
   const subjectFor = (k: RequestKind) => (behalfOnly(formByKind[k]) ? '' : data.me.id);
+  const validTargetFor = (requestedId: string | null) => {
+    if (!requestedId) return null;
+    const target = data.employees.find((employee) => employee.id === requestedId);
+    if (!target || target.id === data.me.id) return null;
+    if (data.me.role === 'hr') return target.id;
+    if (data.me.role === 'manager' && target.managerId === data.me.id) return target.id;
+    return null;
+  };
   const onBehalf =
     !!kind && isHr && formByKind[kind].initiators.includes('employee') && subjectId !== data.me.id;
   useEffect(() => {
     const requestedKind = searchParams.get('kind') as RequestKind | null;
     if (requestedKind && visible.some((form) => form.kind === requestedKind)) {
       setKind(requestedKind);
-      setSubjectId(subjectFor(requestedKind));
+      setSubjectId(validTargetFor(searchParams.get('employeeId')) ?? subjectFor(requestedKind));
       setValues({});
       setError('');
     }
-  }, [searchParams, data.me.id, data.me.role]);
+  }, [searchParams, data.employees, data.me.id, data.me.role]);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!kind) return;
@@ -2232,7 +2249,17 @@ export function DocumentsPage() {
     }
   };
   return (
-    <Shell title="وثائق الموظفين" subtitle="وثائق خاصة بصلاحيات وصول محددة">
+    <Shell
+      title="وثائق الموظفين"
+      subtitle="وثائق خاصة بصلاحيات وصول محددة"
+      action={
+        canManage ? (
+          <Link className="adm-button secondary" to="/renewals">
+            معاملات التجديد
+          </Link>
+        ) : undefined
+      }
+    >
       <div className="adm-toolbar">
         <label className="adm-search">
           <Search size={16} />

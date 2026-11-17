@@ -1872,6 +1872,10 @@
     align-items: center;
     gap: 8px;
   }
+  .person-card-status > button {
+    position: relative;
+    z-index: 1;
+  }
   .duty-switch {
     position: relative;
     z-index: 1;
