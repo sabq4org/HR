@@ -52,11 +52,19 @@ export function matchesServiceKey(presented: string, digests: readonly string[])
 export function inAccountantScope(method: string, path: string): boolean {
   if (path === '/api/health') return true;
   if (path !== '/api/finance' && !path.startsWith('/api/finance/')) return false;
+  const normalizedPath = path.toLowerCase().replace(/\/+$/, '');
+  // Renewal settlement cases contain HR-owned case identifiers and are browser-only. Finance
+  // bearer keys must not reach them, even though the rest of the ledger is accountant-scoped.
+  if (
+    normalizedPath === '/api/finance/ledger/renewal-settlements' ||
+    normalizedPath.startsWith('/api/finance/ledger/renewal-settlements/')
+  )
+    return false;
   // The provider credential and its live connection test stay with the human owner.
   if (
-    path === '/api/finance/settings/api-key' ||
-    path === '/api/finance/settings/test' ||
-    path === '/api/finance/settings/switch-organization'
+    normalizedPath === '/api/finance/settings/api-key' ||
+    normalizedPath === '/api/finance/settings/test' ||
+    normalizedPath === '/api/finance/settings/switch-organization'
   )
     return false;
   return ['GET', 'HEAD', 'POST', 'PATCH'].includes(method.toUpperCase());

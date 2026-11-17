@@ -332,3 +332,51 @@ test('an HR account that is not the owner still cannot edit its own file', async
     await h.close();
   }
 });
+
+test('an open renewal protects the source expiry, and its evidence remains available after completion', async () => {
+  const h = await harness();
+  try {
+    const source = (await (await h.upload({ category: 'identity', expiresAt: plus(4) })).json())
+      .document;
+    const proof = (await (await h.upload({ category: 'renewal_proof' })).json()).document;
+    const opened = await h.call('hr', 'POST', '/admin/renewals', {
+      documentId: source.id,
+      documentVersion: source.version,
+      assignedTo: personas.hr,
+    });
+    assert.equal(opened.status, 201);
+    const renewal = (await opened.json()).case;
+    for (const [method, suffix, fields] of [
+      ['PATCH', '', { expiresAt: plus(40) }],
+      ['POST', '/archive', {}],
+    ] as const) {
+      const res = await h.call('hr', method, '/admin/documents/' + source.id + suffix, {
+        version: source.version,
+        reason: 'فحص اصطناعي',
+        ...fields,
+      });
+      assert.equal(res.status, 409);
+      assert.equal((await res.json()).error.code, 'OPEN_RENEWAL');
+    }
+    const complete = await h.call('hr', 'POST', '/admin/renewals/' + renewal.id + '/complete', {
+      version: renewal.version,
+      documentVersion: source.version,
+      proofDocumentId: proof.id,
+      newExpiry: plus(400),
+      payment: 'none',
+      reason: 'إثبات اصطناعي',
+    });
+    assert.equal(complete.status, 200, await complete.clone().text());
+    const archived = await h.call('hr', 'POST', '/admin/documents/' + proof.id + '/archive', {
+      version: proof.version,
+      reason: 'فحص اصطناعي',
+    });
+    assert.equal(archived.status, 409);
+    assert.equal((await archived.json()).error.code, 'RENEWAL_PROOF_IN_USE');
+    const download = await h.call('hr', 'GET', '/admin/documents/' + proof.id + '/download');
+    assert.equal(download.status, 200);
+    assert.ok(Buffer.from(await download.arrayBuffer()).equals(Buffer.from(pdf, 'base64')));
+  } finally {
+    await h.close();
+  }
+});

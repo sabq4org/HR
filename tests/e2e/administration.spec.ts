@@ -261,46 +261,71 @@ test('HR downloads an Excel template, previews a row, and saves the employee bat
   await expect(page.getByText(values.name)).toBeVisible();
 });
 
-test('HR sets on-duty status from the team card switch; other roles get no switch', async ({
+test('HR starts a dated separation request from the team card; other roles get no action', async ({
   page,
 }) => {
   await login(page);
   await page.goto('/employees');
   const card = page.locator('.person-card', { hasText: 'فهد الدوسري' });
-  const toggle = card.getByRole('switch');
-  await expect(toggle).toHaveAttribute('aria-checked', 'true');
-  // HR cannot switch their own status.
+  const separation = card.getByRole('button', { name: /بدء طلب إنهاء علاقة العمل/ });
+  await expect(separation).toBeVisible();
+  // HR cannot start a request for their own file.
   await expect(
-    page.locator('.person-card', { hasText: 'نورة العتيبي' }).getByRole('switch'),
+    page.locator('.person-card', { hasText: 'نورة العتيبي' }).getByRole('button', {
+      name: /بدء طلب إنهاء علاقة العمل/,
+    }),
   ).toHaveCount(0);
   await axe(page);
   const onTab = page.getByRole('button', { name: /^على رأس العمل/ });
   const offTab = page.getByRole('button', { name: /^ليسوا على رأس العمل/ });
   await expect(onTab).toHaveAttribute('aria-pressed', 'true');
-  await toggle.click();
-  // Switched off: the card leaves the default tab and appears in the second one.
-  await expect(card).toHaveCount(0);
-  await expect(page).toHaveURL(/\/employees$/);
-  await page.reload();
-  await expect(page.locator('.person-card').first()).toBeVisible();
-  await expect(card).toHaveCount(0);
+  await separation.click();
+  const confirmation = page.getByRole('dialog');
+  await expect(
+    confirmation.getByRole('heading', { name: 'بدء طلب إنهاء علاقة العمل' }),
+  ).toBeVisible();
+  await confirmation.getByRole('button', { name: 'فتح الطلب المؤرخ' }).click();
+  await expect(page).toHaveURL(/\/services\?kind=separation&employeeId=emp-fahad$/);
+  const requestDialog = page.getByRole('dialog');
+  await expect(requestDialog.getByRole('heading', { name: 'إنهاء علاقة عمل' })).toBeVisible();
+  await expect(requestDialog.getByLabel('الموظف المعني بالطلب')).toHaveValue('emp-fahad');
+  await requestDialog.getByLabel('كيف وصل الطلب').selectOption('paper');
+  await requestDialog
+    .getByLabel('مرجع الطلب (التاريخ أو رقم البريد أو النموذج)')
+    .fill('نموذج اصطناعي 001');
+  await requestDialog.getByLabel('نوع الحالة').selectOption('resignation');
+  await requestDialog.getByLabel('تاريخ الإشعار').fill('2026-11-17');
+  await requestDialog.getByLabel('آخر يوم مقترح').fill('2026-11-30');
+  await requestDialog.getByLabel('خطة التسليم').fill('تسليم الملفات إلى المدير المباشر.');
+  await requestDialog.getByLabel('التفاصيل والمبرر').fill('طلب إنهاء اصطناعي موثق.');
+  const createdRequest = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/admin/requests') && response.request().method() === 'POST',
+  );
+  await requestDialog.getByRole('button', { name: 'إرسال للمراجعة' }).click();
+  const response = await createdRequest;
+  expect(response.status()).toBe(201);
+  const { request } = await response.json();
+  expect(request.kind).toBe('separation');
+  expect(request.employeeId).toBe('emp-fahad');
+  await expect(requestDialog).toHaveCount(0);
+  const confirmationToast = page.getByRole('status').filter({ hasText: 'تم إرسال الطلب' });
+  await expect(confirmationToast).toBeVisible();
+  await confirmationToast.getByRole('button', { name: 'إغلاق التنبيه' }).click();
+  // Opening the workflow does not mutate the employee or move the card.
+  await page.goBack();
+  await expect(card).toContainText('على رأس العمل');
   await offTab.click();
   await expect(offTab).toHaveAttribute('aria-pressed', 'true');
-  await expect(card).toContainText('منتهية الخدمة');
-  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByText('فهد الدوسري')).toHaveCount(0);
   await expect(page.locator('.person-card', { hasText: 'نورة العتيبي' })).toHaveCount(0);
   await axe(page);
-  await toggle.focus();
-  await page.keyboard.press('Space');
-  await expect(card).toHaveCount(0);
-  await onTab.click();
-  await expect(toggle).toHaveAttribute('aria-checked', 'true');
-  await expect(card).toContainText('على رأس العمل');
   // The rest of the card still opens the profile.
+  await onTab.click();
   await card.getByRole('link', { name: 'فهد الدوسري' }).click();
   await expect(page).toHaveURL(/\/employees\/emp-fahad$/);
   await switchPersona(page, 'عمر');
   await page.goto('/employees');
   await expect(page.locator('.person-card').first()).toBeVisible();
-  await expect(page.getByRole('switch')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /بدء طلب إنهاء علاقة العمل/ })).toHaveCount(0);
 });

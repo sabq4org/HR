@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowUpLeft,
@@ -24,6 +24,7 @@ import {
   api,
   Avatar,
   canDecide,
+  ConfirmDialog,
   dateLabel,
   Empty,
   isPending,
@@ -163,7 +164,7 @@ function ExpiryAlert() {
 /** On duty = active or on leave; suspended and terminated staff are not counted. */
 const isOnDuty = (e: Employee) => e.status === 'active' || e.status === 'on_leave';
 
-export function Dashboard() {
+export function Dashboard({ priorityPanel }: { priorityPanel?: ReactNode } = {}) {
   const { data, newLeave, showLeave } = useApp();
   const { me, employees, leaves, today } = data;
   const pending = leaves.filter(isPending);
@@ -184,6 +185,7 @@ export function Dashboard() {
           </span>
         }
       />
+      {priorityPanel}
       <div className="welcome-grid">
         <section className="welcome-panel">
           <div className="welcome-copy">
@@ -267,7 +269,7 @@ export function Dashboard() {
           </div>
         </div>
       </div>
-      {me.role === 'hr' && <ExpiryAlert />}
+      {me.role === 'hr' && !priorityPanel && <ExpiryAlert />}
       <div className="dashboard-bottom">
         <section className="panel requests-panel">
           <SectionTitle
@@ -589,33 +591,24 @@ const workStatusLabel: Record<Employee['status'], string> = {
 export function PeoplePage() {
   const { data, refresh, notify } = useApp();
   const [creating, setCreating] = useState(false);
-  const [switching, setSwitching] = useState<ReadonlySet<string>>(new Set());
-  // Quick on-duty switch (HR only). The server re-checks the permission and the status shown here.
-  async function switchDuty(e: Employee, onDuty: boolean) {
-    setSwitching((current) => new Set(current).add(e.id));
+  const [separationTarget, setSeparationTarget] = useState<Employee | null>(null);
+  const navigate = useNavigate();
+  async function correctDuty(e: Employee) {
     try {
       await api(`/admin/employees/${encodeURIComponent(e.id)}/work-status`, {
         method: 'POST',
         headers: { 'Idempotency-Key': crypto.randomUUID() },
-        body: JSON.stringify({ onDuty, expectedStatus: e.status }),
+        body: JSON.stringify({ onDuty: true, expectedStatus: e.status }),
       });
-      notify(onDuty ? `${e.name}: صار على رأس العمل.` : `${e.name}: لم يعد على رأس العمل.`);
-    } catch (error) {
-      notify(error instanceof Error ? error.message : 'تعذّر تغيير الحالة.');
-    }
-    try {
+      notify(`${e.name}: تم تصحيح الحالة إلى على رأس العمل.`);
       await refresh();
-    } catch {
-      notify('تعذّر تحديث القائمة؛ أعد تحميل الصفحة للتأكد من الحالة.');
-    } finally {
-      setSwitching((current) => {
-        const next = new Set(current);
-        next.delete(e.id);
-        return next;
-      });
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'تعذّر تصحيح الحالة.');
     }
   }
-  const navigate = useNavigate();
+  function beginSeparation(e: Employee) {
+    setSeparationTarget(e);
+  }
   const [query, setQuery] = useState('');
   const [department, setDepartment] = useState('all');
   const departments = [...new Set(data.employees.map((e) => e.department))];
@@ -696,8 +689,9 @@ export function PeoplePage() {
       {people.length ? (
         <div className="people-grid">
           {people.map((e) => {
-            const onDuty = e.status === 'active' || e.status === 'on_leave';
-            const canSwitch = data.me.role === 'hr' && e.id !== data.me.id;
+            const canRequestSeparation =
+              data.me.role === 'hr' && e.id !== data.me.id && isOnDuty(e);
+            const canCorrectDuty = data.me.role === 'hr' && e.id !== data.me.id && !isOnDuty(e);
             return (
               <article className="person-card" key={e.id}>
                 <div className="person-card-top">
@@ -706,18 +700,26 @@ export function PeoplePage() {
                     <span className={e.status === 'active' ? 'active-dot' : 'subtle'}>
                       {workStatusLabel[e.status]}
                     </span>
-                    {canSwitch && (
+                    {canRequestSeparation && (
                       <button
                         type="button"
-                        role="switch"
-                        className="duty-switch"
-                        aria-checked={onDuty}
-                        aria-label={`${e.name}: على رأس العمل`}
-                        title={onDuty ? 'اضبطه: ليس على رأس العمل' : 'اضبطه: على رأس العمل'}
-                        disabled={switching.has(e.id)}
-                        onClick={() => void switchDuty(e, !onDuty)}
+                        className="button secondary"
+                        aria-label={`${e.name}: بدء طلب إنهاء علاقة العمل`}
+                        title="فتح طلب إنهاء علاقة العمل المؤرخ"
+                        onClick={() => beginSeparation(e)}
                       >
-                        <span aria-hidden="true" />
+                        إنهاء العلاقة
+                      </button>
+                    )}
+                    {canCorrectDuty && (
+                      <button
+                        type="button"
+                        className="button secondary"
+                        aria-label={`${e.name}: تصحيح الحالة إلى على رأس العمل`}
+                        title="تصحيح حالة تاريخية غير نشطة"
+                        onClick={() => void correctDuty(e)}
+                      >
+                        تصحيح الحالة
                       </button>
                     )}
                   </div>
@@ -751,6 +753,23 @@ export function PeoplePage() {
               : 'جرّب اسمًا آخر أو اختر جميع الأقسام.'
           }
         />
+      )}
+      {separationTarget && (
+        <ConfirmDialog
+          title="بدء طلب إنهاء علاقة العمل"
+          close={() => setSeparationTarget(null)}
+          confirmLabel="فتح الطلب المؤرخ"
+          onConfirm={() => {
+            const employee = separationTarget;
+            setSeparationTarget(null);
+            navigate(`/services?kind=separation&employeeId=${encodeURIComponent(employee.id)}`);
+          }}
+        >
+          <p>
+            سيُفتح طلب للموظف <strong>{separationTarget.name}</strong> يتطلب آخر يوم عمل وسبب الإنهاء
+            وخطة التسليم، ويمر بالمراجعة والاعتماد قبل تغيير الحالة.
+          </p>
+        </ConfirmDialog>
       )}
       {creating && (
         <EmployeeCreateDialog

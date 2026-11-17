@@ -38,6 +38,7 @@ import {
 } from './routes.js';
 import * as ledger from './ledger.js';
 import * as owner from './owner-expenses.js';
+import * as renewalSettlement from './renewal-settlements.js';
 import { htmlToPdf } from './chromium-pdf.js';
 import { ownerStatementHtml } from './document-html.js';
 import { halalas, n, vatOf, type PostLine } from './ledger.js';
@@ -66,6 +67,10 @@ function taxValue(value: unknown): JournalTax | null {
 }
 
 export function registerLedger(app: Express, { db, requireActor, access }: Options) {
+  const browserOnlyRenewalRoute = (req: Request) => {
+    if (req.get('authorization'))
+      throw fault(403, 'BROWSER_SESSION_REQUIRED', 'مطابقة التجديد متاحة عبر جلسة المالية فقط.');
+  };
   const auth = async (req: Request): Promise<Actor> => {
     const actor = await requireActor(req);
     requireFinance(actor, access);
@@ -914,6 +919,95 @@ export function registerLedger(app: Express, { db, requireActor, access }: Optio
     );
     res.status(201).json({ voucher: await ledger.readVoucher(db, actor.id, id) });
   });
+  // ------------------------------------------------------------ owner-paid document renewals
+  // These routes only reconcile an existing owner-paid voucher. They never create a journal entry
+  // or expose the employee document/attachment behind the renewal case.
+  registerRoute(app, 'get', '/api/finance/ledger/renewal-settlements/summary', async (req, res) => {
+    browserOnlyRenewalRoute(req);
+    const actor = await auth(req);
+    res.json({ renewals: await renewalSettlement.renewalSettlementSummary(db, actor.id) });
+  });
+  registerRoute(
+    app,
+    'get',
+    '/api/finance/ledger/renewal-settlements/:renewalId',
+    async (req, res) => {
+      browserOnlyRenewalRoute(req);
+      const actor = await auth(req);
+      res.json(
+        await renewalSettlement.renewalSettlementDetails(
+          db,
+          actor.id,
+          routeId(req.params.renewalId),
+        ),
+      );
+    },
+  );
+  registerRoute(
+    app,
+    'post',
+    '/api/finance/ledger/renewal-settlements/:renewalId',
+    async (req, res) => {
+      browserOnlyRenewalRoute(req);
+      const actor = await ready(req),
+        b = requireRecord(req.body),
+        renewalId = routeId(req.params.renewalId),
+        voucherId = routeId(b.voucherId as string),
+        version =
+          Number.isSafeInteger(b.version) && Number(b.version) >= 0
+            ? Number(b.version)
+            : (() => {
+                throw fault(400, 'INVALID_VERSION', 'أرسل رقم نسخة صالحًا.');
+              })();
+      const payload = {
+        renewalId,
+        voucherId,
+        version,
+        reason: optionalText(b.reason, 300),
+      };
+      await mutation(
+        req,
+        actor,
+        `finance.renewal.settlement.link:${renewalId}`,
+        payload,
+        async (tx) => renewalSettlement.linkRenewalSettlement(tx, actor, renewalId, payload),
+      );
+      res
+        .status(201)
+        .json(await renewalSettlement.renewalSettlementDetails(db, actor.id, renewalId));
+    },
+  );
+  registerRoute(
+    app,
+    'post',
+    '/api/finance/ledger/renewal-settlements/:renewalId/correct',
+    async (req, res) => {
+      browserOnlyRenewalRoute(req);
+      const actor = await ready(req),
+        b = requireRecord(req.body),
+        renewalId = routeId(req.params.renewalId),
+        voucherId =
+          b.voucherId === null || b.voucherId === undefined ? null : routeId(b.voucherId as string),
+        payload = {
+          renewalId,
+          voucherId,
+          version: versionValue(b.version),
+          reason: text(b.reason, 300),
+        };
+      await mutation(
+        req,
+        actor,
+        `finance.renewal.settlement.correct:${renewalId}`,
+        payload,
+        async (tx) => {
+          await renewalSettlement.correctRenewalSettlement(tx, actor, renewalId, payload);
+          // The marker is only for idempotent replay; the result is read below.
+          return renewalId;
+        },
+      );
+      res.json(await renewalSettlement.renewalSettlementDetails(db, actor.id, renewalId));
+    },
+  );
   registerRoute(app, 'post', '/api/finance/ledger/vouchers/:id/reverse', async (req, res) => {
     const actor = await ready(req),
       b = requireRecord(req.body),

@@ -24,7 +24,13 @@ async function harness() {
   assert.ok(address && typeof address !== 'string');
   const origin = `http://127.0.0.1:${address.port}`;
   const cookies = new Map<Persona, string>();
-  async function call(role: Persona, path: string, body: unknown, key: string = randomUUID()) {
+  async function call(
+    role: Persona,
+    path: string,
+    body: unknown,
+    key: string = randomUUID(),
+    method = 'POST',
+  ) {
     if (!cookies.has(role)) {
       const login = await fetch(`${origin}/api/demo/session`, {
         method: 'POST',
@@ -35,7 +41,7 @@ async function harness() {
       cookies.set(role, login.headers.get('set-cookie')!.split(';')[0]);
     }
     return fetch(`${origin}/api${path}`, {
-      method: 'POST',
+      method,
       headers: {
         origin,
         cookie: cookies.get(role)!,
@@ -70,7 +76,7 @@ async function harness() {
 }
 const path = (id: string) => `/admin/employees/${id}/work-status`;
 
-test('HR switches an employee off and back on with history and audit', async () => {
+test('the team-directory switch cannot terminate an employee; dated workflow remains authoritative', async () => {
   const h = await harness();
   try {
     const before = await h.row(personas.employee);
@@ -79,12 +85,12 @@ test('HR switches an employee off and back on with history and audit', async () 
       onDuty: false,
       expectedStatus: 'active',
     });
-    assert.equal(off.status, 200, await off.clone().text());
-    assert.deepEqual((await off.json()).employee, { id: personas.employee, status: 'terminated' });
+    assert.equal(off.status, 409, await off.clone().text());
+    assert.equal((await off.json()).error.code, 'SEPARATION_REQUIRED');
     const afterOff = await h.row(personas.employee);
-    assert.equal(afterOff.employment_status, 'terminated');
-    assert.equal(afterOff.record_version, before.record_version + 1);
-    // The employment period stays open: the switch records no separation date.
+    assert.equal(afterOff.employment_status, 'active');
+    assert.equal(afterOff.record_version, before.record_version);
+    assert.equal((await h.events(personas.employee)).length, 0);
     const periods = await h.db.read<{ end_date: string | null }>(
       'SELECT end_date FROM employment_periods WHERE employee_id=?',
       [personas.employee],
@@ -93,24 +99,11 @@ test('HR switches an employee off and back on with history and audit', async () 
 
     const on = await h.call('hr', path(personas.employee), {
       onDuty: true,
-      expectedStatus: 'terminated',
+      expectedStatus: 'active',
     });
-    assert.equal(on.status, 200, await on.clone().text());
+    assert.equal(on.status, 409, await on.clone().text());
+    assert.equal((await on.json()).error.code, 'STATUS_UNCHANGED');
     assert.equal((await h.row(personas.employee)).employment_status, 'active');
-
-    const events = await h.events(personas.employee);
-    assert.equal(events.length, 2);
-    assert.ok(events.every((event) => event.actor_id === personas.hr));
-    assert.deepEqual(JSON.parse(events[0].details_json), {
-      from: 'active',
-      to: 'terminated',
-      source: 'team-directory',
-    });
-    const history = await h.db.read<{ field_key: string }>(
-      "SELECT field_key FROM employee_profile_history WHERE employee_id=? AND field_key='employmentStatus'",
-      [personas.employee],
-    );
-    assert.equal(history.length, 2);
   } finally {
     await h.close();
   }
@@ -157,13 +150,14 @@ test('stale cards, repeats and invalid bodies do not write twice', async () => {
     const key = randomUUID();
     const body = { onDuty: false, expectedStatus: 'active' };
     const first = await h.call('hr', path(personas.employee), body, key);
-    assert.equal(first.status, 200);
+    assert.equal(first.status, 409);
+    assert.equal((await first.json()).error.code, 'SEPARATION_REQUIRED');
     const version = (await h.row(personas.employee)).record_version;
     const replay = await h.call('hr', path(personas.employee), body, key);
-    assert.equal(replay.status, 200);
-    assert.equal((await replay.json()).employee.status, 'terminated');
+    assert.equal(replay.status, 409);
+    assert.equal((await replay.json()).error.code, 'SEPARATION_REQUIRED');
     assert.equal((await h.row(personas.employee)).record_version, version);
-    assert.equal((await h.events(personas.employee)).length, 1);
+    assert.equal((await h.events(personas.employee)).length, 0);
     const reused = await h.call(
       'hr',
       path(personas.employee),
@@ -171,7 +165,7 @@ test('stale cards, repeats and invalid bodies do not write twice', async () => {
       key,
     );
     assert.equal(reused.status, 409);
-    assert.equal((await reused.json()).error.code, 'IDEMPOTENCY_CONFLICT');
+    assert.equal((await reused.json()).error.code, 'STALE_VERSION');
   } finally {
     await h.close();
   }
@@ -196,6 +190,71 @@ test('a dated separation cannot be reversed by the switch; rehire is required', 
     assert.equal(on.status, 409);
     assert.equal((await on.json()).error.code, 'REHIRE_REQUIRED');
     assert.equal((await h.row(personas.employee)).employment_status, 'terminated');
+  } finally {
+    await h.close();
+  }
+});
+
+test('profile edits cannot bypass dated separation or closed-period rehire', async () => {
+  const h = await harness();
+  try {
+    const before = await h.row(personas.employee);
+    const terminate = await h.call(
+      'hr',
+      `/admin/employees/${personas.employee}`,
+      {
+        version: before.record_version,
+        values: { employmentStatus: 'terminated' },
+        reason: 'محاولة إنهاء مباشرة اصطناعية',
+      },
+      randomUUID(),
+      'PATCH',
+    );
+    assert.equal(terminate.status, 409, await terminate.clone().text());
+    assert.equal((await terminate.json()).error.code, 'SEPARATION_REQUIRED');
+    assert.deepEqual(await h.row(personas.employee), before);
+
+    await h.db.transaction(async (tx) => {
+      await tx.execute("UPDATE employees SET employment_status='terminated' WHERE id=?", [
+        personas.employee,
+      ]);
+      await tx.execute(
+        "UPDATE employment_periods SET end_date='2026-01-31' WHERE employee_id=? AND end_date IS NULL",
+        [personas.employee],
+      );
+    });
+    const closed = await h.row(personas.employee);
+    const reactivate = await h.call(
+      'hr',
+      `/admin/employees/${personas.employee}`,
+      {
+        version: closed.record_version,
+        values: { employmentStatus: 'active' },
+        reason: 'محاولة إعادة تفعيل فترة مغلقة اصطناعية',
+      },
+      randomUUID(),
+      'PATCH',
+    );
+    assert.equal(reactivate.status, 409, await reactivate.clone().text());
+    assert.equal((await reactivate.json()).error.code, 'REHIRE_REQUIRED');
+    assert.equal((await h.row(personas.employee)).employment_status, 'terminated');
+  } finally {
+    await h.close();
+  }
+});
+
+test('quick on-duty correction remains available for a legacy terminated row with an open period', async () => {
+  const h = await harness();
+  try {
+    await h.db.execute("UPDATE employees SET employment_status='terminated' WHERE id=?", [
+      personas.employee,
+    ]);
+    const on = await h.call('hr', path(personas.employee), {
+      onDuty: true,
+      expectedStatus: 'terminated',
+    });
+    assert.equal(on.status, 200, await on.clone().text());
+    assert.equal((await h.row(personas.employee)).employment_status, 'active');
   } finally {
     await h.close();
   }
@@ -251,20 +310,22 @@ test(
         403,
       );
       const off = await post(personas.hr, { onDuty: false, expectedStatus: 'active' });
-      assert.equal(off.status, 200, await off.clone().text());
-      assert.equal(await status(), 'terminated');
+      assert.equal(off.status, 409, await off.clone().text());
+      assert.equal((await off.json()).error.code, 'SEPARATION_REQUIRED');
+      assert.equal(await status(), 'active');
       assert.equal(
         (await post(personas.hr, { onDuty: false, expectedStatus: 'active' })).status,
         409,
       );
-      const on = await post(personas.hr, { onDuty: true, expectedStatus: 'terminated' });
-      assert.equal(on.status, 200, await on.clone().text());
+      const on = await post(personas.hr, { onDuty: true, expectedStatus: 'active' });
+      assert.equal(on.status, 409, await on.clone().text());
+      assert.equal((await on.json()).error.code, 'STATUS_UNCHANGED');
       assert.equal(await status(), 'active');
       const events = await db.read(
         "SELECT id FROM administration_events WHERE resource_id=? AND action='employee_work_status_changed'",
         [personas.employee],
       );
-      assert.equal(events.length, 2);
+      assert.equal(events.length, 0);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await db.close();

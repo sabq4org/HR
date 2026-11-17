@@ -381,6 +381,7 @@ export const documentCategories: DocumentCategory[] = [
   { key: 'privacy_notice', label: 'إشعار الخصوصية' },
   { key: 'probation', label: 'تقييم فترة التجربة' },
   { key: 'clearance', label: 'إخلاء الطرف' },
+  { key: 'renewal_proof', label: 'إثبات تجديد وثيقة', sensitive: 'personal' },
   { key: 'other', label: 'مستند وظيفي آخر', sensitive: 'personal' },
 ];
 
